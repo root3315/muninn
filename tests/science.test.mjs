@@ -117,5 +117,7 @@ test('season stack: seasons by band and date, steps land on a season start', asy
   const two = coadd([Float32Array.of(NaN, 1), Float32Array.of(4, 3)]);
   assert.deepEqual([...two], [4, 2], 'fewer than four: plain mean, NaN left out');
   assert.equal(averaged(6), 5);
-  assert.equal(averaged(3), 3);
+  assert.equal(averaged(3), 2);
+  const three = coadd([Float32Array.of(1), Float32Array.of(50), Float32Array.of(3)]);
+  assert.equal(three[0], 3, 'three: the middle value, the one-visit spike gone');
 });

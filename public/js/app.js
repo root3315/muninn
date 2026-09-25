@@ -1188,9 +1188,12 @@ function renderWhen() {
     // single visit keeps its time: the range fits the column without breaking.
     const y0 = first.iso.slice(0, 4);
     const y1 = last.iso.slice(0, 4);
-    $('when-date').textContent = first === last
-      ? fmtDay(first.iso)
-      : `${fmtDay(first.iso)} – ${fmtDay(last.iso)}`;
+    const sameMonth = first.iso.slice(0, 7) === last.iso.slice(0, 7);
+    $('when-date').textContent = first === last ? fmtDay(first.iso)
+      : sameMonth ? `${fmtDay(first.iso).split(' ')[0]}–${fmtDay(last.iso)}`
+        : `${fmtDay(first.iso)} – ${fmtDay(last.iso)}`;
+    // Two months do not fit the column at the date's own size; one line, smaller.
+    $('when-date').dataset.range = String(!sameMonth);
     $('when-time').textContent = y0 === y1 ? y0 : `${y0} – ${y1}`;
     $('when-band').textContent = `${frame.band} · ${fmt(frame.emMin, 2)}–${fmt(frame.emMax, 2)} µm`;
     $('when-of').textContent = t('frame.stack', { n: season.length });
@@ -1203,6 +1206,7 @@ function renderWhen() {
   }
 
   $('when-date').textContent = frame ? fmtDate(frame.iso).replace(/\s*г\.?$/, '') : '—';
+  $('when-date').dataset.range = 'false';
   $('when-time').textContent = frame ? fmtTime(frame.iso) : '';
   $('when-band').textContent = frame ? `${frame.band} · ${fmt(frame.emMin, 2)}–${fmt(frame.emMax, 2)} µm` : '';
   $('when-of').textContent = i >= 0 && list.length
