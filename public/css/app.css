@@ -505,7 +505,9 @@ li { list-style: none; }
   font-size: var(--text-xs); color: var(--color-rule-strong);
   min-inline-size: 0;
 }
-.run__scale .matrix__ramp { flex: 0 0 auto; }
+/* An empty span has no width of its own: `auto` left the ramp at zero and the
+   two words either side of it read as unrelated labels. */
+.run__scale .matrix__ramp { flex: 0 0 4rem; }
 
 /* =================================================================== centre */
 

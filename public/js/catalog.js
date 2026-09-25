@@ -12,6 +12,7 @@
  */
 
 import { parseVOTable } from './votable.js';
+import { deltaRA } from './wcs.js';
 
 const S3_BASE = 'https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/';
 const IBE_PREFIX = 'https://irsa.ipac.caltech.edu/ibe/data/spherex/';
@@ -125,7 +126,7 @@ async function loadBakedIndex(signal) {
 export async function searchFrames({ ra, dec, radius = 0.006 }, { signal } = {}) {
   const index = await loadBakedIndex(signal);
   const cos = Math.cos((dec * Math.PI) / 180);
-  const hit = index.find((f) => Math.hypot((f.ra - ra) * cos, f.dec - dec) < 0.01);
+  const hit = index.find((f) => Math.hypot(deltaRA(f.ra, ra) * cos, f.dec - dec) < 0.01);
   if (hit) {
     const res = await fetch(`data/fields/${hit.key}.json`, { signal });
     if (res.ok) {
@@ -191,7 +192,7 @@ export function groupVisits(frames, { ra, dec, band = 'all', minGapHours = 6 } =
   for (const f of pool) {
     const last = visits[visits.length - 1];
     const gapHours = last ? (f.mjd - last.mjd) * 24 : Infinity;
-    const offset = Math.hypot((f.ra - ra) * Math.cos(dec * Math.PI / 180), f.dec - dec);
+    const offset = Math.hypot(deltaRA(f.ra, ra) * Math.cos(dec * Math.PI / 180), f.dec - dec);
     if (gapHours >= minGapHours) {
       visits.push({ ...f, offset });
     } else if (offset < last.offset) {

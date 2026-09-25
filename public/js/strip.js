@@ -268,6 +268,9 @@ export function drawStrip(canvas, {
       } else {
         ctx.fillStyle = P.accent;
         ctx.globalAlpha = Math.min(1, Math.max(0.05, z / TOP));
+        // A cell is a place to look, so it can be pressed: that visit, with
+        // that sector lit on the picture. The 1px gutter goes to the cell.
+        hits.push({ x: cx, y: cy, w: cw + 1, h: ch + 1, i: at, sector: s + 1, score: z });
       }
       ctx.fillRect(cx, cy, cw, ch);
     }

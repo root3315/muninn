@@ -20,8 +20,8 @@ import { Gate, loadStars } from './gate.js';
 import { drawStrip } from './strip.js';
 import { themeTransition } from './twilight.js';
 import { planetsNow } from './ephemeris.js';
-import { rankCandidates, distanceFloorAU, rateAtAU } from './hunt.js';
-import { TangentGrid, separation } from './wcs.js';
+import { rankCandidates } from './hunt.js';
+import { TangentGrid, separation, deltaRA } from './wcs.js';
 import { loadStamp } from './stamp.js';
 import { SkyView, shortName } from './sky.js';
 import {
@@ -304,7 +304,12 @@ function renderFacts() {
   box.replaceChildren();
   if (!f) return;
   const rows = [[t('facts.visits'), t('facts.visitsV', { n: f.visits, days: f.days })], [t('facts.band'), f.band]];
-  if (state.candidates) rows.push([t('facts.standout'), String(state.candidates.checked)]);
+  // The same count the run's headline gives: every cell at 4σ or more, not
+  // the twelve the hunt goes on to check or the eight the headline used to
+  // stop at — two caps side by side read as two answers to one question.
+  if (state.candidates && state.sectors) {
+    rows.push([t('facts.standout'), String(standouts(state.sectors, { limit: Infinity }).length)]);
+  }
   if (state.depth) rows.push([t('facts.depth'), `${fmt(state.depth.stacked, 1)} AB`, 'accent']);
   if (state.bodies) rows.push([t('facts.bodies'), String(state.bodies)]);
   for (const [name, value, tone] of rows) {
@@ -393,7 +398,17 @@ const breathe = (() => {
   };
 })();
 
+/**
+ * Bumped by every field that opens. Anything that awaited across that change
+ * holds a stale number and drops its answer instead of writing it over the new
+ * field. Names sent off to be resolved are counted separately (askSeq), so a
+ * name that turns out not to exist does not cancel the field on screen.
+ */
+let fieldSeq = 0;
+let askSeq = 0;
+
 async function runHunt() {
+  const gen = fieldSeq;
   const hits = standouts(state.sectors, { minScore: 4, limit: 12 });
   const seen = [];
   const cos = Math.cos((state.dec * Math.PI) / 180);
@@ -409,12 +424,13 @@ async function runHunt() {
     if (!world) continue;
     const [ra, dec] = world;
     // The same peak found in two neighbouring cells is one object, not two.
-    if (seen.some((c) => Math.hypot((c.ra - ra) * cos, c.dec - dec) * 3600 < 30)) continue;
+    if (seen.some((c) => Math.hypot(deltaRA(c.ra, ra) * cos, c.dec - dec) * 3600 < 30)) continue;
 
     const analysis = sky.trackMark(ra, dec);
     seen.push({ ra, dec, sector: hit.sector, visit: hit.visit, obsId: visit.frame.obsId, analysis });
     // Yield so a dozen tracks do not freeze the frame the user is watching.
     await breathe();
+    if (gen !== fieldSeq) return;
   }
 
   state.candidates = { checked: hits.length, all: seen, list: rankCandidates(seen), flashes: flashesOf(seen) };
@@ -704,7 +720,7 @@ function showFlash(c) {
   selectMode('single');
   sky.setIndex(idx);
   const cos = Math.cos((c.at.dec * Math.PI) / 180);
-  const already = sky.marks.some((m) => Math.hypot((m.ra - c.at.ra) * cos, m.dec - c.at.dec) * 3600 < DETECTOR_ARCSEC);
+  const already = sky.marks.some((m) => Math.hypot(deltaRA(m.ra, c.at.ra) * cos, m.dec - c.at.dec) * 3600 < DETECTOR_ARCSEC);
   if (!already) addMark(c.at.ra, c.at.dec);
   sky.sector = c.sector ?? null;
   syncScrub();
@@ -751,15 +767,17 @@ function renderMatrix() {
   if (!ready) return;
 
   $('matrix-lead').textContent = t('matrix.lead', { n: SECTOR_COUNT });
-  const hits = standouts(state.sectors);
+  const hits = standouts(state.sectors, { limit: Infinity });
   const said = hits.length
     ? t('matrix.found', { n: hits.length, sector: hits[0].sector })
     : t('matrix.calm');
   // Scored from the visits in hand; the norm each sector is judged against can
   // still move when the rest arrive, so the line says it is provisional.
   const total = state.visits.filter((v) => v.status !== 'dropped').length;
+  // The sentence's own full stop comes off before the qualifier, or it reads
+  // "sector 14. · so far".
   $('matrix-found').textContent = state.loading
-    ? `${said} · ${t('matrix.partial', { done: visits.length, total })}`
+    ? `${said.replace(/\.$/, '')} · ${t('matrix.partial', { done: visits.length, total })}`
     : said;
   $('matrix-found').dataset.calm = String(hits.length === 0);
 }
@@ -805,7 +823,7 @@ function loadExamined() {
 function rememberExamined(entry) {
   const cos = Math.cos((entry.dec * Math.PI) / 180);
   const near = state.examined.findIndex(
-    (f) => Math.hypot((f.ra - entry.ra) * cos, f.dec - entry.dec) < 0.05,
+    (f) => Math.hypot(deltaRA(f.ra, entry.ra) * cos, f.dec - entry.dec) < 0.05,
   );
   // Looking at the same field again replaces the record rather than counting
   // the area twice; the deeper look is the one that stands.
@@ -989,16 +1007,24 @@ function drawAxis() {
   runHeight = box.offsetHeight || runHeight;
 }
 
-/** Which frame of the run a point lands on, or -1. */
-function runAt(ev) {
+/**
+ * What a point on the run lands on: a lit sector cell if there is one there,
+ * otherwise the frame whose column it is in, otherwise null.
+ */
+function runHitAt(ev) {
   const c = $('run-canvas');
   const r = c.getBoundingClientRect();
   const x = ev.clientX - r.left;
   const y = ev.clientY - r.top;
-  for (const h of runHits) {
-    if (x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h) return h.i;
-  }
-  return -1;
+  const inside = (h) => x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h;
+  return runHits.find((h) => h.sector && inside(h))
+    ?? runHits.find((h) => !h.sector && inside(h))
+    ?? null;
+}
+
+/** Which frame of the run a point lands on, or -1. */
+function runAt(ev) {
+  return runHitAt(ev)?.i ?? -1;
 }
 
 
@@ -1242,14 +1268,21 @@ const matchArcsec = (o) => 2 * DETECTOR_ARCSEC + (Number.isFinite(o.err) ? Math.
  * where it was actually measured are asked about: a known asteroid passing the
  * same spot on another night is not this thing.
  *
- * `match` as soon as any answered visit has a body there; otherwise `waiting`
+ * `match` when any answered visit has a body there; otherwise `waiting`
  * while any is still out, `none` once they have answered, `failed` or `off`
  * when none could be asked.
+ *
+ * A match names the visit it was made in, and `unmatched` lists the answered
+ * visits where the same spot had nothing catalogued. The Atala field is the
+ * case: the centre flashes on 6 Jul and on 25 Dec, the asteroid explains only
+ * the second, and a bare "In SkyBoT: Atala" quietly explained away the first.
  */
 function skybotVerdict(seen) {
   let waiting = 0;
   let asked = 0;
   let off = 0;
+  let match = null;
+  const unmatched = [];
   for (const p of seen) {
     const objects = sky.knownObjects.get(p.obsId);
     if (!objects) {
@@ -1258,16 +1291,21 @@ function skybotVerdict(seen) {
       continue;
     }
     asked += 1;
-    for (const o of objects) {
-      if (separation(p.ra, p.dec, o.ra, o.dec) * 3600 <= matchArcsec(o)) {
-        return { state: 'match', name: o.num ? `(${o.num}) ${o.name}` : o.name, object: o, obsId: p.obsId };
-      }
-    }
+    const o = objects.find((x) => separation(p.ra, p.dec, x.ra, x.dec) * 3600 <= matchArcsec(x));
+    if (!o) { unmatched.push(p.obsId); continue; }
+    match ??= { state: 'match', name: o.num ? `(${o.num}) ${o.name}` : o.name, object: o, obsId: p.obsId };
   }
+  if (match) return { ...match, unmatched };
   if (waiting) return { state: 'waiting' };
   if (asked) return { state: 'none' };
   return { state: off ? 'off' : 'failed' };
 }
+
+/** The date of a loaded visit, by its observation id. */
+const visitDate = (obsId) => {
+  const v = sky.visits.find((x) => x.frame.obsId === obsId);
+  return v ? fmtDate(v.frame.iso) : '—';
+};
 
 /** The places a tracked thing was seen, as skybotVerdict wants them. */
 function seenAt(analysis, fallback) {
@@ -1279,7 +1317,14 @@ function seenAt(analysis, fallback) {
 /** The line a mark or a candidate shows for its SkyBoT check. */
 function skybotLine(verdict, { none = 'mark.unknown' } = {}) {
   switch (verdict?.state) {
-    case 'match': return t('mark.known', { name: verdict.name });
+    case 'match':
+      return verdict.unmatched?.length
+        ? t('mark.knownPartly', {
+          name: verdict.name,
+          when: visitDate(verdict.obsId),
+          others: verdict.unmatched.map(visitDate).join(', '),
+        })
+        : t('mark.known', { name: verdict.name });
     case 'none': return t(none);
     case 'failed': return t('mark.skybotFailed');
     case 'off': return t('mark.skybotOff');
@@ -1287,8 +1332,14 @@ function skybotLine(verdict, { none = 'mark.unknown' } = {}) {
   }
 }
 
-/** For styling: a name is quiet, "none" is the interesting case, the rest are pending. */
-const skybotTone = (verdict) => (verdict?.state === 'match' ? 'true' : verdict?.state === 'none' ? 'false' : 'wait');
+/**
+ * For styling: a name is quiet, "none" is the interesting case, the rest are
+ * pending. A name that explains only some of the visits is still interesting.
+ */
+const skybotTone = (verdict) => {
+  if (verdict?.state === 'match') return verdict.unmatched?.length ? 'false' : 'true';
+  return verdict?.state === 'none' ? 'false' : 'wait';
+};
 
 /* ------------------------------------------------------------------- marks */
 
@@ -1783,6 +1834,7 @@ function fieldGrid(ra, dec) {
 }
 
 async function openField({ ra, dec, label = '', band = null }) {
+  fieldSeq += 1;
   state.abort?.abort();
   const ctrl = new AbortController();
   state.abort = ctrl;
@@ -2005,13 +2057,19 @@ async function submitTarget(raw) {
   if (/^[\d\s.+-]+$/.test(text)) { note.textContent = t('target.badCoords'); return; }
 
   note.textContent = t('target.resolving');
+  // A name takes seconds to resolve; a field opened in the meantime, or a
+  // second name typed, wins over this one when it finally answers.
+  const ticket = ++askSeq;
+  const openedAt = fieldSeq;
+  const stale = () => ticket !== askSeq || openedAt !== fieldSeq;
   try {
     const hit = await resolveName(text);
+    if (stale()) return;
     if (!hit) { note.textContent = t('target.notFound'); return; }
     note.textContent = '';
     openField({ ra: hit.ra, dec: hit.dec, label: hit.name });
   } catch {
-    note.textContent = t('target.offline');
+    if (!stale()) note.textContent = t('target.offline');
   }
 }
 
@@ -2392,19 +2450,32 @@ function wire() {
 
   const run = $('run-canvas');
   run.addEventListener('pointermove', (e) => {
-    const i = runAt(e);
+    const hit = runHitAt(e);
+    const i = hit?.i ?? -1;
     run.style.cursor = i >= 0 ? 'pointer' : 'default';
+    // A lit cell names itself, the way the picture's own marks do.
+    run.title = hit?.sector
+      ? t('matrix.cell', {
+        sector: hit.sector,
+        date: fmtDate(sky.visits[hit.i]?.frame.iso),
+        score: fmt(hit.score, 1),
+      })
+      : '';
     if (i !== runHover) { runHover = i; drawAxis(); }
   });
   run.addEventListener('pointerleave', () => {
     if (runHover !== -1) { runHover = -1; drawAxis(); }
   });
   run.addEventListener('click', (e) => {
-    const i = runAt(e);
-    if (i < 0) return;
-    holdStill();
-    sky.setIndex(i);
-    syncScrub();
+    const hit = runHitAt(e);
+    if (!hit || hit.i < 0) return;
+    if (hit.sector) {
+      pickCell(hit.sector, hit.i);
+    } else {
+      holdStill();
+      sky.setIndex(hit.i);
+      syncScrub();
+    }
     refreshKnownObjects();
   });
   window.addEventListener('resize', () => { if (!$('run').hidden) drawAxis(); });
@@ -2518,7 +2589,7 @@ function wire() {
     if (next.lang && next.lang !== getLanguage()) { setLanguage(next.lang); relabel(); }
     if (!next.position) return;
     const moved = state.ra == null
-      || Math.abs(next.position.ra - state.ra) > 1e-4
+      || Math.abs(deltaRA(next.position.ra, state.ra)) > 1e-4
       || Math.abs(next.position.dec - state.dec) > 1e-4
       || next.band !== state.band
       || (next.fov ?? state.fov) !== state.fov;
@@ -2546,9 +2617,13 @@ function wire() {
     // .matches — guard rather than throw.
     if (e.target instanceof Element && e.target.matches('input, select, textarea, [contenteditable]')) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.key === ' ') { e.preventDefault(); togglePlayback(); }
-    if (e.key === 'ArrowLeft') { holdStill(); sky.setIndex(sky.index - 1); syncScrub(); }
-    if (e.key === 'ArrowRight') { holdStill(); sky.setIndex(sky.index + 1); syncScrub(); }
+    // Space on a focused control presses that control; it only means "play"
+    // when nothing that Space already operates has the focus.
+    const pressable = e.target instanceof Element && e.target.closest('button, a[href], summary, [role="button"]');
+    if (e.key === ' ' && !pressable) { e.preventDefault(); togglePlayback(); }
+    // The same steps the ‹ › buttons take, SkyBoT included.
+    if (e.key === 'ArrowLeft') { holdStill(); sky.setIndex(sky.index - 1); syncScrub(); refreshKnownObjects(); }
+    if (e.key === 'ArrowRight') { holdStill(); sky.setIndex(sky.index + 1); syncScrub(); refreshKnownObjects(); }
     if (e.key === 'h' || e.key === 'H' || e.key === 'р' || e.key === 'Р') setBare(!state.bare);
     if (e.key === 'Escape' && state.bare) setBare(false);
   });

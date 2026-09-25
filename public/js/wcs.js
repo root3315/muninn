@@ -163,9 +163,14 @@ export class TangentGrid {
   /** The longer side, in degrees — what a bounding search has to cover. */
   get spanDeg() { return Math.max(this.fovDeg, this.fovHeightDeg); }
 
-  /** Grid index (i across, j down) → [ra, dec]. j grows downward so north stays up. */
+  /**
+   * Grid index (i across, j down) → [ra, dec]. j grows downward so north stays
+   * up, and i grows westward so east is on the left, as on every sky image and
+   * as the compass says. With xi taken straight from i the frames came out
+   * mirrored: east on the right under an "E" pointing left.
+   */
   indexToWorld(i, j) {
-    const xi = (i - this.cx) * this.scale * D2R;
+    const xi = -(i - this.cx) * this.scale * D2R;
     const eta = -(j - this.cy) * this.scale * D2R;
     const rho = Math.hypot(xi, eta);
     if (rho === 0) return [this.ra, this.dec];
@@ -185,7 +190,7 @@ export class TangentGrid {
     if (cosC <= 0) return null;
     const xi = (Math.cos(d1) * Math.sin(dA)) / cosC * R2D;
     const eta = (Math.cos(this.d0) * Math.sin(d1) - Math.sin(this.d0) * Math.cos(d1) * Math.cos(dA)) / cosC * R2D;
-    return [xi / this.scale + this.cx, -eta / this.scale + this.cy];
+    return [-xi / this.scale + this.cx, -eta / this.scale + this.cy];
   }
 }
 
@@ -198,3 +203,10 @@ export function separation(ra1, dec1, ra2, dec2) {
   const h = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
   return 2 * Math.asin(Math.min(1, Math.sqrt(h))) * R2D;
 }
+
+/**
+ * a − b in right ascension, the short way round, in degrees (−180…180).
+ * A field on the 0 h meridian has neighbours at 359.99° and 0.01°; a plain
+ * subtraction puts them 360° apart and turns a still star into a fast mover.
+ */
+export const deltaRA = (a, b) => ((((a - b) % 360) + 540) % 360) - 180;

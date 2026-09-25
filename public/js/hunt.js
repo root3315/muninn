@@ -6,19 +6,21 @@
  *
  * Almost all of the apparent motion of a distant solar-system body is not the
  * body moving. It is the Earth moving, and the body sitting still while we swing
- * around the Sun — parallax. Near opposition the Earth's 1 AU orbit sweeps a
- * body at distance d across the sky at roughly
+ * around the Sun — parallax. At opposition the body is d − 1 AU from us and
+ * the Earth outruns it by its own orbital speed less the body's, 2π(1 − 1/√d)
+ * AU a year, which comes to
  *
- *     rate ≈ 2π · 206265 / d   arcseconds per year
+ *     rate ≈ 2π · 206265 / (d + √d)   arcseconds per year
  *
- * which inverts to a distance. The numbers that falls out are the whole reason
- * a survey like this can say anything at all about where something lives:
+ * (d heliocentric, in AU). Far out the √d hardly matters; in the main belt it
+ * is the difference between 34″ an hour and 55. It inverts to a distance, and
+ * the numbers that fall out are the whole reason a survey like this can say
+ * anything at all about where something lives:
  *
- *     main belt, 2.7 AU     ~55″ per hour
- *     Jupiter trojans, 5 AU ~30″
- *     Neptune, 30 AU        ~5″
- *     Sedna near 500 AU     ~0.3″
- *     Planet X, 400–800 AU  ~0.2–0.4″
+ *     main belt, 2.7 AU        ~34″ per hour
+ *     Jupiter trojans, 5.2 AU  ~20″
+ *     Neptune, 30 AU           ~4″
+ *     Planet X, 400–800 AU     ~0.18–0.35″
  *
  * So speed sorts the solar system by depth, and "slow" is the signature worth
  * hunting. An asteroid streaks. A thing at six hundred astronomical units barely
@@ -26,9 +28,11 @@
  *
  * Three honesties are built in.
  *
- * The relation holds near opposition; away from it the same body appears slower,
- * so a measured rate gives a *lower bound* on distance and the interface says
- * "no nearer than".
+ * The relation holds at opposition, where the motion is fastest; away from it
+ * the same body appears slower, and slower reads as farther. So the distance
+ * this gives is an *upper bound* and the interface says "no farther than".
+ * (An earlier version had it the other way round and called (152) Atala, at
+ * 3 AU, "no nearer than 7 AU".)
  *
  * A candidate a catalogue already knows is not a candidate — it is a known
  * asteroid, and the tool says which one.
@@ -48,21 +52,25 @@ const SWEEP_ARCSEC_PER_YEAR = 2 * Math.PI * 206265;
 const HOURS_PER_YEAR = 365.25 * 24;
 
 /**
- * The closest an object could be and still crawl this slowly.
+ * The farthest an object could be and still move this fast: the distance at
+ * which this rate would be the opposition rate. Anywhere else in its orbit the
+ * same body shows less motion, so the true distance is no greater.
  *
  * Returns AU, or null for a rate too small to be meaningful — at some point the
  * measurement is consistent with "not moving at all", and inventing a distance
  * from that would be inventing a detection.
  */
-export function distanceFloorAU(arcsecPerHour) {
+export function distanceCeilingAU(arcsecPerHour) {
   if (!(arcsecPerHour > 0)) return null;
-  const perYear = arcsecPerHour * HOURS_PER_YEAR;
-  const au = SWEEP_ARCSEC_PER_YEAR / perYear;
+  // d + √d = s, solved for d.
+  const s = SWEEP_ARCSEC_PER_YEAR / (arcsecPerHour * HOURS_PER_YEAR);
+  const root = (Math.sqrt(1 + 4 * s) - 1) / 2;
+  const au = root * root;
   return Number.isFinite(au) && au > 0 ? au : null;
 }
 
 /** The inverse, for stating what a given distance would look like. */
-export const rateAtAU = (au) => SWEEP_ARCSEC_PER_YEAR / (au * HOURS_PER_YEAR);
+export const rateAtAU = (au) => SWEEP_ARCSEC_PER_YEAR / ((au + Math.sqrt(au)) * HOURS_PER_YEAR);
 
 /**
  * Did this thing actually move, or is the fitted slope inside its own noise?
@@ -96,7 +104,7 @@ export function reach(analysis, { k = 3 } = {}) {
   const spanHours = (analysis?.spanDays ?? 0) * 24;
   if (!(spanHours > 0)) return null;
   const slowest = (k * Math.max(analysis?.rms ?? 0, DETECTOR_ARCSEC)) / spanHours;
-  return { slowestRate: slowest, furthestAU: distanceFloorAU(slowest) };
+  return { slowestRate: slowest, furthestAU: distanceCeilingAU(slowest) };
 }
 
 /**
@@ -135,7 +143,7 @@ export function rankCandidates(found, { maxArcsecPerHour = 60 } = {}) {
     .filter((c) => rateIsMeasured(c.analysis))
     .filter((c) => c.analysis.ratePerHour <= maxArcsecPerHour)
     .map((c) => {
-      const au = distanceFloorAU(c.analysis.ratePerHour);
+      const au = distanceCeilingAU(c.analysis.ratePerHour);
       return { ...c, au, where: neighbourhood(au) };
     })
     .sort((a, b) => {

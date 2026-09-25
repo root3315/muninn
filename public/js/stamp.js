@@ -14,7 +14,7 @@
  * anything.
  */
 
-import { scanHDUs, decodePixels } from './fits.js';
+import { scanHDUs, decodePixels, readHeader, dataLength, padded } from './fits.js';
 import { WCS } from './wcs.js';
 
 const HEADER_PROBE = 65536;
@@ -23,7 +23,12 @@ const MAX_HEADER = 1 << 20;
 async function fetchRange(url, start, end, signal) {
   const res = await fetch(url, { headers: { Range: `bytes=${start}-${end}` }, signal });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} on ${url}`);
-  return res.arrayBuffer();
+  if (res.status === 206) return res.arrayBuffer();
+  // A server that ignores Range answers 200 with the whole file. From byte 0
+  // those are still the right bytes, only more of them; from anywhere else
+  // they would be decoded as the wrong detector rows, without an error.
+  if (start === 0) return (await res.arrayBuffer()).slice(0, end + 1);
+  throw new Error(`Range not honoured (HTTP ${res.status}) on ${url}`);
 }
 
 /** Read enough of the file to describe HDU 0 and the IMAGE extension. */
@@ -37,6 +42,54 @@ async function readImageHDU(url, signal) {
     if (want >= MAX_HEADER) throw new Error('No IMAGE extension in the first megabyte');
     want *= 2;
   }
+}
+
+/**
+ * The pipeline's own verdict on a pixel, from the FLAGS extension that follows
+ * the image. These bits mean the pixel did not see the sky in this exposure:
+ * a cosmic-ray jump caught up the ramp (TRANSIENT), an onboard processing
+ * error, a dead, hot or cold pixel, lost data, or charge persisting from an
+ * earlier bright source. Bit numbers are the MP_* keys of the FLAGS header.
+ *
+ * Deliberately not masked: OVERFLOW (the cores of bright stars), OUTLIER (set
+ * on real sources too) and SOURCE (a known source, i.e. the sky itself).
+ *
+ * Without this the "flash" that opened the Atala field on 6 Jul 2025 was one
+ * pixel at eleven times its neighbours with FLAGS 0x80005 — TRANSIENT,
+ * SUR_ERROR, OUTLIER — and every one of Hunter X's standouts there was a
+ * flagged pixel as well.
+ */
+const MASK_BITS = {
+  TRANSIENT: 0, SUR_ERROR: 2, NONFUNC: 6, MISSING_DATA: 9, HOT: 10, COLD: 11, PERSIST: 17,
+};
+const FLAG_MASK = Object.values(MASK_BITS).reduce((m, bit) => m | (1 << bit), 0);
+const FLAGS_HEADER_PROBE = 5 * 2880 * 4;
+
+/**
+ * Blank the flagged pixels of the rows already read, in place.
+ * Returns the bytes it cost, or null when the file has no FLAGS extension
+ * right after the image (then nothing is masked and nothing is claimed).
+ */
+async function maskFlagged(url, img, rowFrom, rowTo, nx, plane, signal) {
+  const at = img.dataStart + padded(img.dataBytes ?? dataLength(img.cards));
+  let head = await fetchRange(url, at, at + FLAGS_HEADER_PROBE - 1, signal);
+  let hdr = readHeader(head, 0);
+  if (!hdr) {
+    head = await fetchRange(url, at, at + 4 * FLAGS_HEADER_PROBE - 1, signal);
+    hdr = readHeader(head, 0);
+  }
+  if (!hdr || String(hdr.cards.get('EXTNAME') ?? '').trim() !== 'FLAGS') return null;
+  if (hdr.cards.get('BITPIX') !== 32 || hdr.cards.get('NAXIS1') !== nx) return null;
+
+  const start = at + hdr.headerBytes + (rowFrom - 1) * nx * 4;
+  const raw = await fetchRange(url, start, at + hdr.headerBytes + rowTo * nx * 4 - 1, signal);
+  const flags = new DataView(raw);
+  const n = Math.min(plane.length, raw.byteLength / 4);
+  let masked = 0;
+  for (let k = 0; k < n; k++) {
+    if (flags.getInt32(k * 4, false) & FLAG_MASK) { plane[k] = NaN; masked += 1; }
+  }
+  return { bytes: head.byteLength + raw.byteLength, masked };
 }
 
 /**
@@ -96,6 +149,16 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15 } = {}) 
     bzero: cards.get('BZERO') ?? 0,
     bscale: cards.get('BSCALE') ?? 1,
   });
+  // The same rows of the FLAGS plane, so a pixel the pipeline has already
+  // called bad is a hole here too — filled from its good neighbours below —
+  // instead of a bright point waiting to be "found". A frame whose flags
+  // cannot be read is still shown, and says so through `flagged: null`.
+  let flagged = null;
+  try {
+    flagged = await maskFlagged(url, hdu, rowFrom, rowTo, nx, plane, signal);
+  } catch (err) {
+    if (err?.name === 'AbortError') throw err;
+  }
 
   // Bilinear sample, falling back to the nearest valid neighbour around bad pixels.
   const gw = grid.width;
@@ -155,7 +218,8 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15 } = {}) 
       exposure: cards.get('EXPTIME') ?? cards.get('EFFEXPTM') ?? null,
       rollDeg: wcs.rollDeg,
       pixelScale: wcs.scale * 3600,
-      bytesRead: raw.byteLength,
+      bytesRead: raw.byteLength + (flagged?.bytes ?? 0),
+      flaggedPixels: flagged ? flagged.masked : null,
     },
   };
 }
