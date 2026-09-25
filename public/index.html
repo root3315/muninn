@@ -202,7 +202,9 @@
       <div class="bands">
         <div class="lambda" id="lambda" role="group" data-i18n-label="field.band"></div>
         <label class="vh" for="band" data-i18n="field.band"></label>
-        <select id="band" class="vh"><option value="all"></option></select>
+        <!-- The chips above are what the keyboard reaches; this stays for the
+             state it holds, out of the tab order so Tab never lands on nothing. -->
+        <select id="band" class="vh" tabindex="-1"><option value="all"></option></select>
       </div>
 
     </div>
@@ -380,7 +382,9 @@
     </p>
 
     <label class="vh" for="scrub" data-i18n="epochs.legend"></label>
-    <input type="range" id="scrub" min="0" max="0" step="1" value="0" disabled class="vh">
+    <!-- Stepping is the buttons and the arrow keys; this range is the state
+         they move, and is not a tab stop of its own. -->
+    <input type="range" id="scrub" min="0" max="0" step="1" value="0" disabled class="vh" tabindex="-1">
     <span class="vh" id="axis"></span>
     <span class="vh" id="axis-svg"></span>
     <span class="vh" id="axis-empty"></span>
