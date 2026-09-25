@@ -87,8 +87,9 @@ mirror, IRSA, SIMBAD, SkyBoT — and nothing else.
   is, the same colours as the A and B chips.
 - **Stack a season.** SPHEREx comes back to a field in seasons — a few visits over a week
   or two, then nothing for half a year. The stack adds one season's visits in one band
-  (dropping each pixel's single brightest value, which takes out a missed cosmic ray or an
-  asteroid passing once) and says how deep that gets; ← → steps from season to season.
+  (each pixel takes the middle of three values, or drops the brightest of four or more,
+  which takes out a missed cosmic ray or an asteroid passing once) and says how deep that
+  gets; ← → steps from season to season.
 - **Mark a spot** by clicking it. Muninn re-measures that exact sky position in every
   loaded visit, classifies what it finds (fixed · intermittent · moving · present once),
   and checks it against the IMCCE catalogue of known solar-system objects at the exact

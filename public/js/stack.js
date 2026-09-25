@@ -62,10 +62,14 @@ export function seasonStep(visits, i, dir, { days = SEASON_DAYS } = {}) {
 }
 
 /**
- * Add planes of the same grid, pixel by pixel. With four or more values the
- * single brightest is dropped before averaging: that takes out a cosmic ray
- * the pipeline missed and an asteroid crossing in one visit, and costs the
- * noise almost nothing. Masked pixels (NaN) are left out of their pixel's sum.
+ * Add planes of the same grid, pixel by pixel, so that something present in
+ * one visit only — a cosmic ray the pipeline missed, an asteroid crossing, a
+ * scattered-light patch — does not survive into the sum:
+ *   · four or more values: the single brightest is dropped, the rest averaged;
+ *   · three: the middle one (a mean of three kept a one-visit artefact at a
+ *     third of its brightness);
+ *   · two or one: their mean, which is all two can give.
+ * Masked pixels (NaN) are left out of their pixel's count.
  */
 export function coadd(planes) {
   const len = planes[0]?.length ?? 0;
@@ -80,10 +84,24 @@ export function coadd(planes) {
       if (v === v) { m += 1; sum += v; if (v > max) max = v; }
     }
     if (!m) continue;
-    out[p] = m >= 4 ? (sum - max) / (m - 1) : sum / m;
+    if (m >= 4) out[p] = (sum - max) / (m - 1);
+    else if (m === 3) out[p] = middleOfThree(planes, p);
+    else out[p] = sum / m;
   }
   return out;
 }
 
-/** How many visits a stack of n actually averages, after the one dropped. */
-export const averaged = (n) => (n >= 4 ? n - 1 : n);
+/** The median of a pixel that has exactly three valid values. */
+function middleOfThree(planes, p) {
+  const v = [];
+  for (const plane of planes) { const x = plane[p]; if (x === x) v.push(x); }
+  const [a, b, c] = v;
+  return Math.max(Math.min(a, b), Math.min(Math.max(a, b), c));
+}
+
+/**
+ * How many visits' worth of noise a stack of n beats down: n − 1 after the
+ * dropped value; for three, the median, whose noise is about that of a mean
+ * of two (its efficiency is 0.74 of three), counted conservatively as two.
+ */
+export const averaged = (n) => (n >= 4 ? n - 1 : n === 3 ? 2 : n);

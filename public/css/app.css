@@ -535,6 +535,7 @@ li { list-style: none; }
   font-weight: 500; letter-spacing: -0.02em; line-height: 1.15;
   color: var(--color-ink);
 }
+.when__date[data-range="true"] { font-size: var(--text-md); white-space: nowrap; }
 .when__time { font-size: var(--text-xs); color: var(--color-neutral); }
 .when__band { font-size: var(--text-xs); color: var(--color-accent); padding-block-start: var(--space-xs); }
 .when__of { font-size: var(--text-xs); color: var(--color-neutral); }
