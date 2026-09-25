@@ -1,0 +1,6 @@
+# Cloudflare Pages. The site is the static `public/` directory; the only server
+# code is `functions/api/search.js`, the IRSA relay the browser cannot make for
+# itself. Deploy with `npx wrangler pages deploy`.
+name = "muninn"
+compatibility_date = "2026-01-01"
+pages_build_output_dir = "public"

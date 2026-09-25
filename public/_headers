@@ -1,0 +1,20 @@
+# Cloudflare Pages header rules.
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: geolocation=(), microphone=(), camera=(), interest-cohort=()
+  # Every external origin the page is allowed to reach, named rather than opened
+  # up: the S3 mirror it reads pixels from, and the two catalogues it asks about
+  # names and known solar-system objects. Anything else is a bug.
+  Content-Security-Policy: default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com https://irsa.ipac.caltech.edu https://cds.unistra.fr https://ssp.imcce.fr; manifest-src 'self'
+
+# The page and its code change with every deploy, so they revalidate. The frame
+# indexes change when a data release does.
+/index.html
+  Cache-Control: public, max-age=0, must-revalidate
+/js/*
+  Cache-Control: public, max-age=0, must-revalidate
+/css/*
+  Cache-Control: public, max-age=0, must-revalidate
+/data/*
+  Cache-Control: public, max-age=600, stale-while-revalidate=86400

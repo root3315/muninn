@@ -1,0 +1,993 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Пять экранов результата</title>
+<meta name="description" content="Один и тот же результат SPHEREx, собранный пятью разными способами — чтобы выбрать направление.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,400;7..72,600&family=JetBrains+Mono:wght@400;700&family=Bodoni+Moda:opsz,wght@6..96,400;6..96,500&family=Familjen+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&family=Archivo:wght@400;500;600&display=swap">
+<style>
+/* ===========================================================================
+   Пять экранов результата — лаборатория.
+   Одни и те же данные поля Spica: 10 заходов, 381 день, глубина 17,4 AB,
+   12 выделившихся клеток, ярче всего сектор 19. Цифры настоящие, снимок —
+   синтетический: это макет композиции, а не кадр SPHEREx.
+   =========================================================================== */
+
+:root{
+  --lab-ground:#12100f;
+  --lab-ink:#efece6;
+  --lab-dim:#a09a90;
+  --lab-rule:#2e2b28;
+  --lab-mark:#d8552f;
+  --ease:cubic-bezier(.16,1,.3,1);
+}
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--lab-ground);color:var(--lab-ink);
+  font-family:"IBM Plex Sans",system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--lab-mark);color:#fff}
+a{color:inherit}
+canvas{display:block}
+
+/* ------------------------------------------------------------- шапка листа */
+.sheet{max-inline-size:1240px;margin-inline:auto;padding:0 20px}
+
+.lab-head{padding-block:64px 28px}
+.lab-kicker{
+  font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--lab-dim);margin:0 0 18px;
+}
+.lab-title{
+  font-family:"Literata",Georgia,serif;font-weight:600;
+  font-size:clamp(2.2rem,5.4vw,4.4rem);line-height:.98;letter-spacing:-.025em;
+  margin:0;text-wrap:balance;max-inline-size:16ch;
+}
+.lab-lede{
+  margin:20px 0 0;max-inline-size:60ch;font-size:16px;line-height:1.6;color:var(--lab-dim);
+}
+.lab-lede b{color:var(--lab-ink);font-weight:500}
+
+.lab-nav{
+  position:sticky;top:0;z-index:40;
+  display:flex;flex-wrap:wrap;gap:0 2px;align-items:stretch;
+  margin-block:40px 0;
+  background:var(--lab-ground);
+  border-block:1px solid var(--lab-rule);
+}
+.lab-nav a{
+  flex:1 1 auto;text-decoration:none;padding:12px 14px;
+  display:flex;gap:10px;align-items:baseline;min-inline-size:0;
+  border-inline-end:1px solid var(--lab-rule);
+  transition:background .25s var(--ease),color .25s var(--ease);
+}
+.lab-nav a:last-child{border-inline-end:0}
+.lab-nav a:hover,.lab-nav a:focus-visible{background:#1d1a18}
+.lab-nav a:focus-visible{outline:2px solid var(--lab-mark);outline-offset:-2px}
+.lab-nav b{font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--lab-mark)}
+.lab-nav span{font-size:13px;color:var(--lab-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ------------------------------------------------------------- один вариант */
+.case{padding-block:72px 0}
+.case__head{display:grid;grid-template-columns:auto minmax(0,1fr);gap:0 24px;align-items:start}
+.case__no{
+  font-family:"JetBrains Mono",monospace;font-size:12px;color:var(--lab-mark);
+  padding-block-start:10px;
+}
+.case__name{
+  font-family:"Literata",Georgia,serif;font-weight:600;
+  font-size:clamp(1.5rem,2.6vw,2.2rem);line-height:1.1;letter-spacing:-.02em;margin:0;
+}
+.case__idea{margin:10px 0 0;max-inline-size:56ch;font-size:15px;line-height:1.6;color:var(--lab-dim)}
+.case__tags{display:flex;flex-wrap:wrap;gap:8px 10px;margin:16px 0 0;padding:0;list-style:none}
+.case__tags li{
+  font-family:"JetBrains Mono",monospace;font-size:11px;letter-spacing:.04em;
+  padding:4px 9px;border:1px solid var(--lab-rule);color:var(--lab-dim);
+}
+.case__tags li[data-w="plus"]{border-color:#3e5c46;color:#8fd6a4}
+.case__tags li[data-w="minus"]{border-color:#5c3e3e;color:#e0a0a0}
+
+/* Рамка макета: тонкая, чтобы не спорить с тем, что внутри. */
+.screen{
+  margin-block-start:26px;position:relative;
+  block-size:min(74vh,660px);min-block-size:520px;
+  overflow:hidden;border:1px solid var(--lab-rule);
+}
+#v-d .screen{block-size:min(96vh,880px)}
+.screen__tag{
+  position:absolute;inset-block-start:0;inset-inline-end:0;z-index:30;
+  font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.1em;
+  padding:5px 8px;background:var(--lab-ground);color:var(--lab-dim);
+  border-inline-start:1px solid var(--lab-rule);border-block-end:1px solid var(--lab-rule);
+  pointer-events:none;
+}
+
+/* =================================================================== A. Плита */
+[data-v="a"]{
+  --paper:#efe9dd;--ink:#191714;--soft:#6d675c;--pencil:#a8391b;--keyline:#22201c;
+  block-size:100%;background:var(--paper);color:var(--ink);
+  font-family:"Literata",Georgia,serif;
+  display:grid;grid-template-rows:auto minmax(0,1fr) auto;
+  padding:26px 32px 22px;gap:18px;
+}
+[data-v="a"] .a-rule{
+  display:flex;flex-wrap:wrap;gap:6px 22px;align-items:baseline;
+  font-family:"JetBrains Mono",monospace;font-size:10.5px;letter-spacing:.08em;
+  color:var(--soft);padding-block-end:8px;border-block-end:1px solid var(--keyline);
+}
+[data-v="a"] .a-rule b{color:var(--ink);font-weight:400}
+[data-v="a"] .a-body{
+  display:grid;grid-template-columns:minmax(0,1fr) auto;gap:0 28px;min-block-size:0;
+}
+[data-v="a"] .a-left{display:grid;grid-template-rows:auto minmax(0,1fr);gap:14px;min-block-size:0}
+[data-v="a"] .a-find{
+  font-size:clamp(1.35rem,2.3vw,2rem);line-height:1.06;letter-spacing:-.024em;
+  font-weight:600;margin:0;max-inline-size:26ch;text-wrap:balance;
+}
+[data-v="a"] .a-find em{font-style:normal;color:var(--pencil)}
+[data-v="a"] .a-plate{
+  position:relative;justify-self:start;align-self:start;
+  block-size:100%;aspect-ratio:1;max-inline-size:100%;
+  border:1px solid var(--keyline);padding:7px;background:var(--paper);
+}
+[data-v="a"] .a-plate canvas{inline-size:100%;block-size:100%}
+[data-v="a"] .a-plate::after{
+  content:"II-b · 2025-06-17";position:absolute;inset-block-end:-19px;inset-inline-start:0;
+  font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--soft);
+}
+[data-v="a"] .a-wheel{display:grid;align-content:start;gap:0;min-inline-size:126px}
+[data-v="a"] .a-wheel h4{
+  margin:0 0 8px;font-family:"JetBrains Mono",monospace;font-size:10px;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--soft);font-weight:400;
+}
+[data-v="a"] .a-band{
+  display:grid;grid-template-columns:18px minmax(0,1fr);gap:9px;align-items:baseline;
+  padding:6px 0;border-block-end:1px solid #d9d2c4;
+  font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--soft);
+  cursor:pointer;transition:color .2s var(--ease);
+}
+[data-v="a"] .a-band:hover{color:var(--ink)}
+[data-v="a"] .a-band[aria-current="true"]{color:var(--ink)}
+[data-v="a"] .a-band[aria-current="true"] b{color:var(--pencil)}
+[data-v="a"] .a-band b{font-weight:700}
+[data-v="a"] .a-sheet{display:grid;gap:8px}
+[data-v="a"] .a-sheet h4{
+  margin:0;font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--soft);font-weight:400;
+}
+[data-v="a"] .a-strip{
+  display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:9px;
+  max-inline-size:820px;
+}
+[data-v="a"] .a-cell{display:grid;gap:5px;cursor:pointer}
+[data-v="a"] .a-cell canvas{
+  inline-size:100%;aspect-ratio:1;border:1px solid var(--keyline);
+  transition:outline-color .2s var(--ease);outline:2px solid transparent;outline-offset:2px;
+}
+[data-v="a"] .a-cell:hover canvas{outline-color:#c9c1b1}
+[data-v="a"] .a-cell[aria-current="true"] canvas{outline-color:var(--pencil)}
+[data-v="a"] .a-cell span{
+  font-family:"JetBrains Mono",monospace;font-size:9.5px;color:var(--soft);text-align:center;
+}
+[data-v="a"] .a-cell[aria-current="true"] span{color:var(--pencil)}
+
+/* ================================================================= B. Консоль */
+[data-v="b"]{
+  --bg:#06080b;--line:#17222b;--ink:#c8dbe6;--dim:#5d7585;--ok:#3ee59b;--warn:#ffb23f;
+  block-size:100%;background:var(--bg);color:var(--ink);
+  font-family:"JetBrains Mono",monospace;font-size:11.5px;
+  display:grid;grid-template-columns:186px minmax(0,1fr) 228px;grid-template-rows:auto minmax(0,1fr) auto;
+}
+[data-v="b"] .b-bar{
+  grid-column:1/-1;display:flex;gap:0;align-items:stretch;
+  border-block-end:1px solid var(--line);
+}
+[data-v="b"] .b-bar span{padding:7px 12px;border-inline-end:1px solid var(--line);color:var(--dim)}
+[data-v="b"] .b-bar span b{color:var(--ink);font-weight:400}
+[data-v="b"] .b-bar .b-status{margin-inline-start:auto;border:0;color:var(--ok)}
+[data-v="b"] .b-col{padding:12px;border-inline-end:1px solid var(--line);overflow:auto;min-block-size:0}
+[data-v="b"] .b-col:last-of-type{border-inline-end:0;border-inline-start:1px solid var(--line)}
+[data-v="b"] .b-k{color:var(--dim);letter-spacing:.09em;margin:0 0 10px}
+[data-v="b"] .b-k+.b-k{margin-block-start:20px}
+[data-v="b"] .b-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:2px}
+[data-v="b"] .b-cell{
+  aspect-ratio:1;background:#0d161d;display:grid;place-items:center;
+  font-size:9px;color:#31495a;cursor:pointer;transition:background .15s var(--ease);
+}
+[data-v="b"] .b-cell:hover{background:#1b2c38;color:var(--ink)}
+[data-v="b"] .b-cell[data-hot="1"]{background:rgba(62,229,155,.16);color:#8ff0c6}
+[data-v="b"] .b-cell[data-hot="2"]{background:rgba(62,229,155,.34);color:#031a10}
+[data-v="b"] .b-cell[data-hot="3"]{background:var(--ok);color:#031a10}
+[data-v="b"] .b-stage{display:grid;grid-template-rows:minmax(0,1fr) auto;padding:12px;gap:10px;min-block-size:0}
+[data-v="b"] .b-frame{position:relative;block-size:100%;aspect-ratio:1;justify-self:center;max-inline-size:100%}
+[data-v="b"] .b-frame canvas{inline-size:100%;block-size:100%}
+[data-v="b"] .b-frame::before,[data-v="b"] .b-frame::after{
+  content:"";position:absolute;background:rgba(62,229,155,.38);pointer-events:none;
+}
+[data-v="b"] .b-frame::before{inset-block:0;inset-inline-start:50%;inline-size:1px}
+[data-v="b"] .b-frame::after{inset-inline:0;inset-block-start:50%;block-size:1px}
+[data-v="b"] .b-read{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;background:var(--line)}
+[data-v="b"] .b-read div{background:var(--bg);padding:7px 9px}
+[data-v="b"] .b-read dt{color:var(--dim);font-size:9.5px;letter-spacing:.08em;margin:0 0 3px}
+[data-v="b"] .b-read dd{margin:0;color:var(--ink)}
+[data-v="b"] .b-line{display:grid;gap:3px;margin:0 0 12px}
+[data-v="b"] .b-line div{display:flex;justify-content:space-between;gap:10px;color:var(--dim)}
+[data-v="b"] .b-line div b{color:var(--ink);font-weight:400}
+[data-v="b"] .b-verdict{color:var(--warn);line-height:1.5;margin:0}
+[data-v="b"] .b-run{
+  grid-column:1/-1;border-block-start:1px solid var(--line);
+  padding:9px 12px;display:flex;gap:0;align-items:stretch;
+}
+[data-v="b"] .b-tick{
+  flex:1 1 0;min-inline-size:0;padding:4px 0;text-align:center;color:var(--dim);
+  border-inline-end:1px solid var(--line);cursor:pointer;
+  transition:color .15s var(--ease),background .15s var(--ease);
+}
+[data-v="b"] .b-tick:last-child{border-inline-end:0}
+[data-v="b"] .b-tick:hover{background:#0d161d;color:var(--ink)}
+[data-v="b"] .b-tick[aria-current="true"]{background:var(--ok);color:#031a10}
+[data-v="b"] .b-tick i{display:block;font-style:normal;font-size:9px;opacity:.75}
+
+/* ================================================================== C. Кинозал */
+[data-v="c"]{block-size:100%;position:relative;background:#000;overflow:hidden;font-family:"Familjen Grotesk",system-ui,sans-serif}
+[data-v="c"] .c-sky{position:absolute;inset:0;inline-size:100%;block-size:100%}
+[data-v="c"] .c-veil{
+  position:absolute;inset:0;pointer-events:none;
+  background:
+    linear-gradient(to top,rgba(0,0,0,.82) 0%,rgba(0,0,0,0) 34%),
+    linear-gradient(to bottom,rgba(0,0,0,.55) 0%,rgba(0,0,0,0) 26%);
+}
+[data-v="c"] .c-top{
+  position:absolute;inset-block-start:0;inset-inline:0;padding:22px 26px;
+  display:flex;justify-content:space-between;gap:20px;align-items:flex-start;
+}
+[data-v="c"] .c-id{
+  font-family:"JetBrains Mono",monospace;font-size:10.5px;letter-spacing:.14em;
+  color:rgba(255,255,255,.62);
+}
+[data-v="c"] .c-find{
+  margin:0;text-align:end;max-inline-size:20ch;font-size:15px;line-height:1.35;
+  color:rgba(255,255,255,.9);font-weight:400;
+}
+[data-v="c"] .c-find b{display:block;font-size:11px;letter-spacing:.14em;
+  font-family:"JetBrains Mono",monospace;color:rgba(255,255,255,.5);font-weight:400;margin-block-end:6px}
+[data-v="c"] .c-foot{position:absolute;inset-block-end:0;inset-inline:0;padding:0 26px 22px}
+[data-v="c"] .c-date{
+  margin:0;font-size:clamp(2.4rem,6.6vw,5rem);line-height:.9;letter-spacing:-.04em;
+  font-weight:500;color:#fff;
+}
+[data-v="c"] .c-sub{
+  margin:10px 0 0;display:flex;flex-wrap:wrap;gap:6px 20px;
+  font-family:"JetBrains Mono",monospace;font-size:10.5px;letter-spacing:.1em;
+  color:rgba(255,255,255,.6);
+}
+[data-v="c"] .c-scale{position:absolute;inset-block:0;inset-inline-end:0;
+  display:grid;align-content:center;gap:2px;padding-inline-end:16px}
+[data-v="c"] .c-scale button{
+  appearance:none;background:none;border:0;cursor:pointer;color:rgba(255,255,255,.45);
+  font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.08em;
+  display:flex;align-items:center;gap:8px;justify-content:flex-end;padding:5px 0;
+  transition:color .25s var(--ease);
+}
+[data-v="c"] .c-scale button i{display:block;inline-size:14px;block-size:1px;background:currentColor;font-style:normal}
+[data-v="c"] .c-scale button:hover{color:#fff}
+[data-v="c"] .c-scale button[aria-current="true"]{color:#fff}
+[data-v="c"] .c-scale button[aria-current="true"] i{inline-size:26px}
+[data-v="c"] .c-strip{
+  position:absolute;inset-block-end:0;inset-inline:0;z-index:5;
+  display:grid;grid-auto-flow:column;grid-auto-columns:1fr;gap:1px;
+  background:rgba(255,255,255,.12);
+  transform:translateY(calc(100% - 4px));
+  transition:transform .55s var(--ease);
+}
+[data-v="c"]:hover .c-strip,[data-v="c"]:focus-within .c-strip{transform:translateY(0)}
+[data-v="c"] .c-strip button{
+  appearance:none;border:0;padding:0;cursor:pointer;background:#000;
+  position:relative;display:block;aspect-ratio:16/10;
+}
+[data-v="c"] .c-strip canvas{inline-size:100%;block-size:100%;opacity:.62;transition:opacity .3s var(--ease)}
+[data-v="c"] .c-strip button:hover canvas,[data-v="c"] .c-strip button[aria-current="true"] canvas{opacity:1}
+[data-v="c"] .c-strip button span{
+  position:absolute;inset-block-end:5px;inset-inline-start:7px;
+  font-family:"JetBrains Mono",monospace;font-size:9px;color:rgba(255,255,255,.75);
+}
+[data-v="c"] .c-strip button[aria-current="true"]::after{
+  content:"";position:absolute;inset-block-start:0;inset-inline:0;block-size:2px;background:#fff;
+}
+[data-v="c"] .c-hint{
+  position:absolute;inset-block-end:12px;inset-inline-start:50%;translate:-50% 0;z-index:6;
+  font-family:"JetBrains Mono",monospace;font-size:9.5px;letter-spacing:.12em;
+  color:rgba(255,255,255,.45);transition:opacity .3s var(--ease);
+}
+[data-v="c"]:hover .c-hint{opacity:0}
+
+/* ================================================================ D. Разворот */
+[data-v="d"]{
+  --ink:#0f1113;--paper:#e7e3da;--rule:#c3bdb0;--mark:#8c2f1c;
+  block-size:100%;background:var(--paper);color:var(--ink);overflow:auto;
+  font-family:"IBM Plex Sans",system-ui,sans-serif;
+}
+[data-v="d"] .d-in{
+  display:grid;grid-template-columns:repeat(12,1fr);gap:0 20px;
+  padding:26px 30px 30px;min-block-size:100%;align-content:start;
+}
+[data-v="d"] .d-folio{
+  grid-column:1/-1;display:flex;justify-content:space-between;gap:20px;
+  font-family:"JetBrains Mono",monospace;font-size:10px;letter-spacing:.12em;
+  color:#6f6a60;padding-block-end:10px;border-block-end:1px solid var(--ink);
+}
+[data-v="d"] .d-head{grid-column:1/9;padding-block-start:22px}
+[data-v="d"] .d-head h3{
+  font-family:"Bodoni Moda",Georgia,serif;font-optical-sizing:auto;font-weight:500;
+  font-size:clamp(1.9rem,4.3vw,3.4rem);line-height:.94;letter-spacing:-.02em;margin:0;
+  text-wrap:balance;
+}
+[data-v="d"] .d-head h3 span{color:var(--mark)}
+[data-v="d"] .d-stand{
+  grid-column:9/13;padding-block-start:26px;
+  font-size:13px;line-height:1.55;color:#4a4740;border-inline-start:1px solid var(--rule);
+  padding-inline-start:18px;
+}
+[data-v="d"] .d-fig{grid-column:1/7;margin-block-start:24px;position:relative}
+[data-v="d"] .d-fig canvas{inline-size:100%;aspect-ratio:4/3;display:block}
+[data-v="d"] .d-fig figcaption{
+  margin-block-start:8px;font-size:11.5px;line-height:1.5;color:#6f6a60;max-inline-size:44ch;
+}
+[data-v="d"] .d-fig figcaption b{color:var(--ink);font-weight:500}
+[data-v="d"] .d-side{grid-column:7/13;margin-block-start:24px;display:grid;gap:14px;align-content:start}
+[data-v="d"] .d-num{display:grid;gap:3px;padding-block-end:14px;border-block-end:1px solid var(--rule)}
+[data-v="d"] .d-num b{
+  font-family:"Bodoni Moda",Georgia,serif;font-optical-sizing:auto;font-size:1.9rem;line-height:1.05;font-weight:500;
+}
+[data-v="d"] .d-num span{font-size:12px;line-height:1.45;color:#6f6a60}
+[data-v="d"] .d-text{font-size:13px;line-height:1.58;color:#3b3833;columns:3;column-gap:20px;
+  grid-column:1/13;margin-block-start:22px}
+[data-v="d"] .d-text p{margin:0 0 12px}
+[data-v="d"] .d-time{grid-column:1/13;margin-block-start:26px;padding-block-start:12px;border-block-start:1px solid var(--ink)}
+[data-v="d"] .d-time ol{
+  list-style:none;margin:0;padding:0;display:grid;grid-auto-flow:column;grid-auto-columns:1fr;
+}
+[data-v="d"] .d-time li{position:relative;padding-block-start:16px;font-family:"JetBrains Mono",monospace;
+  font-size:10px;color:#6f6a60}
+[data-v="d"] .d-time li::before{
+  content:"";position:absolute;inset-block-start:0;inset-inline-start:0;
+  inline-size:1px;block-size:9px;background:#9d978a;
+}
+[data-v="d"] .d-time li[data-hit="1"]{color:var(--mark)}
+[data-v="d"] .d-time li[data-hit="1"]::before{background:var(--mark);block-size:16px;inline-size:2px}
+
+/* ================================================================== E. Прибор */
+[data-v="e"]{
+  --bg:#0b0d10;--panel:#12161b;--ink:#e6eaee;--dim:#7c8895;--amber:#e8a33d;
+  block-size:100%;background:var(--bg);color:var(--ink);
+  display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);
+  font-family:"Archivo",system-ui,sans-serif;
+}
+[data-v="e"] .e-view{position:relative;background:#000;overflow:hidden}
+[data-v="e"] .e-view canvas{position:absolute;inset:0;inline-size:100%;block-size:100%}
+[data-v="e"] .e-stamp{
+  position:absolute;inset-block-start:16px;inset-inline-start:18px;
+  font-family:"JetBrains Mono",monospace;font-size:10.5px;letter-spacing:.12em;
+  color:rgba(255,255,255,.66);
+}
+[data-v="e"] .e-bands{
+  position:absolute;inset-block-end:16px;inset-inline-start:18px;display:flex;gap:1px;
+}
+[data-v="e"] .e-bands button{
+  appearance:none;border:0;cursor:pointer;padding:6px 11px;background:rgba(0,0,0,.5);
+  font-family:"JetBrains Mono",monospace;font-size:10px;color:rgba(255,255,255,.6);
+  transition:background .2s var(--ease),color .2s var(--ease);
+}
+[data-v="e"] .e-bands button:hover{background:rgba(255,255,255,.14);color:#fff}
+[data-v="e"] .e-bands button[aria-current="true"]{background:var(--amber);color:#1a1205}
+[data-v="e"] .e-rail{display:grid;grid-template-rows:auto minmax(0,1fr);min-block-size:0}
+[data-v="e"] .e-verdict{padding:26px 26px 20px;border-block-end:1px solid #1e242b}
+[data-v="e"] .e-verdict p{margin:0;font-size:11px;letter-spacing:.14em;color:var(--dim);
+  font-family:"JetBrains Mono",monospace}
+[data-v="e"] .e-verdict h3{
+  margin:12px 0 0;font-size:clamp(1.3rem,2.2vw,1.85rem);line-height:1.12;
+  letter-spacing:-.02em;font-weight:500;max-inline-size:22ch;text-wrap:balance;
+}
+[data-v="e"] .e-mods{overflow:auto;min-block-size:0;padding:0 26px 26px}
+[data-v="e"] .e-mod{padding-block:20px;border-block-end:1px solid #1e242b}
+[data-v="e"] .e-mod:last-child{border-block-end:0}
+[data-v="e"] .e-mod h4{
+  margin:0 0 12px;font-family:"JetBrains Mono",monospace;font-size:10px;
+  letter-spacing:.14em;color:var(--dim);font-weight:400;text-transform:uppercase;
+}
+[data-v="e"] .e-dial{display:flex;align-items:baseline;gap:12px}
+[data-v="e"] .e-dial b{font-size:2.2rem;font-weight:500;letter-spacing:-.02em}
+[data-v="e"] .e-dial span{font-size:12.5px;line-height:1.5;color:var(--dim);max-inline-size:26ch}
+[data-v="e"] .e-bar{margin-block-start:12px;block-size:3px;background:#1e242b;position:relative}
+[data-v="e"] .e-bar i{position:absolute;inset-block:0;inset-inline-start:0;inline-size:72%;background:var(--amber)}
+[data-v="e"] .e-bar u{position:absolute;inset-block:-4px;inset-inline-start:92%;inline-size:1px;background:#e0e6ec;text-decoration:none}
+[data-v="e"] .e-sig{display:grid;grid-template-columns:repeat(10,1fr);gap:1px;max-inline-size:290px}
+[data-v="e"] .e-sig i{display:block;block-size:6px;background:#1a2129}
+[data-v="e"] .e-list{display:grid;gap:1px;background:#1e242b}
+[data-v="e"] .e-list button{
+  appearance:none;border:0;cursor:pointer;background:var(--bg);
+  display:grid;grid-template-columns:46px minmax(0,1fr) auto;gap:12px;align-items:center;
+  padding:7px 8px;text-align:start;transition:background .18s var(--ease);
+}
+[data-v="e"] .e-list button:hover{background:var(--panel)}
+[data-v="e"] .e-list button[aria-current="true"]{background:var(--panel)}
+[data-v="e"] .e-list canvas{inline-size:46px;block-size:29px;display:block}
+[data-v="e"] .e-list span{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--ink)}
+[data-v="e"] .e-list em{font-style:normal;font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--dim)}
+[data-v="e"] .e-list button[aria-current="true"] em{color:var(--amber)}
+
+/* ------------------------------------------------------------------- подвал */
+.lab-foot{padding-block:70px 90px;border-block-start:1px solid var(--lab-rule);margin-block-start:80px}
+.lab-foot p{margin:0 0 12px;max-inline-size:62ch;color:var(--lab-dim);font-size:14.5px;line-height:1.6}
+.lab-foot b{color:var(--lab-ink);font-weight:500}
+
+@media (max-width:900px){
+  .screen{block-size:auto;min-block-size:0}
+  [data-v="a"],[data-v="b"],[data-v="c"],[data-v="d"],[data-v="e"]{block-size:auto}
+  [data-v="a"] .a-body{grid-template-columns:minmax(0,1fr)}
+  [data-v="a"] .a-plate{block-size:auto;inline-size:100%}
+  [data-v="a"] .a-wheel{margin-block-start:26px}
+  [data-v="b"]{grid-template-columns:minmax(0,1fr)}
+  [data-v="b"] .b-col{border-inline:0!important;border-block-end:1px solid var(--line)}
+  [data-v="c"]{block-size:78vh}
+  [data-v="d"] .d-head,[data-v="d"] .d-stand,[data-v="d"] .d-fig,[data-v="d"] .d-side,
+  [data-v="d"] .d-text,[data-v="d"] .d-time{grid-column:1/-1}
+  [data-v="d"] .d-stand{border-inline-start:0;padding-inline-start:0}
+  [data-v="d"] .d-text{columns:1}
+  [data-v="e"]{grid-template-columns:minmax(0,1fr)}
+  [data-v="e"] .e-view{block-size:56vw}
+}
+@media (prefers-reduced-motion:reduce){
+  *{animation:none!important;transition-duration:.01ms!important}
+  [data-v="c"] .c-strip{transform:none}
+}
+</style>
+</head>
+<body>
+
+<div class="sheet">
+  <header class="lab-head">
+    <p class="lab-kicker">Muninn · лаборатория · поле Spica</p>
+    <h1 class="lab-title">Пять экранов одного результата</h1>
+    <p class="lab-lede">
+      Одни и те же данные — <b>10 заходов SPHEREx за 381 день, глубина 17,4 AB,
+      12 выделившихся клеток, ярче всего сектор 19</b> — собраны пятью разными
+      способами. Отличается не палитра, а устройство: что стоит первым, что
+      делает снимок, куда девается время. Цифры настоящие, картинка
+      синтетическая — это макет композиции, а не кадр.
+    </p>
+  </header>
+
+  <nav class="lab-nav" aria-label="Варианты">
+    <a href="#v-a"><b>A</b><span>Плита</span></a>
+    <a href="#v-b"><b>B</b><span>Консоль</span></a>
+    <a href="#v-c"><b>C</b><span>Кинозал</span></a>
+    <a href="#v-d"><b>D</b><span>Разворот</span></a>
+    <a href="#v-e"><b>E</b><span>Прибор</span></a>
+  </nav>
+
+  <!-- ==================================================================== A -->
+  <section class="case" id="v-a">
+    <div class="case__head">
+      <p class="case__no">A</p>
+      <div>
+        <h2 class="case__name">Плита</h2>
+        <p class="case__idea">
+          Экран как страница пластиночного архива: бумага, чёрная линейка,
+          снимок в кайме, красный карандаш для того, что заметили. Время внизу —
+          контактный лист из всех заходов, а не ползунок.
+        </p>
+        <ul class="case__tags">
+          <li data-w="plus">снимок главный</li>
+          <li data-w="plus">всё видно сразу</li>
+          <li data-w="minus">светлая тема спорит с небом</li>
+          <li data-w="minus">мало места под инструменты</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="screen">
+      <span class="screen__tag">A · ПЛИТА</span>
+      <div data-v="a">
+        <div class="a-rule">
+          <b>MUNINN</b><span>ПОЛЕ 13ʰ25ᵐ12ˢ −11°09′36″</span><span>18,0′ × 18,0′</span>
+          <span>ЗАХОДОВ 10 · 381 ДЕНЬ</span><span>ГЛУБИНА 17,4 AB</span>
+        </div>
+
+        <div class="a-body">
+          <div class="a-left">
+            <h3 class="a-find">Ничего не сдвинулось. Выделились <em>12 клеток</em>.</h3>
+            <div class="a-plate"><canvas data-field="hero" data-seed="11"></canvas></div>
+          </div>
+
+          <div class="a-wheel">
+            <h4>Полосы</h4>
+            <div class="a-band" aria-current="true"><b>D2</b><span>1,10–1,65 µm</span></div>
+            <div class="a-band"><b>D1</b><span>0,75–1,11 µm</span></div>
+            <div class="a-band"><b>D3</b><span>1,64–2,42 µm</span></div>
+            <div class="a-band"><b>D4</b><span>2,42–3,82 µm</span></div>
+            <div class="a-band"><b>D5</b><span>3,82–4,42 µm</span></div>
+            <div class="a-band"><b>D6</b><span>4,42–5,01 µm</span></div>
+          </div>
+        </div>
+
+        <div class="a-sheet">
+          <h4>Контактный лист · 10 заходов</h4>
+          <div class="a-strip" data-strip="a"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================================================================== B -->
+  <section class="case" id="v-b">
+    <div class="case__head">
+      <p class="case__no">B</p>
+      <div>
+        <h2 class="case__name">Консоль</h2>
+        <p class="case__idea">
+          Наземная станция: моноширинный шрифт, ни одного скругления, три
+          колонки — секторы, кадр, служебные числа. Снимок здесь не картина, а
+          измерение, и всё на экране — тоже измерение.
+        </p>
+        <ul class="case__tags">
+          <li data-w="plus">плотно, ничего не листать</li>
+          <li data-w="plus">честно про природу данных</li>
+          <li data-w="minus">холодно, не для жюри</li>
+          <li data-w="minus">новичок не знает, куда смотреть</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="screen">
+      <span class="screen__tag">B · КОНСОЛЬ</span>
+      <div data-v="b">
+        <div class="b-bar">
+          <span>FIELD <b>SPICA</b></span>
+          <span>RA <b>201.3000</b></span>
+          <span>DEC <b>−11.1600</b></span>
+          <span>FOV <b>18.0'</b></span>
+          <span>EPOCHS <b>10</b></span>
+          <span class="b-status">STATUS: NO MOTION · 12 CELLS FLAGGED</span>
+        </div>
+
+        <div class="b-col">
+          <p class="b-k">SECTORS 5×4</p>
+          <div class="b-grid" data-grid="b"></div>
+          <p class="b-k">FLAGGED</p>
+          <div class="b-line">
+            <div><span>S19</span><b>8.4σ</b></div>
+            <div><span>S07</span><b>6.1σ</b></div>
+            <div><span>S12</span><b>5.7σ</b></div>
+            <div><span>S03</span><b>4.9σ</b></div>
+            <div><span>S16</span><b>4.2σ</b></div>
+          </div>
+        </div>
+
+        <div class="b-stage">
+          <div class="b-frame"><canvas data-field="hero" data-seed="11"></canvas></div>
+          <dl class="b-read">
+            <div><dt>CURSOR</dt><dd>13ʰ25ᵐ12.0ˢ</dd></div>
+            <div><dt>VALUE</dt><dd>1.842 MJy/sr</dd></div>
+            <div><dt>BAND</dt><dd>D2 1.10–1.65</dd></div>
+            <div><dt>MJD</dt><dd>60843.217</dd></div>
+          </dl>
+        </div>
+
+        <div class="b-col">
+          <p class="b-k">DEPTH</p>
+          <div class="b-line">
+            <div><span>LIMIT</span><b>17.4 AB</b></div>
+            <div><span>STACKED</span><b>D6 × 2</b></div>
+            <div><span>PLANET X</span><b>−4.6ᵐ</b></div>
+            <div><span>FLUX RATIO</span><b>1 : 69</b></div>
+          </div>
+          <p class="b-k">VERDICT</p>
+          <p class="b-verdict">
+            FIELD EXCLUDES PLANET X DOWN TO 17.4 AB ONLY. FAINTER OBJECTS
+            REMAIN UNCONSTRAINED BY THIS STACK.
+          </p>
+        </div>
+
+        <div class="b-run" data-run="b"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================================================================== C -->
+  <section class="case" id="v-c">
+    <div class="case__head">
+      <p class="case__no">C</p>
+      <div>
+        <h2 class="case__name">Кинозал</h2>
+        <p class="case__idea">
+          Снимок во весь экран, всё остальное — тонкий слой поверх, который
+          уходит, когда не нужен. Плёнка заходов выезжает снизу при наведении;
+          полосы — насечки у правого края. Ноль панелей.
+        </p>
+        <ul class="case__tags">
+          <li data-w="plus">небо наконец во весь рост</li>
+          <li data-w="plus">эффектно, запоминается</li>
+          <li data-w="minus">цифры некуда деть</li>
+          <li data-w="minus">скрытое управление — риск</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="screen">
+      <span class="screen__tag">C · КИНОЗАЛ</span>
+      <div data-v="c" tabindex="0">
+        <canvas class="c-sky" data-field="wide" data-seed="11"></canvas>
+        <div class="c-veil"></div>
+
+        <div class="c-top">
+          <p class="c-id">SPICA · 13ʰ25ᵐ12ˢ −11°09′36″ · 18,0′</p>
+          <p class="c-find"><b>ЧТО ВИДНО</b>Ничего не сдвинулось. Выделились 12 клеток, ярче всего сектор 19.</p>
+        </div>
+
+        <div class="c-scale" role="group" aria-label="Полосы">
+          <button type="button" aria-current="true"><span>D2</span><i></i></button>
+          <button type="button"><span>D1</span><i></i></button>
+          <button type="button"><span>D3</span><i></i></button>
+          <button type="button"><span>D4</span><i></i></button>
+          <button type="button"><span>D5</span><i></i></button>
+          <button type="button"><span>D6</span><i></i></button>
+        </div>
+
+        <div class="c-foot">
+          <p class="c-date">17 июня 2025</p>
+          <p class="c-sub"><span>ЗАХОД 2 ИЗ 10</span><span>D2 · 1,10–1,65 µm</span><span>ГЛУБИНА 17,4 AB</span></p>
+        </div>
+
+        <p class="c-hint">НАВЕДИТЕ — ПОЯВИТСЯ ПЛЁНКА</p>
+        <div class="c-strip" data-strip="c"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================================================================== D -->
+  <section class="case" id="v-d">
+    <div class="case__head">
+      <p class="case__no">D</p>
+      <div>
+        <h2 class="case__name">Разворот</h2>
+        <p class="case__idea">
+          Результат как журнальная полоса: заголовок в засечках на восемь
+          колонок, снимок — иллюстрация с подписью, числа вынесены на поля.
+          Время — линейка внизу страницы, как в хронике.
+        </p>
+        <ul class="case__tags">
+          <li data-w="plus">читается без объяснений</li>
+          <li data-w="plus">жюри любит текст</li>
+          <li data-w="minus">это статья, а не инструмент</li>
+          <li data-w="minus">интерактив некуда встроить</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="screen">
+      <span class="screen__tag">D · РАЗВОРОТ</span>
+      <div data-v="d">
+        <div class="d-in">
+          <div class="d-folio"><span>MUNINN · ПОЛЕ SPICA</span><span>2025—2026</span><span>ЛИСТ 01</span></div>
+
+          <div class="d-head">
+            <h3>Десять раз посмотрели в одну точку и <span>ничего не поймали</span></h3>
+          </div>
+          <p class="d-stand">
+            За 381 день SPHEREx прошёл по этому полю десять раз. Двенадцать
+            участков вели себя необычно, но ни один не двигался так, как должна
+            двигаться планета.
+          </p>
+
+          <figure class="d-fig">
+            <canvas data-field="hero" data-seed="11"></canvas>
+            <figcaption>
+              <b>17 июня 2025, полоса D2 (1,10–1,65 µm).</b> В центре — Spica.
+              Кружком отмечен астероид (56945), единственное тело каталога,
+              прошедшее через поле в эти сутки.
+            </figcaption>
+          </figure>
+
+          <div class="d-side">
+            <div class="d-num"><b>17,4 AB</b><span>предел этой стопки. Слабее — поле ничего не говорит.</span></div>
+            <div class="d-num"><b>12</b><span>клеток из двадцати повели себя не как обычно.</span></div>
+            <div class="d-num"><b>1 : 69</b><span>во столько раз предсказанная Планета X слабее предела.</span></div>
+          </div>
+
+          <div class="d-text">
+            <p>Мы складываем кадры одного поля, снятые в разные дни, и ищем то,
+            что между ними изменилось. Неподвижная звезда даёт ноль. Движущееся
+            тело оставляет пару точек в разных местах.</p>
+            <p>Двенадцать выделившихся клеток — это не двенадцать кандидатов.
+            Это двенадцать мест, где яркость гуляла: переменная звезда, след
+            космического луча, край детектора. Планета отличается тем, что
+            смещается вдоль эклиптики на предсказуемую величину.</p>
+            <p>Здесь такого смещения нет. Значит, в этом поле и до этой яркости
+            Планеты X нет — и ровно настолько, не дальше.</p>
+          </div>
+
+          <div class="d-time">
+            <ol data-time="d"></ol>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================================================================== E -->
+  <section class="case" id="v-e">
+    <div class="case__head">
+      <p class="case__no">E</p>
+      <div>
+        <h2 class="case__name">Прибор</h2>
+        <p class="case__idea">
+          Жёсткий раздел пополам: слева снимок во всю высоту без полей, справа
+          столбик модулей — вывод, глубина, подпись секторов, список заходов.
+          Ничего не центрируется, всё прижато к разделительной линии.
+        </p>
+        <ul class="case__tags">
+          <li data-w="plus">снимок большой и живой</li>
+          <li data-w="plus">инструменты не мешают друг другу</li>
+          <li data-w="minus">правая колонка всё-таки скроллится</li>
+          <li data-w="minus">узкий экран ломает пополам</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="screen">
+      <span class="screen__tag">E · ПРИБОР</span>
+      <div data-v="e">
+        <div class="e-view">
+          <canvas data-field="tall" data-seed="11"></canvas>
+          <p class="e-stamp">17 ИЮНЯ 2025 · ЗАХОД 2/10 · 18,0′</p>
+          <div class="e-bands" role="group" aria-label="Полосы">
+            <button type="button">D1</button>
+            <button type="button" aria-current="true">D2</button>
+            <button type="button">D3</button>
+            <button type="button">D4</button>
+            <button type="button">D5</button>
+            <button type="button">D6</button>
+          </div>
+        </div>
+
+        <div class="e-rail">
+          <div class="e-verdict">
+            <p>ЧТО ПОКАЗАЛО ПОЛЕ</p>
+            <h3>Ничего не сдвинулось. Выделились 12 клеток.</h3>
+          </div>
+
+          <div class="e-mods">
+            <div class="e-mod">
+              <h4>Глубина поиска</h4>
+              <div class="e-dial">
+                <b>17,4<sup style="font-size:.5em">AB</sup></b>
+                <span>слабейшее, что это поле могло бы показать. Сложено заходов в D6: 2.</span>
+              </div>
+              <div class="e-bar"><i></i><u></u></div>
+            </div>
+
+            <div class="e-mod">
+              <h4>Подпись поля · 20 секторов × 10 заходов</h4>
+              <div class="e-sig" data-sig="e"></div>
+            </div>
+
+            <div class="e-mod">
+              <h4>Заходы</h4>
+              <div class="e-list" data-list="e"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="lab-foot">
+    <p><b>Как этим пользоваться.</b> Это не пять дизайнов, а пять решений одного
+    вопроса: что на экране главное. В A и D главный — снимок как документ, в B —
+    числа, в C — само небо, в E — разделение труда между картинкой и приборами.</p>
+    <p>Можно взять устройство одного и характер другого: например каркас E
+    (раздел пополам, модули справа) с контактным листом из A вместо списка
+    заходов — или плёнку C, выезжающую снизу, поверх нынешнего экрана.</p>
+    <p>Цифры взяты из настоящего поля Spica. Снимки на этой странице —
+    синтетические: они нужны, чтобы видеть композицию, и ничего не утверждают о
+    небе.</p>
+  </footer>
+</div>
+
+<script>
+/* --------------------------------------------------------------------------
+   Одно поле, нарисованное честно-случайно: детерминированный генератор, чтобы
+   макет выглядел одинаково при каждой загрузке, и чтобы соседние кадры одного
+   ряда отличались так же, как отличаются настоящие заходы.
+   -------------------------------------------------------------------------- */
+const DATES = ['12 июн','17 июн','22 июн','19 июл','14 янв','19 янв','10 июн','13 июн','16 июн','29 июн'];
+const YEARS = ['2025','2025','2025','2025','2026','2026','2026','2026','2026','2026'];
+
+function rng(seed){
+  let s = seed >>> 0 || 1;
+  return () => (s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296;
+}
+
+function drawField(cv, opt){
+  const o = Object.assign({seed:1, hero:true, n:190, ring:false, grid:false, tint:[200,220,255]}, opt);
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = cv.clientWidth || 300, h = cv.clientHeight || 300;
+  if (!w || !h) return;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  const g = cv.getContext('2d');
+  g.setTransform(dpr,0,0,dpr,0,0);
+
+  g.fillStyle = '#04070c'; g.fillRect(0,0,w,h);
+
+  const r = rng(o.seed);
+  const k = Math.min(w,h);
+
+  /* диффузный фон — не шум, а очень слабые пятна */
+  for (let i=0;i<16;i++){
+    const x=r()*w, y=r()*h, rad=k*(0.18+r()*0.34);
+    const gr=g.createRadialGradient(x,y,0,x,y,rad);
+    gr.addColorStop(0,'rgba(38,58,86,0.09)'); gr.addColorStop(1,'rgba(0,0,0,0)');
+    g.fillStyle=gr; g.beginPath(); g.arc(x,y,rad,0,6.2832); g.fill();
+  }
+
+  /* звёзды */
+  const n = Math.round(o.n * (w*h)/(300*300));
+  for (let i=0;i<n;i++){
+    const x=r()*w, y=r()*h;
+    const m=Math.pow(r(),2.6);
+    const rad=0.4+m*2.1;
+    const a=0.22+m*0.78;
+    const warm=r()<0.18;
+    const c=warm?[255,214,170]:o.tint;
+    const halo=rad*3.6;
+    const gr=g.createRadialGradient(x,y,0,x,y,halo);
+    gr.addColorStop(0,`rgba(${c[0]},${c[1]},${c[2]},${a})`);
+    gr.addColorStop(0.22,`rgba(${c[0]},${c[1]},${c[2]},${a*0.30})`);
+    gr.addColorStop(1,'rgba(0,0,0,0)');
+    g.fillStyle=gr; g.beginPath(); g.arc(x,y,halo,0,6.2832); g.fill();
+  }
+
+  /* главная звезда поля */
+  if (o.hero){
+    const x=w*0.5, y=h*0.5, rad=k*0.14;
+    const gr=g.createRadialGradient(x,y,0,x,y,rad);
+    gr.addColorStop(0,'rgba(255,255,255,1)');
+    gr.addColorStop(0.09,'rgba(226,240,255,0.92)');
+    gr.addColorStop(0.3,'rgba(150,190,240,0.34)');
+    gr.addColorStop(1,'rgba(0,0,0,0)');
+    g.fillStyle=gr; g.beginPath(); g.arc(x,y,rad,0,6.2832); g.fill();
+  }
+
+  if (o.grid){
+    g.strokeStyle='rgba(120,160,200,0.14)'; g.lineWidth=1; g.setLineDash([3,5]);
+    for (let i=1;i<4;i++){
+      g.beginPath(); g.moveTo(w*i/4,0); g.lineTo(w*i/4,h); g.stroke();
+      g.beginPath(); g.moveTo(0,h*i/4); g.lineTo(w,h*i/4); g.stroke();
+    }
+    g.setLineDash([]);
+  }
+
+  if (o.ring){
+    const x=w*0.31, y=h*0.27;
+    g.strokeStyle='rgba(120,200,255,0.85)'; g.lineWidth=1.2;
+    g.beginPath(); g.arc(x,y,k*0.035,0,6.2832); g.stroke();
+    g.fillStyle='rgba(150,210,255,0.85)';
+    g.font='11px ui-monospace, monospace';
+    g.fillText('(56945)', x+k*0.05, y+4);
+  }
+}
+
+/* --- крупные кадры ------------------------------------------------------- */
+function paintAll(){
+  document.querySelectorAll('canvas[data-field]').forEach(cv=>{
+    const kind=cv.dataset.field;
+    drawField(cv,{
+      seed:Number(cv.dataset.seed)||1,
+      hero:true,
+      n:kind==='wide'?230:200,
+      grid:kind!=='wide',
+      ring:kind!=='tall',
+    });
+  });
+  document.querySelectorAll('canvas[data-thumb]').forEach(cv=>{
+    drawField(cv,{seed:Number(cv.dataset.thumb),hero:true,n:150,grid:false,ring:false});
+  });
+}
+
+/* --- A: контактный лист --------------------------------------------------- */
+const stripA=document.querySelector('[data-strip="a"]');
+DATES.forEach((d,i)=>{
+  const b=document.createElement('button');
+  b.type='button'; b.className='a-cell'; b.setAttribute('aria-current', i===1?'true':'false');
+  b.style.cssText='appearance:none;background:none;border:0;padding:0;font:inherit';
+  b.innerHTML=`<canvas data-thumb="${20+i*7}"></canvas><span>${d}</span>`;
+  b.addEventListener('click',()=>{
+    stripA.querySelectorAll('.a-cell').forEach(x=>x.setAttribute('aria-current','false'));
+    b.setAttribute('aria-current','true');
+  });
+  stripA.appendChild(b);
+});
+
+/* --- B: секторы и лента --------------------------------------------------- */
+const HOT=[0,0,1,0,0,0,2,1,0,0,0,1,0,0,0,2,0,0,3,1];
+const gridB=document.querySelector('[data-grid="b"]');
+HOT.forEach((hot,i)=>{
+  const c=document.createElement('div');
+  c.className='b-cell'; c.dataset.hot=String(hot);
+  c.textContent=String(i+1).padStart(2,'0');
+  c.title=`сектор ${i+1}`;
+  gridB.appendChild(c);
+});
+const runB=document.querySelector('[data-run="b"]');
+DATES.forEach((d,i)=>{
+  const b=document.createElement('button');
+  b.type='button'; b.className='b-tick';
+  b.style.cssText='appearance:none;background:none;font:inherit';
+  b.setAttribute('aria-current', i===1?'true':'false');
+  b.innerHTML=`${d}<i>${YEARS[i]}</i>`;
+  b.addEventListener('click',()=>{
+    runB.querySelectorAll('.b-tick').forEach(x=>x.setAttribute('aria-current','false'));
+    b.setAttribute('aria-current','true');
+  });
+  runB.appendChild(b);
+});
+
+/* --- C: плёнка ------------------------------------------------------------ */
+const stripC=document.querySelector('[data-strip="c"]');
+DATES.forEach((d,i)=>{
+  const b=document.createElement('button');
+  b.type='button'; b.setAttribute('aria-current', i===1?'true':'false');
+  b.innerHTML=`<canvas data-thumb="${20+i*7}"></canvas><span>${d}</span>`;
+  b.addEventListener('click',()=>{
+    stripC.querySelectorAll('button').forEach(x=>x.setAttribute('aria-current','false'));
+    b.setAttribute('aria-current','true');
+  });
+  stripC.appendChild(b);
+});
+
+/* --- D: хроника ----------------------------------------------------------- */
+const timeD=document.querySelector('[data-time="d"]');
+DATES.forEach((d,i)=>{
+  const li=document.createElement('li');
+  li.dataset.hit = i===1 ? '1' : '0';
+  li.textContent = d;
+  timeD.appendChild(li);
+});
+
+/* --- E: подпись и список -------------------------------------------------- */
+const sigE=document.querySelector('[data-sig="e"]');
+const sr=rng(9);
+for(let s=0;s<20;s++){
+  for(let v=0;v<10;v++){
+    const i=document.createElement('i');
+    const hot=HOT[s];
+    const z=hot? Math.min(0.8, (hot*0.2)+sr()*0.3) : sr()*0.1;
+    i.style.background = z>0.08
+      ? `color-mix(in oklab, #e8a33d ${Math.round(z*100)}%, #12161b)`
+      : '#161c22';
+    sigE.appendChild(i);
+  }
+}
+const listE=document.querySelector('[data-list="e"]');
+DATES.forEach((d,i)=>{
+  const b=document.createElement('button');
+  b.type='button'; b.setAttribute('aria-current', i===1?'true':'false');
+  b.innerHTML=`<canvas data-thumb="${20+i*7}"></canvas><span>${d} ${YEARS[i]}</span><em>${
+    [0,8,3,0,2,5,0,1,0,4][i] ? '+'+[0,8,3,0,2,5,0,1,0,4][i]+' кл.' : '—'}</em>`;
+  b.addEventListener('click',()=>{
+    listE.querySelectorAll('button').forEach(x=>x.setAttribute('aria-current','false'));
+    b.setAttribute('aria-current','true');
+  });
+  listE.appendChild(b);
+});
+
+paintAll();
+let t; addEventListener('resize',()=>{clearTimeout(t); t=setTimeout(paintAll,180);});
+</script>
+</body>
+</html>

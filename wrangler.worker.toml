@@ -1,0 +1,12 @@
+# Deploying the site as a Worker with static assets, which is what
+# `wrangler deploy` understands. The Pages route stays in `wrangler.toml`;
+# both serve the same files and the same relay.
+name = "muninn"
+main = "worker.js"
+compatibility_date = "2026-01-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+# The app is one page addressed by URL fragment, so anything unmatched is it.
+not_found_handling = "single-page-application"

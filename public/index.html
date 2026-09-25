@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Muninn — SPHEREx time-domain viewer</title>
+<meta name="description" content="Muninn stacks NASA SPHEREx all-sky visits on one patch of sky and shows what moved between them.">
+<meta name="color-scheme" content="dark light">
+<script src="js/theme-boot.js"></script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230d1b2c'/%3E%3Ccircle cx='11' cy='13' r='2.5' fill='%23e6f0f7'/%3E%3Ccircle cx='21' cy='19' r='2.5' fill='%233fc0f2'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Literata:opsz,wght@7..72,400;7..72,500;7..72,600&family=Oswald:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<a class="skip" href="#sky" data-i18n="app.skip">Skip to the sky</a>
+
+<!--
+  The picture in the middle of the window, and a column either side of it.
+
+       ┌──────────────── masthead ─────────────────┐
+       │  where you are │   THE PICTURE   │ what   │
+       │  and how it is │   (centred, and │ was    │
+       │  drawn         │   the largest   │ found  │
+       │                │   thing here)   │        │
+       │                │  transport ↓    │        │
+       └───────────────────────────────────────────┘
+
+  Two columns rather than one rail, because they answer two different
+  questions, and splitting them puts the frame in the optical centre of the
+  window instead of shoved to one side. Left is the field you are on and the
+  way it is being drawn; right is everything the search turned up.
+
+  Neither column is a stack of boxes. They are set as columns of text with a
+  hairline between the parts, and the frame is the only object on screen with
+  an edge drawn around it — so there is never a question about what to look at.
+-->
+<!--
+  The way in: the real sky, and everything on it is a door.
+
+  Every point is a catalogued star at its own position, sized by its own
+  magnitude and tinted by its own colour index, down to the naked-eye limit.
+  Move the pointer and the sky names itself; press, and the view falls through
+  that position into SPHEREx's frames of it. The soft band behind is the Milky
+  Way, computed from galactic coordinates — a model of the disc, said so in the
+  fine print, because it is the one thing here that is not a measurement.
+-->
+<section class="gate" id="gate" aria-label="The sky">
+  <canvas class="gate__sky" id="gate-sky"></canvas>
+  <div class="gate__vignette" aria-hidden="true"></div>
+
+  <!-- The type sits in one corner and everything else is sky. Anything put
+       over a picture is a thing standing in front of it, so there is as little
+       of it as the page can get away with. -->
+  <div class="gate__poster">
+    <div class="gate__mark">
+      <svg class="gate__glyph" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="7.5" cy="15" r="3"/>
+        <circle cx="16.5" cy="9" r="3" class="brand__mover"/>
+        <path d="M10.2 13.2 13.8 10.8" class="brand__track"/>
+      </svg>
+      <h1 class="gate__word">Muninn</h1>
+    </div>
+    <p class="gate__tag" data-i18n="app.tagline"></p>
+
+    <form class="gate__find" id="gate-find">
+      <label class="vh" for="gate-target" data-i18n="target.input"></label>
+      <input id="gate-target" name="target" type="text" autocomplete="off" spellcheck="false"
+             class="gate__input" data-i18n-ph="target.placeholder">
+      <button type="submit" class="gate__go" data-i18n-label="target.go">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h11M9 4l4 4-4 4"/></svg>
+      </button>
+    </form>
+    <p class="find-note note" id="gate-note" role="status"></p>
+
+  </div>
+
+  <!-- Follows the pointer; the sky is what is being named, so the label goes
+       on the sky rather than in a panel somewhere else. -->
+  <p class="gate__pin" id="gate-pin" hidden aria-live="polite">
+    <span class="gate__pin-name" id="gate-pin-name"></span>
+    <span class="gate__pin-sub num" id="gate-pin-sub"></span>
+  </p>
+
+</section>
+
+<div class="shell">
+
+  <!-- Thin, and only what is needed from anywhere: which field, which tongue. -->
+  <header class="mast">
+    <a class="brand" href="#sky">
+      <svg class="brand__glyph" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="7.5" cy="15" r="3"/>
+        <circle cx="16.5" cy="9" r="3" class="brand__mover"/>
+        <path d="M10.2 13.2 13.8 10.8" class="brand__track"/>
+      </svg>
+      <span class="brand__text">
+        <strong>Muninn</strong>
+        <span class="brand__tag" data-i18n="app.tagline"></span>
+      </span>
+    </a>
+
+    <!-- A line to type on, not a filled box with a bright button beside it. -->
+    <form class="find" id="find">
+      <label class="vh" for="target" data-i18n="target.input"></label>
+      <input id="target" name="target" type="text" autocomplete="off" spellcheck="false"
+             class="find__input" data-i18n-ph="target.placeholder">
+      <button type="submit" class="find__go" data-i18n-label="target.go">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h11M9 4l4 4-4 4"/></svg>
+      </button>
+    </form>
+
+    <div class="mast__acts">
+      <button type="button" class="link" id="save-png" data-i18n="export.png" data-i18n-title="export.pngWhat"></button>
+      <button type="button" class="link" id="copy-link" data-i18n="export.link" data-i18n-title="export.linkWhat"></button>
+      <button type="button" class="link" id="tools-toggle" aria-expanded="false" aria-controls="tools" data-i18n="tools.toggle"></button>
+      <span class="mast__sep" aria-hidden="true"></span>
+      <button type="button" class="link" id="random" data-i18n="target.random"></button>
+      <button type="button" class="link" id="to-sky" data-i18n="gate.back"></button>
+      <button type="button" class="link" id="about-open" data-i18n="app.about"></button>
+      <button type="button" class="link link--lang" id="lang" data-i18n-title="lang.switch"><span id="lang-name">RU</span></button>
+      <!-- Night or day. The icon is where it takes you: the sun to dawn, the
+           moon to dusk. -->
+      <button type="button" class="theme-key" id="theme">
+        <svg class="to-day" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.55 1.55M17.15 17.15l1.55 1.55M5.3 18.7l1.55-1.55M17.15 6.85l1.55-1.55"/></svg>
+        <svg class="to-night" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 14.6A8 8 0 0 1 9.4 4.5a8 8 0 1 0 10.1 10.1z"/></svg>
+      </button>
+    </div>
+
+    <p class="find-note note" id="find-note" role="status"></p>
+  </header>
+
+  <!-- ========================================================== the exposure -->
+  <main class="stage">
+   <div class="room">
+
+    <!-- The plate in its mount. The mount carries the annotation, which is what
+         a mount is for: the facts that change from one exposure to the next,
+         written on the board beside the photograph — not above and below it,
+         where every line of caption was a line of picture lost. -->
+    <div class="mount">
+
+      <!-- The board's label: which exposure this is, in what light, and where. -->
+      <div class="caption">
+        <p class="when">
+          <span class="when__date" id="when-date">—</span>
+          <span class="when__time num" id="when-time"></span>
+        </p>
+        <p class="when__band num" id="when-band"></p>
+        <p class="when__of num" id="when-of"></p>
+        <p class="under__pos num" id="field-pos" aria-live="polite">—</p>
+      </div>
+
+      <!-- Step, frame, step: moving through time sits either side of the
+           subject, where the eye already is. Each step says where it goes. -->
+      <button type="button" class="step step--prev" id="prev" data-i18n-label="play.prev">
+        <span class="step__key"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg></span>
+        <span class="step__d num" id="prev-date"></span>
+      </button>
+
+      <div class="stage__cell">
+        <figure class="plate" id="plate" data-mode="blink">
+          <canvas id="sky" width="1280" height="720" role="img" aria-label="Sky view"></canvas>
+          <!-- What the pointer is on — a body, a catalogued object, a mark. -->
+          <div class="tip" id="plate-tip" hidden></div>
+
+          <!-- The brightness belongs to the pixel under the hand, so it is
+               written over that pixel, and only while a hand is there. -->
+          <div class="scan">
+            <p class="hint vh" id="cursor-hint"></p>
+            <dl class="readout" id="readout">
+              <div><dt data-i18n="readout.cursor"></dt><dd class="num" id="ro-cursor">—</dd></div>
+              <div><dt data-i18n="readout.value"></dt><dd class="num" id="ro-value">—</dd></div>
+            </dl>
+            <span class="vh" id="ro-obs"></span>
+            <span class="vh" id="ro-lambda"></span>
+          </div>
+
+          <div class="plate__state" id="plate-state">
+            <!-- Set only by setPlateState: a translation attribute here put the
+                 idle line back over "searching…" whenever labels were refreshed. -->
+            <p class="plate__state-line" id="plate-message"></p>
+            <button type="button" class="btn btn--quiet" id="plate-retry" hidden data-i18n="epochs.retry"></button>
+            <div class="meter" id="plate-meter" hidden><span class="meter__fill" id="plate-meter-fill"></span></div>
+          </div>
+        </figure>
+      </div>
+
+      <button type="button" class="step step--next" id="next" data-i18n-label="play.next">
+        <span class="step__key"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 5.5 16 12l-6.5 6.5"/></svg></span>
+        <span class="step__d num" id="next-date"></span>
+      </button>
+
+      <!-- Six wavebands, stacked beside the plate: SPHEREx carries a filter
+           wheel, and a wheel reads as a column, not as a row of pills. -->
+      <div class="bands">
+        <div class="lambda" id="lambda" role="group" data-i18n-label="field.band"></div>
+        <label class="vh" for="band" data-i18n="field.band"></label>
+        <select id="band" class="vh"><option value="all"></option></select>
+      </div>
+
+    </div>
+   </div>
+
+    <section class="tools" id="tools" hidden aria-label="View">
+
+      <label class="row" for="stretch"><span data-i18n="render.stretch"></span>
+        <select id="stretch" class="field field--compact">
+          <option value="asinh" data-i18n="render.asinh"></option>
+          <option value="sqrt" data-i18n="render.sqrt"></option>
+          <option value="log" data-i18n="render.log"></option>
+          <option value="linear" data-i18n="render.linear"></option>
+        </select>
+      </label>
+      <label class="row" for="palette"><span data-i18n="render.palette"></span>
+        <select id="palette" class="field field--compact">
+          <option value="deep" data-i18n="render.deep"></option>
+          <option value="ice" data-i18n="render.ice"></option>
+          <option value="infrared" data-i18n="render.infrared"></option>
+        </select>
+      </label>
+      <label class="row" for="fov"><span data-i18n="field.fov"></span>
+        <select id="fov" class="field field--compact">
+          <option value="0.1">6′</option>
+          <option value="0.15">9′</option>
+          <option value="0.2">12′</option>
+          <option value="0.3" selected>18′</option>
+          <option value="0.45">27′</option>
+          <option value="0.6">36′</option>
+        </select>
+      </label>
+      <label class="row row--slider" for="clip"><span data-i18n="render.clip"></span>
+        <span class="num" id="clip-value">99.50</span>
+        <input type="range" id="clip" class="range" min="95" max="99.99" step="0.01" value="99.5">
+      </label>
+      <label class="row row--slider" for="rate"><span data-i18n="play.speed"></span>
+        <span class="num" id="rate-value">2/s</span>
+        <input type="range" id="rate" class="range" min="1" max="6" step="1" value="2">
+      </label>
+
+      <fieldset class="segments segments--tiny">
+        <legend class="vh" data-i18n="render.scaling"></legend>
+        <label class="segment"><input type="radio" name="scaling" value="frame" checked><span data-i18n="render.perFrame"></span></label>
+        <label class="segment"><input type="radio" name="scaling" value="shared"><span data-i18n="render.shared"></span></label>
+      </fieldset>
+
+      <div class="pills" role="group" aria-labelledby="overlay-label">
+        <span class="vh" id="overlay-label" data-i18n="overlay.legend"></span>
+        <label class="pill"><input type="checkbox" id="ov-grid" checked><span data-i18n="overlay.grid"></span></label>
+        <label class="pill"><input type="checkbox" id="ov-compass" checked><span data-i18n="overlay.compass"></span></label>
+        <label class="pill"><input type="checkbox" id="ov-catalog" checked><span data-i18n="overlay.catalog"></span></label>
+        <label class="pill"><input type="checkbox" id="ov-skybot" checked><span data-i18n="overlay.skybot"></span></label>
+        <label class="pill"><input type="checkbox" id="ov-marks" checked><span data-i18n="overlay.marks"></span></label>
+        <label class="pill"><input type="checkbox" id="ov-sectors"><span data-i18n="overlay.sectors"></span></label>
+      </div>
+
+      <div class="tools__acts">
+        <button type="button" class="link" id="record" data-i18n="export.record" data-i18n-title="export.recordWhat" hidden></button>
+        <a class="link" id="open-irsa" href="#" target="_blank" rel="noopener" data-i18n="export.fits" data-i18n-title="export.fitsWhat"></a>
+        <button type="button" class="link" id="bare" aria-pressed="false" data-i18n="view.bare"></button>
+        <p class="note note--dim num" id="bytes-note"></p>
+      </div>
+    </section>
+  </main>
+
+  <!-- ==================================================== right · what was found -->
+  <aside class="side side--right" aria-label="Findings">
+
+    <!-- ========================================================= the finding -->
+    <!-- What was found, then what that rests on. It heads the findings column
+         rather than the page: across the top it took a band of height from the
+         picture, and the picture is the one thing on this page that needs it. -->
+    <section class="verdict" aria-label="This field">
+      <h1 class="verdict__line" id="verdict"></h1>
+      <dl class="facts" id="stat-line"></dl>
+      <p class="verdict__cue note note--dim" id="field-cue" data-i18n="app.lede"></p>
+      <p class="vh" id="skybot-note"></p>
+    </section>
+
+    <!-- Each part: a ruled head with its name and, at the right, its answer in
+         figures; then the sentence that answer means. -->
+    <section class="part" id="hunt" hidden>
+      <header class="part__head">
+        <h2 class="part__k" data-i18n="sec.hunt"></h2>
+        <span class="part__count num" id="hunt-count"></span>
+      </header>
+      <p class="note note--dim" id="hunt-note"></p>
+      <ul class="cands" id="hunt-list"></ul>
+      <!-- What stood out in one visit only: an asteroid passing through, or
+           something to check. Checked against SkyBoT for that visit. -->
+      <p class="cands__head" id="flash-head" hidden></p>
+      <p class="note note--dim" id="flash-note" hidden></p>
+      <ul class="cands" id="flash-list"></ul>
+      <button type="button" class="again" id="hunt-run"></button>
+    </section>
+
+    <!-- A search that finds nothing has found something, but only if it can
+         say how deep it looked. -->
+    <section class="part depth" id="depth" hidden>
+      <header class="part__head">
+        <h2 class="part__k" data-i18n="depth.legend"></h2>
+        <span class="part__count num" id="depth-band"></span>
+      </header>
+      <p class="depth__figure"><span class="depth__mag num" id="depth-mag"></span><span class="depth__unit num">AB</span></p>
+      <p class="depth__said" id="depth-said"></p>
+      <svg class="depth__scale" id="depth-scale" role="img" aria-hidden="true"></svg>
+      <p class="depth__reach note note--dim" id="depth-reach"></p>
+    </section>
+
+    <section class="part">
+      <header class="part__head">
+        <h2 class="part__k" data-i18n="sec.marks"></h2>
+        <span class="part__count num" id="marks-count"></span>
+      </header>
+      <p class="note note--dim" id="mark-help" data-i18n="mark.help"></p>
+      <button type="button" class="btn btn--quiet" id="mark-centre" data-i18n="mark.centre"></button>
+      <ul class="marks" id="marks"></ul>
+      <button type="button" class="link" id="clear-marks" data-i18n="mark.clear" hidden></button>
+    </section>
+
+    <p class="credit" id="credit"></p>
+  </aside>
+
+  <!-- ============================================================== the run -->
+  <!-- Every observation at once: its true date on the lane, a thumbnail of the
+       exposure, and under that the twenty sectors of that visit in the grid
+       they actually are. Press a frame to go to it. -->
+  <section class="run" id="run" hidden aria-label="Observations">
+    <div class="run__head">
+      <h2 class="run__k" data-i18n="run.legend"></h2>
+      <p class="run__found" id="matrix-found"></p>
+
+      <!-- Проиграть весь ряд — здесь, где время нарисовано. Шаг по одному
+           заходу стоит у самого снимка. -->
+    <div class="deck">
+      <div class="keys">
+        <button type="button" class="key key--play" id="play" data-i18n-label="play.play">
+          <svg viewBox="0 0 16 16" aria-hidden="true" class="key__play"><path d="M5 3l8 5-8 5z"/></svg>
+          <svg viewBox="0 0 16 16" aria-hidden="true" class="key__pause"><path d="M5 3h2.2v10H5zM8.8 3H11v10H8.8z"/></svg>
+        </button>
+      </div>
+
+      <fieldset class="segments">
+        <legend class="vh" data-i18n="mode.legend"></legend>
+        <label class="segment" data-i18n-title="mode.blinkWhen"><input type="radio" name="mode" value="blink" checked><span data-i18n="mode.blink"></span></label>
+        <label class="segment" data-i18n-title="mode.wipeWhen"><input type="radio" name="mode" value="wipe"><span data-i18n="mode.wipe"></span></label>
+        <label class="segment" data-i18n-title="mode.diffWhen"><input type="radio" name="mode" value="difference"><span data-i18n="mode.diff"></span></label>
+        <label class="segment" data-i18n-title="mode.singleWhen"><input type="radio" name="mode" value="single"><span data-i18n="mode.single"></span></label>
+      </fieldset>
+    </div>
+
+  
+    <!-- Which two dates the wipe and the difference compare. -->
+    <div class="compare" id="compare" hidden>
+      <label class="row" for="slot-a"><span class="slot slot--a" data-i18n="epochs.a"></span>
+        <select id="slot-a" class="field field--compact"></select>
+      </label>
+      <label class="row" for="slot-b"><span class="slot slot--b" data-i18n="epochs.b"></span>
+        <select id="slot-b" class="field field--compact"></select>
+      </label>
+    </div>
+    </div>
+
+    <canvas class="run__canvas" id="run-canvas" role="img" data-i18n-label="matrix.alt"></canvas>
+
+    <p class="run__scale">
+      <span data-i18n="matrix.quiet"></span>
+      <span class="matrix__ramp" aria-hidden="true"></span>
+      <span data-i18n="matrix.loud"></span>
+      <span class="run__hint cue" id="mode-hint" data-i18n="mode.blinkHint"></span>
+      <span class="run__axes" id="matrix-lead"></span>
+    </p>
+
+    <label class="vh" for="scrub" data-i18n="epochs.legend"></label>
+    <input type="range" id="scrub" min="0" max="0" step="1" value="0" disabled class="vh">
+    <span class="vh" id="axis"></span>
+    <span class="vh" id="axis-svg"></span>
+    <span class="vh" id="axis-empty"></span>
+  </section>
+</div>
+<!-- With the columns folded away, these are the only two things left on screen. -->
+<p class="stamp num" id="stamp" aria-hidden="true"></p>
+<button type="button" class="restore" id="restore" data-i18n="view.restore"></button>
+
+<dialog class="sheet" id="about">
+  <article class="sheet__body">
+    <h2 class="sheet__title" tabindex="-1" autofocus data-i18n="about.title"></h2>
+    <p data-i18n="about.p1"></p>
+    <p data-i18n="about.p2"></p>
+    <p data-i18n="about.pMark"></p>
+    <p data-i18n="about.p3"></p>
+    <p data-i18n="about.p4"></p>
+    <hr class="sheet__rule">
+    <p class="sheet__fine" data-i18n="foot.built"></p>
+    <p class="sheet__fine" data-i18n="foot.credit"></p>
+    <p class="sheet__fine" data-i18n="foot.team"></p>
+    <button type="button" class="btn btn--primary" id="about-close" data-i18n="about.close"></button>
+  </article>
+</dialog>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+node_modules/
+.cache/
+.probe/
+*.log
+.wrangler/
+.impeccable/
+.hallmark/
