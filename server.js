@@ -50,6 +50,11 @@ const TYPES = {
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8',
   '.ico': 'image/x-icon',
   '.webmanifest': 'application/manifest+json',
 };
@@ -198,10 +203,16 @@ async function answerSlowly(res, pending) {
 }
 
 async function handleSearch(url, res) {
-  const ra = Number(url.searchParams.get('ra'));
+  // Number(null) and Number('') are both 0: an absent coordinate would
+  // otherwise be a query at the vernal equinox.
+  const coord = (name) => {
+    const raw = url.searchParams.get(name)?.trim();
+    return raw ? Number(raw) : NaN;
+  };
+  const ra = coord('ra');
   // A SPHEREx frame is about 3.5° across, so a near-point cone already finds every
   // frame that can cover the field — and a wider cone costs the archive dearly.
-  const dec = Number(url.searchParams.get('dec'));
+  const dec = coord('dec');
   const radius = Math.min(0.03, Math.max(0.002, Number(url.searchParams.get('radius')) || 0.006));
 
   if (!Number.isFinite(ra) || !Number.isFinite(dec) || ra < 0 || ra >= 360 || Math.abs(dec) > 90) {
@@ -280,15 +291,40 @@ async function lookup(ra, dec, radius, key) {
  * Only used when a browser cannot reach the S3 mirror directly — a corporate
  * proxy, an offline lab. Streams the same byte range with CORS attached.
  */
+const FITS_RANGE_MAX = 32 * 1024 * 1024;
+
 async function handleFits(url, req, res) {
-  const target = url.searchParams.get('url') ?? '';
-  const allowed = target.startsWith('https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/')
-    || target.startsWith('https://irsa.ipac.caltech.edu/ibe/data/spherex/');
+  // Checked after parsing, not as a string prefix: "…/spherex/../../robots.txt"
+  // passed a startsWith test and relayed the rest of IRSA with CORS attached.
+  let target;
+  try {
+    target = new URL(url.searchParams.get('url') ?? '');
+  } catch {
+    return json(res, 400, { ok: false, error: 'Only SPHEREx archive URLs are relayed' });
+  }
+  const allowed = target.protocol === 'https:' && !target.username && !target.password && !target.port
+    && (target.hostname === 'nasa-irsa-spherex.s3.us-east-1.amazonaws.com'
+      || (target.hostname === 'irsa.ipac.caltech.edu' && target.pathname.startsWith('/ibe/data/spherex/')));
   if (!allowed) return json(res, 400, { ok: false, error: 'Only SPHEREx archive URLs are relayed' });
 
-  const range = req.headers.range;
-  const upstream = await fetch(target, { headers: range ? { range } : {} });
-  const body = Buffer.from(await upstream.arrayBuffer());
+  // Only what the viewer itself asks for: one bounded byte range. A request
+  // without one would pull a whole 70 MB file into memory here.
+  const m = /^bytes=(\d+)-(\d+)$/.exec(req.headers.range ?? '');
+  if (!m || Number(m[2]) < Number(m[1]) || Number(m[2]) - Number(m[1]) >= FITS_RANGE_MAX) {
+    return json(res, 400, { ok: false, error: 'A bounded byte range is required' });
+  }
+  const range = m[0];
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 60_000);
+  let upstream;
+  let body;
+  try {
+    upstream = await fetch(target, { headers: { range }, redirect: 'error', signal: ctrl.signal });
+    body = Buffer.from(await upstream.arrayBuffer());
+  } finally {
+    clearTimeout(timer);
+  }
   send(res, upstream.status, body, {
     'content-type': 'application/fits',
     'access-control-allow-origin': '*',
@@ -300,7 +336,14 @@ async function handleFits(url, req, res) {
 /* -------------------------------------------------------------------- static */
 
 async function serveStatic(pathname, res) {
-  const rel = normalize(decodeURIComponent(pathname)).replace(/^([/\\])+/, '');
+  // A malformed escape is the request's fault, not the server's.
+  let decoded;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return send(res, 400, 'Bad request');
+  }
+  const rel = normalize(decoded).replace(/^([/\\])+/, '');
   if (rel.split(/[\\/]/).includes('..')) return send(res, 403, 'Forbidden');
 
   const target = join(PUBLIC, rel === '' ? 'index.html' : rel);

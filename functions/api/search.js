@@ -85,8 +85,13 @@ async function queryCollection(collection, ra, dec, radius) {
 
 export async function onRequestGet({ request, waitUntil }) {
   const url = new URL(request.url);
-  const ra = Number(url.searchParams.get('ra'));
-  const dec = Number(url.searchParams.get('dec'));
+  // Number(null) and Number('') are both 0; absent is not the vernal equinox.
+  const coord = (name) => {
+    const raw = url.searchParams.get(name)?.trim();
+    return raw ? Number(raw) : NaN;
+  };
+  const ra = coord('ra');
+  const dec = coord('dec');
   // A SPHEREx frame is about 3.5° across, so a near-point cone already finds
   // every frame that can cover the field — and a wider cone costs the archive
   // dearly for no extra frames.
