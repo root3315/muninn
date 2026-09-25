@@ -82,8 +82,8 @@ mirror, IRSA, SIMBAD, SkyBoT — and nothing else.
   by coordinates in decimal or sexagesimal, by one of the five verified presets, or at
   random.
 - **Blink** every visit in sequence, **wipe** two of them against each other with a
-  draggable divider, or take their **difference** — pink for what appeared, violet-blue for
-  what faded.
+  draggable divider, or take their **difference** — cyan where A is brighter, amber where B
+  is, the same colours as the A and B chips.
 - **Mark a spot** by clicking it. Muninn re-measures that exact sky position in every
   loaded visit, classifies what it finds (fixed · intermittent · moving · present once),
   and checks it against the IMCCE catalogue of known solar-system objects at the exact
@@ -112,27 +112,29 @@ hiding of overlays.
 
 ### Colour
 
-The interface and the images share one palette, supplied as five hexes:
-`#F5D5E0` `#6667AB` `#7B337E` `#420D4B` `#210635`. Two of them cannot carry text
-on the ground they came with — `#7B337E` reads 2.29:1 against `#210635` and
-`#6667AB` 3.58:1 — so both are kept at full strength as fills and lifted in
-lightness where they have to be read. Every pairing that ships is checked:
-ink 13.6:1, accent 6.9:1, the text on an accent fill 7.4:1.
+The interface is one hue family — a dark navy ground and a single cyan signal
+colour — plus a second, amber hue used only where data needs a sign. Every text
+pairing that ships is checked rather than assumed (`public/css/tokens.css`):
+ink 16.8:1 on the ground, secondary text 6.3:1, the cyan accent 9.3:1, the text
+on an accent fill 9.6:1.
 
-The image ramps are built from the same five colours and verified as data, not
+The image ramps live in the same token layer and are verified as data, not
 decoration: each sequential ramp rises in luminance across all 256 entries, so
 the tint never reports a brightness the pixels do not have, and the diverging
 ramp used for the difference view has its two arms solved numerically to equal
-weight, so "brighter now" and "brighter before" are comparable rather than one
-of them simply louder. Chroma is held down in the bottom third of every ramp:
-that is where a sky background lands, and a saturated floor turns the survey's
-own noise into a violet wash across the frame.
+weight, so "brighter in A" and "brighter in B" are comparable rather than one
+of them simply louder. Each arm wears the colour of its own chip: cyan for A,
+amber for B. Chroma is held down in the bottom third of every ramp: that is
+where a sky background lands, and a saturated floor turns the survey's own
+noise into a coloured wash across the frame. The day theme runs every ramp the
+other way, as a photographic negative — black stars on clear glass, the way
+plates were blinked in 1930.
 
 ---
 
 ## How it works
 
-### Reading 70 MB files a megabyte at a time
+### Reading 70 MB files a few megabytes at a time
 
 A SPHEREx Level-2 spectral image is a ~70 MB multi-extension FITS file. Most of that is
 the PSF cube; the flux plane is 2040 × 2040 float32 near the front. Ten visits would be
@@ -145,10 +147,17 @@ The public AWS Open Data mirror `nasa-irsa-spherex` answers HTTP Range requests 
 2. Builds the WCS — `RA---TAN-SIP` with third-order forward **and** inverse SIP
    coefficients (`public/js/wcs.js`).
 3. Works out which detector rows the requested field actually lands on, and fetches only
-   those — about 1 MB instead of 70.
+   those — one to three megabytes, depending on the field and the roll, instead of 70.
+4. Fetches the same rows of the `FLAGS` plane and blanks every pixel the SPHEREx
+   pipeline itself marked as not having seen the sky — a cosmic-ray jump caught up the
+   ramp (`TRANSIENT`), an onboard processing error, dead, hot and cold pixels, lost data,
+   persistence — before anything is resampled or measured. That doubles the bytes, and it
+   is the difference between a search and a cosmic-ray collection (see the Atala field
+   below). Bright-star saturation, `OUTLIER` and `SOURCE` are left alone, because
+   real sources carry them too.
 
-A ten-visit field at the default 18′ width costs roughly 12 MB of the ~680 MB those files
-occupy at the archive. The page prints that number as you use it.
+A ten-visit field costs a few tens of megabytes of the ~680 MB those files occupy at the
+archive. The page prints the exact number as you use it.
 
 ### Making the frames comparable
 
@@ -161,8 +170,6 @@ target before it is displayed (`public/js/stamp.js`). Sky positions are mapped t
 full TAN + SIP inverse and sampled bilinearly, with the nearest valid neighbour used
 around masked pixels. `npm run probe` checks the forward/inverse round trip against a live
 header — worst case 0.015 px across the full 2040 × 2040 detector.
-
-### Not resampling past what the detector saw
 
 ### Cutting the frame into districts
 
@@ -180,8 +187,8 @@ second floor a flat sector divides by almost nothing and reports scores in the
 thousands, which is a bug that looks like a discovery.
 
 The result is a matrix of sectors against visits, lit where a sector stopped
-looking like itself — the shape Emberline uses for years against days, which is
-the right shape for the question. Pressing a cell goes to that visit and lights
+looking like itself. It is drawn as a 5 × 4 signature under each frame of the
+run, in the same layout as the picture. Pressing a lit cell goes to that visit and lights
 that sector on the picture. That link is the only reason the matrix earns its
 space: it has to hand you somewhere to look.
 
@@ -192,26 +199,33 @@ transient is the single standout.
 ### Hunter X: reading a distance out of slowness
 
 Almost all of the apparent motion of a distant body is not the body moving. It
-is the Earth moving while the body sits still — parallax. Near opposition that
-gives
+is the Earth moving while the body sits still — parallax. At opposition the
+body is d − 1 AU away and the Earth outruns it by its own orbital speed less the
+body's, which gives
 
-    rate ≈ 2π · 206265 / d   arcseconds per year
+    rate ≈ 2π · 206265 / (d + √d)   arcseconds per year   (d heliocentric, AU)
 
-which inverts to a distance, and sorts the solar system by depth:
+That inverts to a distance, and sorts the solar system by depth:
 
-| | apparent rate |
+| | apparent rate at opposition |
 | --- | --- |
-| main belt, 2.7 AU | ~55″ per hour |
-| Jupiter trojans, 5 AU | ~28″ |
-| Neptune, 30 AU | ~5″ |
-| Sedna near aphelion | ~0.16″ |
-| Planet X, 400–800 AU | 0.18–0.37″ |
+| main belt, 2.7 AU | ~34″ per hour |
+| Jupiter trojans, 5.2 AU | ~20″ |
+| Neptune, 30 AU | ~4″ |
+| Sedna near aphelion, ~940 AU | ~0.15″ |
+| Planet X, 400–800 AU | 0.18–0.35″ |
+
+Opposition is where the motion is fastest. Anywhere else in its orbit the same
+body shows less, and less reads as farther — so a distance from a measured rate
+is an upper bound, and the interface says "no farther than". An earlier version
+used 2π · 206265 / d and called the bound a floor; (152) Atala, at 3 AU, came
+out as "no nearer than 7 AU".
 
 So an asteroid streaks and anything out where the predictions live barely
-crawls. "Search this field" takes every sector the matrix flagged, measures what
-is at that position in every visit, keeps whatever moves, and sorts by slowness.
-Checked against the real solar system, the arithmetic reproduces all five rows
-above and round-trips exactly.
+crawls. Once the last visit is in, Hunter X takes the places the matrix flagged —
+the strongest twelve — measures what is at each position in every visit, keeps
+whatever moves, and sorts by slowness.
+The rate-to-distance arithmetic round-trips exactly (`public/js/hunt.js`).
 
 Three guards stand between that and a false discovery, and all three were added
 because the first version tripped over them:
@@ -229,10 +243,13 @@ because the first version tripped over them:
   17.7″ of total motion.
 
 What survives is worth stating precisely. Over a 369-day baseline the astrometry
-reaches 0.002″ per hour, and Planet X needs 0.18–0.37″. **The motion of Planet X
-is comfortably measurable with this data. It is the brightness that is out of
-reach** — 17.98 AB per visit against a prediction of V 22–25. That is a far more
-useful sentence than either "we found it" or "we cannot look".
+reaches 0.002″ per hour, and Planet X needs 0.18–0.35″, so precision is not the
+obstacle. Two things are. **The brightness is out of reach** — 17.98 AB per
+visit against a prediction of V 22–25. And the tracker as built measures each
+place in a fixed box about ±12″ across, while a body at 400–800 AU shifts by
+8–17′ between SPHEREx's two visits a year: it follows a mover within one season,
+not across seasons. Linking the seasons at a trial distance is the next step.
+That is a far more useful account than either "we found it" or "we cannot look".
 
 ### What this can and cannot find
 
@@ -342,37 +359,40 @@ Field: **RA 13.4194, Dec +3.8459**, 9′ wide, band D2 (1.10–1.65 µm). Fiftee
 369 days. Signal-to-noise at the exact field centre, visit by visit:
 
 ```
-2025-07-06T11:41:24   205.6   ████████████████████████████████████████
-2025-07-07T20:18:06     3.2   ███
-2025-07-09T03:23:15     0.6   █
-2025-07-19T11:04:07     1.9   ██
-2025-12-24T11:12:16     3.4   ███
-2025-12-25T16:33:36   566.7   ████████████████████████████████████████
-2026-01-01T01:44:29     2.9   ███
-2026-01-01T08:21:29     1.2   █
-2026-01-03T05:59:11     3.8   ████
-2026-01-04T14:32:35     1.1   █
-2026-07-03T09:52:56     3.4   ███
+2025-07-06T11:41:24     1.4   █
+2025-07-07T20:18:06     3.0   ███
+2025-07-09T03:23:15     0.8   █
+2025-07-19T11:04:07     2.2   ██
+2025-12-24T11:12:16     3.3   ███
+2025-12-25T16:33:36   534.2   ████████████████████████████████████████
+2026-01-01T01:44:29     2.7   ███
+2026-01-01T08:21:29     1.3   █
+2026-01-03T05:59:11     3.6   ████
+2026-01-04T14:32:35     1.2   █
+2026-07-03T09:52:56     3.0   ███
 2026-07-03T19:44:45     2.0   ██
-2026-07-04T18:27:55     2.2   ██
-2026-07-05T05:58:03     2.1   ██
-2026-07-10T06:30:49     1.0   █
+2026-07-04T18:27:55     2.1   ██
+2026-07-05T05:58:03     1.9   ██
+2026-07-10T06:30:49     1.2   █
 ```
 
-Two spikes. Thirteen visits of pure background.
+One spike. Fourteen visits of pure background.
 
-**25 Dec 2025 — SNR 567.** SkyBoT places **(152) Atala**, a main-belt asteroid at V = 13.81,
-2.3″ from the field centre at that exposure's timestamp. Muninn draws the pink circle and
+**25 Dec 2025 — SNR 534.** SkyBoT places **(152) Atala**, a main-belt asteroid at V = 13.81,
+2.3″ from the field centre at that exposure's timestamp. Muninn rings it and
 names it, live, from the ephemeris.
 
-**6 Jul 2025 — SNR 206.** Nothing in the catalogue within 5.4′ of the position is brighter
-than V = 18.45, and that object was 296″ away. So: a bright source, present once, at a
-position no catalogue explains.
+**6 Jul 2025 — the spike that was not there.** Before Muninn read the `FLAGS` plane,
+this visit showed SNR 206 at the same spot, and nothing in the catalogue explained it.
+It was one detector pixel at eleven times its neighbours, with a variance 230 times the
+usual — and the pipeline had already said what it was: `FLAGS = 0x80005`, `TRANSIENT`
++ `SUR_ERROR` + `OUTLIER`, a cosmic-ray jump caught during the up-the-ramp readout.
+Atala's own pixels on 25 Dec carry only `OUTLIER`, and spread over the point-spread
+function the way a real source does. With the flags read, 6 July is background like the
+rest.
 
-We are not claiming a discovery. The honest first guesses are a cosmic-ray hit on the
-detector, a detector artefact, or a genuine variable. But it is exactly the kind of thing
-this tool exists to surface, and it is sitting in the field the app opens with — click the
-centre of the image and read the verdict.
+That is the kind of thing this tool exists to settle. Open (152) Atala, click the centre
+of the image and read the verdict: one visit, named by SkyBoT as the asteroid.
 
 ---
 
@@ -383,8 +403,8 @@ centre of the image and read the verdict.
 - **The archive caps large queries.** A cone at the ecliptic poles matches over 25 000
   frames and takes four minutes unserved. We ask for `MAXREC=500` per collection and say so
   in the interface when the list came back truncated.
-- **Twelve visits at a time**, sampled to span the full time baseline rather than taking the
-  first twelve. Fields with more visits than that are listed but not all loaded.
+- **Ten visits at a time**, sampled to span the full time baseline rather than taking the
+  first ten. Fields with more visits than that are listed but not all loaded.
 - **Brightness across bands is not comparable.** SPHEREx is a spectral survey with a linear
   variable filter; the wavelength at a given pixel depends on where it falls on the
   detector. The band filter and the per-band wavelength labels exist for this reason.
@@ -392,8 +412,9 @@ centre of the image and read the verdict.
   a main-belt asteroid is far below one pixel, but it would matter for a close approach.
 - **The centroid is simple.** Background annulus, peak, flux-weighted centre. It is honest
   about failing (it reports "nothing above the noise") but it is not PSF photometry.
-- **Cosmic rays look like transients.** They are single-frame, sharp, and common. Anything
-  seen exactly once deserves that explanation first.
+- **Cosmic rays look like transients.** They are single-frame, sharp, and common. The ones
+  the pipeline caught are masked through `FLAGS`; the ones it missed are not. Anything
+  seen exactly once still deserves that explanation first.
 
 ---
 
@@ -434,7 +455,7 @@ tools/                    the scripts that verified all of the above
 
 No build step. No dependencies. No framework.
 
-### Putting it on the web
+### Static hosting
 
 `public/` is a complete static site. The pre-resolved field indexes ship inside it,
 and the pixels come straight from the CORS-enabled AWS mirror, so the five verified
@@ -457,14 +478,15 @@ Muninn складывает заходы друг на друга и показ�
 
 Кадры SPHEREx — файлы по 70 МБ. Браузер читает их прямо из публичного зеркала AWS по
 диапазонам байтов: сначала заголовок, потом только те строки детектора, на которые
-попадает площадка. Заход обходится примерно в мегабайт. Между заходами аппарат
+попадает площадка, и флаги качества пайплайна для тех же строк. Заход обходится в
+несколько мегабайт. Между заходами аппарат
 разворачивается, поэтому перед сравнением каждый кадр пересчитывается на общую
 касательную плоскость с севером вверх.
 
 Стартовое поле выбрано не наугад: 25 декабря 2025 года в его центре стоит астероид
-**(152) Atala** (V = 13.8) — SNR 567 против фона 1–4 во всех остальных заходах. А 6 июля
-в той же точке — вспышка SNR 206, которой не соответствует ни один каталогизированный
-объект. Мы не заявляем открытие: честные версии — космическая частица, артефакт детектора
-или переменный источник. Но именно это инструмент и должен показывать.
+**(152) Atala** (V = 13.8) — SNR 534 против фона 1–4 во всех остальных заходах. Раньше
+6 июля в той же точке была «вспышка» SNR 206 без объяснения в каталогах. Это один пиксель,
+который пайплайн SPHEREx сам пометил как попадание космической частицы (`FLAGS = 0x80005`,
+`TRANSIENT`). Теперь Muninn читает эти флаги и маскирует такие пиксели до любых измерений.
 
 Запуск: `node server.js`, затем <http://127.0.0.1:5173>. Зависимостей нет.
