@@ -98,3 +98,24 @@ test('a cut read off cached sorted pixels equals a fresh one', () => {
     assert.deepEqual(limitsFromSorted(sorted, { hiPercent }), limits(data, { hiPercent }));
   }
 });
+
+test('season stack: seasons by band and date, steps land on a season start', async () => {
+  const { seasonOf, seasonStep, coadd, averaged } = await import('../public/js/stack.js');
+  const v = (mjd, band = 'D2') => ({ frame: { mjd, band } });
+  const visits = [v(100), v(101), v(103, 'D3'), v(110), v(290), v(292), v(470)];
+  assert.deepEqual(seasonOf(visits, 1), [0, 1, 3], 'same band within 20 days');
+  assert.deepEqual(seasonOf(visits, 5), [4, 5]);
+  assert.equal(seasonStep(visits, 1, 1), 4, 'next season, first visit');
+  assert.equal(seasonStep(visits, 5, 1), 6);
+  assert.equal(seasonStep(visits, 6, 1), 6, 'nothing later');
+  assert.equal(seasonStep(visits, 4, -1), 0, 'previous season, first visit');
+
+  // Four planes: the brightest value of each pixel is dropped, NaN is skipped.
+  const planes = [[1, NaN], [2, 4], [3, 6], [100, 8]].map((p) => Float32Array.from(p));
+  const out = coadd([planes[0].subarray(0, 1), planes[1].subarray(0, 1), planes[2].subarray(0, 1), planes[3].subarray(0, 1)]);
+  close(out[0], 2, 1e-9, 'cosmic ray dropped: mean of 1, 2, 3');
+  const two = coadd([Float32Array.of(NaN, 1), Float32Array.of(4, 3)]);
+  assert.deepEqual([...two], [4, 2], 'fewer than four: plain mean, NaN left out');
+  assert.equal(averaged(6), 5);
+  assert.equal(averaged(3), 3);
+});

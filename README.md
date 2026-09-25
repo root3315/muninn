@@ -31,6 +31,7 @@ The server does two things: it serves the page, and it relays one call to IRSA t
 browser is not allowed to make itself. Image data never passes through it.
 
 ```bash
+npm test                # 20 offline tests: a synthetic FITS through the whole pipeline, and more
 npm run bake            # refresh the pre-resolved opening fields (optional)
 npm run probe           # check the WCS round-trip against a live SPHEREx header
 node tools/verify-mover.mjs 13.4194 3.8459 0.15   # the photometry check below
@@ -84,6 +85,10 @@ mirror, IRSA, SIMBAD, SkyBoT — and nothing else.
 - **Blink** every visit in sequence, **wipe** two of them against each other with a
   draggable divider, or take their **difference** — cyan where A is brighter, amber where B
   is, the same colours as the A and B chips.
+- **Stack a season.** SPHEREx comes back to a field in seasons — a few visits over a week
+  or two, then nothing for half a year. The stack adds one season's visits in one band
+  (dropping each pixel's single brightest value, which takes out a missed cosmic ray or an
+  asteroid passing once) and says how deep that gets; ← → steps from season to season.
 - **Mark a spot** by clicking it. Muninn re-measures that exact sky position in every
   loaded visit, classifies what it finds (fixed · intermittent · moving · present once),
   and checks it against the IMCCE catalogue of known solar-system objects at the exact
@@ -276,8 +281,8 @@ the two are within a few tenths of a magnitude, and a cold, methane-rich body
 reflects less in the infrared, which only widens the gap.
 
 **So this tool does not find Planet Nine, and says so on screen.** Every field it
-opens reports the depth it actually searched at — one visit, since nothing here
-coadds before looking — and what a coadd would add, computed from that field's own
+opens reports the depth its search works at — one visit, since the automatic search
+measures visit by visit — and what a coadd would add, computed from that field's own
 noise by `public/js/depth.js` — the same module the
 command-line tool uses, so the number in the interface and the number here cannot
 drift apart.
@@ -287,6 +292,16 @@ What is left is a real search rather than a consolation prize:
 - **Slow movers brighter than ~17.6 AB per visit.** SPHEREx has only just begun
   delivering and nobody has mined it for moving objects. That discovery space is
   open and unexamined.
+- **Season stacks, and the jump between them.** SPHEREx looks about 90° from the Sun,
+  where the Earth's own motion is mostly along the line of sight, so a distant body
+  barely moves inside a season. Measured for the Atala field's eleven-day December
+  season: at 500 AU the parallax and the body's own orbit move it at most ~1.7 detector
+  pixels (at 300 AU, about three). Adding the season's visits therefore keeps a Planet X
+  -distance body sharp and gains √n in depth — four visits, about 0.6 mag — and between
+  seasons the same body at 500 AU jumps 13.6′. Blinking season stacks is the deep version
+  of the blink. We measured shifting each visit along a trial distance before adding
+  (shift-and-stack) too, and inside a season at these distances it is the same pixel or so
+  as no shift, so the stack does not pretend otherwise.
 - **An upper limit.** A null result over a stated area at a stated depth is a
   constraint, not a failure. The depth panel keeps a count of the fields examined
   in this browser and the square degrees they cover, so the coverage is a record
@@ -297,6 +312,13 @@ What is left is a real search rather than a consolation prize:
   window covers all six, 0.75–5.01 µm. D4 (2.40–3.85 µm) and D5 (3.81–4.43 µm)
   straddle the 3 µm water-ice band. The viewer does not extract spectra yet; the
   schedule says the data to do it are already there.
+
+And what it will not find: **brown dwarfs and nearby stars by their motion**, with a few
+exceptions. A star has to cross a 6.15″ pixel over the ~1.2-year baseline to be seen to
+move, which takes a proper motion above about 5″ a year. Barnard's star (10.3″/yr) and
+the coldest known brown dwarf, WISE 0855−0714 (8.1″/yr), qualify; a typical nearby brown
+dwarf moves 0.1–1″ a year and does not. Its parallax, under one arcsecond, does not
+show either.
 
 ### Showing all of the frame
 
@@ -448,9 +470,13 @@ public/
   css/app.css
   js/fits.js              FITS reader that works from partial byte ranges
   js/wcs.js               TAN + SIP, both directions, plus the shared tangent grid
-  js/stamp.js             range-fetch one visit and resample it onto that grid
+  js/stamp.js             range-fetch one visit and its FLAGS, mask, resample onto that grid
   js/render.js            percentile clip, stretch curves, colour ramps read from CSS
   js/sky.js               the canvas: compositing, overlays, marks, photometry
+  js/stack.js             seasons, and adding one season's visits up
+  js/depth.js             sky noise, 5σ limits, what a coadd would reach
+  js/hunt.js              rate to distance, and the guards on it
+  js/sectors.js           the 5 × 4 sector scores
   js/catalog.js           SIA, SkyBoT, SIMBAD, coordinate parsing
   js/votable.js           just enough IVOA VOTable for both services
   js/i18n.js              English and Russian
@@ -458,6 +484,8 @@ public/
   data/targets.json       the five opening fields, with counts from the archive
   data/fields/*.json      their frame indexes, pre-resolved so they open in ~80 ms
 tools/                    the scripts that verified all of the above
+tests/                    npm test — offline, no network
+design/                   a design study, not deployed
 ```
 
 No build step. No dependencies. No framework.

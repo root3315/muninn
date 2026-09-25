@@ -112,7 +112,10 @@ export function reach(analysis, { k = 3 } = {}) {
  *
  * The bands are the real neighbourhoods of the solar system, not decorative
  * tiers: the belt, the giants, the Kuiper belt, and the region beyond it where
- * the Planet X predictions live.
+ * the Planet X predictions live. The distance they are keyed on is a ceiling
+ * (see distanceCeilingAU), so their words say "no farther than", and the
+ * slowest band says what else a slow rate can be: a nearer body caught close
+ * to a stationary point, where its motion on the sky turns round.
  */
 export const NEIGHBOURHOODS = [
   { key: 'inner', maxAU: 6 },
