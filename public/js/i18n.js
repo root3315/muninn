@@ -25,6 +25,16 @@ const STRINGS = {
     'view.sectors': 'Sectors',
     'gate.lede': 'Point at the sky. Press to fall into SPHEREx\u2019s frames of that place.',
     'gate.known': 'Ready now',
+    'aria.gate': 'The sky',
+    'aria.tools': 'View settings',
+    'aria.findings': 'Findings',
+    'aria.field': 'This field',
+    'aria.run': 'Every observation of this field',
+    'preset.atala': '(152) Atala',
+    'preset.nep': 'N. ecliptic pole',
+    'preset.sep': 'S. ecliptic pole',
+    'preset.m51': 'M51',
+    'preset.m42': 'M42',
     'gate.sources': 'Where this sky comes from',
     'gate.modelled': 'The band and the faint field are a drawn model of the galactic disc, not a survey.',
     'gate.back': 'The sky',
@@ -59,9 +69,10 @@ const STRINGS = {
     'frame.visit': 'visit {i} of {n}',
     'verdict.reading': 'Reading the archive: {done} of {total} visits in…',
     'matrix.partial': 'so far, from {done} of {total} visits',
-    'depth.said': 'The faintest point source this field could have shown, at 5σ.',
+    'depth.said': 'The faintest point source one visit here could have shown, at 5σ.',
     'depth.stackShort': '{band} · {n} stacked',
-    'depth.singleShort': '{band} · one visit',
+    'depth.singleShort': '{band} · per visit',
+    'depth.stackNote': 'Coadding all {n} visits in {band} would reach about {mag} AB for a source that stays put; Muninn searches visit by visit and does not coadd.',
     'depth.here': 'this field',
     'depth.target': 'Planet X',
     'depth.scale': 'Reached {mag} AB; Planet X is predicted at {lo}–{hi}',
@@ -74,6 +85,7 @@ const STRINGS = {
     'facts.standout': 'Stood out',
     'facts.depth': 'Depth',
     'facts.bodies': 'Catalogued bodies',
+    'facts.bodiesAsking': '{n} · SkyBoT {done}/{total}',
     'run.legend': 'Every observation of this field',
     'app.tagline': 'SPHEREx time-domain viewer',
     'app.lede': 'Every six months SPHEREx photographs the entire sky. Stack the visits, and whatever moved stops hiding.',
@@ -95,8 +107,8 @@ const STRINGS = {
     'depth.limit': '— the faintest thing this field could have shown.',
     'depth.stack': '{n} visits in {band}, stacked.',
     'depth.single': 'One visit.',
-    'depth.reach': 'Planet X as predicted sits {gap} magnitudes fainter — a factor of {factor} in flux. This field rules it out at that brightness and no further.',
-    'depth.covered': '{n} fields examined · {area} sq deg',
+    'depth.reach': 'Planet X as predicted sits {gap} magnitudes fainter — a factor of {factor} in flux. A body at this limit would have shown in a single visit here; about anything fainter, this search cannot speak.',
+    'depth.covered': 'Examined in this browser: {n} fields · {area} sq deg.',
     'locator.alt': 'The whole sky in a Hammer projection, with the ecliptic and the fields that ship with the page',
     'locator.ecliptic': 'ecliptic',
     'target.resolving': 'Resolving name…',
@@ -357,6 +369,16 @@ const STRINGS = {
     'view.sectors': 'Секторы',
     'gate.lede': 'Наведите на небо. Нажмите — и влетите в кадры SPHEREx.',
     'gate.known': 'Открывается сразу',
+    'aria.gate': 'Небо',
+    'aria.tools': 'Настройки вида',
+    'aria.findings': 'Находки',
+    'aria.field': 'Это поле',
+    'aria.run': 'Все наблюдения этого поля',
+    'preset.atala': '(152) Atala',
+    'preset.nep': 'сев. полюс эклиптики',
+    'preset.sep': 'юж. полюс эклиптики',
+    'preset.m51': 'M51',
+    'preset.m42': 'M42',
     'gate.sources': 'Откуда это небо',
     'gate.modelled': 'Полоса и слабый фон — нарисованная модель галактического диска, не съёмка.',
     'gate.back': 'К небу',
@@ -389,11 +411,12 @@ const STRINGS = {
     'play.nextDate': 'Позже',
     'frame.of': '{i} из {n}',
     'frame.visit': 'заход {i} из {n}',
-    'verdict.reading': 'Читаю архив: пришло {done} из {total} заходов…',
-    'matrix.partial': 'пока по {done} из {total} заходов',
-    'depth.said': 'Слабейший точечный источник, который это поле могло бы показать, при 5σ.',
+    'verdict.reading': 'Читаю архив: пришло {done} из {total} {total:захода|заходов|заходов}…',
+    'matrix.partial': 'пока по {done} из {total} {total:захода|заходов|заходов}',
+    'depth.said': 'Слабейший точечный источник, который мог показать один заход в этом поле, при 5σ.',
     'depth.stackShort': '{band} · сложено {n}',
     'depth.singleShort': '{band} · один заход',
+    'depth.stackNote': 'Если сложить все {n} {n:заход|захода|заходов} в {band}, неподвижный источник был бы виден примерно до {mag} AB; Muninn ищет по одному заходу и кадры не складывает.',
     'depth.here': 'это поле',
     'depth.target': 'Планета X',
     'depth.scale': 'Дошли до {mag} AB; Планета X предсказана на {lo}–{hi}',
@@ -406,6 +429,7 @@ const STRINGS = {
     'facts.standout': 'Выделилось',
     'facts.depth': 'Глубина',
     'facts.bodies': 'Тел каталога',
+    'facts.bodiesAsking': '{n} · SkyBoT {done}/{total}',
     'run.legend': 'Все наблюдения этого поля',
     'app.tagline': 'просмотр неба SPHEREx во времени',
     'app.lede': 'Раз в полгода SPHEREx снимает всё небо целиком. Сложите заходы друг на друга — и то, что сдвинулось, перестанет прятаться.',
@@ -427,8 +451,8 @@ const STRINGS = {
     'depth.limit': '— слабейшее, что это поле могло бы показать.',
     'depth.stack': 'Сложено заходов в {band}: {n}.',
     'depth.single': 'Один заход.',
-    'depth.reach': 'Планета X по предсказанию слабее на {gap}ᵐ — это в {factor} раз по потоку. Это поле исключает её только до этой яркости и не дальше.',
-    'depth.covered': 'проверено полей: {n} · {area} кв. градуса',
+    'depth.reach': 'Планета X по предсказанию слабее на {gap}ᵐ — это в {factor} раз по потоку. Тело на этом пределе было бы видно в одном заходе; о более слабых этот поиск ничего сказать не может.',
+    'depth.covered': 'Проверено в этом браузере: полей {n} · {area} кв. град.',
     'locator.alt': 'Всё небо в проекции Хаммера, с эклиптикой и полями, которые идут вместе со страницей',
     'locator.ecliptic': 'эклиптика',
     'target.resolving': 'Ищу название…',
@@ -445,7 +469,7 @@ const STRINGS = {
     'field.bandHint': 'Положение сравнимо между полосами. Яркость — только внутри одной.',
     'field.untitled': 'Этот кусок неба',
     'stats.visits': 'заходов',
-    'stats.line': '{n} заходов за {days} дн.',
+    'stats.line': '{n} {n:заход|захода|заходов} за {days} дн.',
     'stats.checked': 'выделилось мест: {n}',
     'stats.depth': 'до {mag} AB',
     'stats.catalogued': 'тел каталога: {n}',
@@ -461,7 +485,7 @@ const STRINGS = {
     'epochs.cueFailed': 'Список кадров не пришёл.',
     'epochs.noRelay': 'Поиск по любой точке неба требует живого запроса к IRSA, а та не отдаёт CORS-заголовки — размещённая копия его сделать не может. Откройте одно из проверенных полей — кольца на небе — или запустите проект локально.',
     'epochs.count': 'заходов: {n}',
-    'epochs.spanDays': 'разброс {n} дней',
+    'epochs.spanDays': 'разброс {n} {n:день|дня|дней}',
     'epochs.truncated': 'архив обрезал список до {available} кадров',
     'epochs.axisEmpty': 'заходов пока нет',
     'epochs.pending': 'в очереди',
@@ -567,12 +591,12 @@ const STRINGS = {
     'mark.callIntermittent': 'То есть, то нет',
     'mark.none': 'Пока ничего не отмечено.',
     'mark.clear': 'Снять метки',
-    'mark.undetected': 'здесь ничего выше шума ни в одном из {total} заходов',
-    'mark.transient': 'есть {date} на уровне {snr}σ — и ни в одном из остальных {rest} заходов',
+    'mark.undetected': 'здесь ничего выше шума ни в одном из {total} {total:захода|заходов|заходов}',
+    'mark.transient': 'есть {date} на уровне {snr}σ — и ни в одном из остальных {rest} {rest:захода|заходов|заходов}',
     'mark.moving': 'движется {rate}″/ч · детекций: {seen} за {days} дн. · разброс {rms}″',
     'mark.fixed': 'во всех {total} заходах, стабильно до {rms}″ — неподвижный источник',
-    'mark.intermittent': 'в {seen} из {total} заходов, стабильно до {rms}″',
-    'mark.intermittentDates': 'в {seen} из {total} заходов — {dates}',
+    'mark.intermittent': 'в {seen} из {total} {total:захода|заходов|заходов}, стабильно до {rms}″',
+    'mark.intermittentDates': 'в {seen} из {total} {total:захода|заходов|заходов} — {dates}',
     'mark.brightness': 'пик {min}–{max} MJy/sr в {band}',
     'mark.curve': 'Блеск в этой точке по заходам',
     'mark.known': 'В каталоге SkyBoT: {name}',
@@ -609,8 +633,8 @@ const STRINGS = {
     'mark.skybotFailed': 'SkyBoT не ответил — сверки нет',
     'mark.skybotOff': 'сверка с SkyBoT выключена («Астероиды»)',
     'mark.callPredicted': 'Астероид есть, но не виден',
-    'mark.predicted': 'SkyBoT ставит сюда {name} (V {mag}ᵐ), но ни в одном из {total} заходов здесь нет ничего выше шума — для одного захода SPHEREx он слишком слабый.',
-    'mark.predictedNoMag': 'SkyBoT ставит сюда {name}, но ни в одном из {total} заходов здесь нет ничего выше шума — для одного захода SPHEREx он слишком слабый.',
+    'mark.predicted': 'SkyBoT ставит сюда {name} (V {mag}ᵐ), но ни в одном из {total} {total:захода|заходов|заходов} здесь нет ничего выше шума — для одного захода SPHEREx он слишком слабый.',
+    'mark.predictedNoMag': 'SkyBoT ставит сюда {name}, но ни в одном из {total} {total:захода|заходов|заходов} здесь нет ничего выше шума — для одного захода SPHEREx он слишком слабый.',
     'mark.predictedWhy': 'Кружок — где он по орбите; метка — что намерил SPHEREx.',
     'mark.whoAsking': 'Спрашиваю SIMBAD и Gaia…',
     'mark.whoFailed': 'SIMBAD и Gaia не ответили',
@@ -684,10 +708,28 @@ export function setLanguage(lang) {
 
 export const getLanguage = () => current;
 
+/**
+ * Russian nouns agree with the number before them in three forms — 1 заход,
+ * 3 захода, 7 заходов — so a string can say {n:заход|захода|заходов} and get
+ * the one that fits. English strings never need it.
+ */
+function pluralForm(n, forms) {
+  const a = Math.abs(Math.trunc(Number(n)));
+  if (!Number.isFinite(a) || forms.length < 3) return forms[forms.length - 1] ?? '';
+  const d = a % 10;
+  const h = a % 100;
+  if (d === 1 && h !== 11) return forms[0];
+  if (d >= 2 && d <= 4 && (h < 12 || h > 14)) return forms[1];
+  return forms[2];
+}
+
 export function t(key, vars) {
   const table = STRINGS[current] ?? STRINGS[FALLBACK];
   let s = table[key] ?? STRINGS[FALLBACK][key] ?? key;
-  if (vars) for (const [k, v] of Object.entries(vars)) s = s.split(`{${k}}`).join(v);
+  if (vars) {
+    s = s.replace(/\{(\w+):([^}]+)\}/g, (all, k, forms) => (k in vars ? pluralForm(vars[k], forms.split('|')) : all));
+    for (const [k, v] of Object.entries(vars)) s = s.split(`{${k}}`).join(v);
+  }
   return s;
 }
 
@@ -710,7 +752,10 @@ export const fmtDate = (iso) => {
   if (!iso) return '—';
   const d = new Date(iso.endsWith('Z') ? iso : `${iso}Z`);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString(locale(), { year: 'numeric', month: 'short', day: '2-digit', timeZone: 'UTC' });
+  // Russian appends "г." to a year; the plate's own date does not, and one
+  // date written two ways on one screen reads as two dates.
+  return d.toLocaleDateString(locale(), { year: 'numeric', month: 'short', day: '2-digit', timeZone: 'UTC' })
+    .replace(/\s*г\.$/, '');
 };
 
 /** Day and month, no year: for a step that goes one visit either way. */

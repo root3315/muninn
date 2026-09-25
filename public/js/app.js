@@ -310,8 +310,18 @@ function renderFacts() {
   if (state.candidates && state.sectors) {
     rows.push([t('facts.standout'), String(standouts(state.sectors, { limit: Infinity }).length)]);
   }
-  if (state.depth) rows.push([t('facts.depth'), `${fmt(state.depth.stacked, 1)} AB`, 'accent']);
-  if (state.bodies) rows.push([t('facts.bodies'), String(state.bodies)]);
+  if (state.depth) rows.push([t('facts.depth'), `${fmt(state.depth.single, 1)} AB`, 'accent']);
+  // The count grows as SkyBoT answers visit by visit; while it is still
+  // answering, the row says how far it has got, so "caught 3" at fifteen
+  // seconds and "caught 11" at forty-five do not read as two different fields.
+  const visits = sky?.visits.length ?? 0;
+  const answered = sky ? sky.visits.filter((v) => sky.knownObjects.has(v.frame.obsId) || skybot.failed.has(v.frame.obsId)).length : 0;
+  const asking = skybotOn() && visits > 0 && answered < visits;
+  if (state.bodies || asking) {
+    rows.push([t('facts.bodies'), asking
+      ? t('facts.bodiesAsking', { n: state.bodies ?? 0, done: answered, total: visits })
+      : String(state.bodies)]);
+  }
   for (const [name, value, tone] of rows) {
     const row = document.createElement('div');
     const dt = document.createElement('dt');
@@ -534,6 +544,7 @@ function renderHunt() {
     go.type = 'button';
     go.className = 'link cand__go';
     go.textContent = t('hunt.show');
+    go.setAttribute('aria-label', `${t('hunt.show')}: ${formatRA(c.ra)} ${formatDec(c.dec)}`);
     go.addEventListener('click', () => {
       addMark(c.ra, c.dec);
       sky.sector = c.sector;
@@ -649,6 +660,8 @@ function renderFlashes(found) {
     go.type = 'button';
     go.className = 'link cand__go';
     go.textContent = t('hunt.flashShow');
+    // Four buttons all called "Show" are one name to a screen reader.
+    go.setAttribute('aria-label', `${t('hunt.flashShow')}: ${c.catalog.name}`);
     go.addEventListener('click', () => showFlash(c));
 
     li.append(title, when, go);
@@ -848,14 +861,19 @@ function measureDepth({ final = true } = {}) {
     if (v.sigma === undefined) v.sigma = v.stamp.sigma !== undefined ? v.stamp.sigma : skySigma(v.stamp.data);
     const { sigma } = v;
     sigmas.push(sigma ?? 0);
-    if (sigma) per.push({ band: v.frame.band, sigma });
+    // The depth is quoted from the detector's own pixels (see stamp.js); the
+    // grid's noise stays the floor for the sector scores, which live on the grid.
+    const detector = v.stamp.meta?.detectorSigma;
+    if (detector || sigma) per.push({ band: v.frame.band, sigma: detector || sigma });
   }
   state.depth = per.length ? stackDepth(per) : null;
   measureSectors(sigmas, { final });
   if (final && state.depth && sky?.grid) {
+    // Recorded at the depth the search actually worked at — one visit — since
+    // nothing here coadds the visits before looking.
     rememberExamined({
       ra: state.ra, dec: state.dec,
-      depth: Number(state.depth.stacked.toFixed(2)),
+      depth: Number(state.depth.single.toFixed(2)),
       n: state.depth.n, band: state.depth.band,
       area: Number((sky.grid.fovDeg * sky.grid.fovHeightDeg).toFixed(4)),
       at: new Date().toISOString().slice(0, 10),
@@ -871,19 +889,37 @@ function renderDepth() {
   renderFacts();
   renderVerdict();
   if (d) {
-    $('depth-mag').textContent = fmt(d.stacked, 1);
-    $('depth-band').textContent = d.n > 1
-      ? t('depth.stackShort', { n: d.n, band: d.band })
-      : t('depth.singleShort', { band: d.band });
+    // One visit is what every detection here is made in — marks, sectors,
+    // flashes and Hunter X all measure visit by visit — so that is the depth
+    // the search reached. The √N stack is what coadding would buy, and is
+    // said as that, not as a reach.
+    $('depth-mag').textContent = fmt(d.single, 1);
+    $('depth-band').textContent = t('depth.singleShort', { band: d.band });
     $('depth-said').textContent = t('depth.said');
 
-    const s = shortfall(d.stacked);
-    $('depth-reach').textContent = s && s.magnitudes > 0
+    const s = shortfall(d.single);
+    const reach = s && s.magnitudes > 0
       ? t('depth.reach', { gap: fmt(s.magnitudes, 1), factor: Math.round(s.fluxFactor) })
       : '';
-    drawDepthScale($('depth-scale'), d.stacked);
+    const stack = d.n > 1 ? t('depth.stackNote', { n: d.n, band: d.band, mag: fmt(d.stacked, 1) }) : '';
+    $('depth-reach').textContent = [reach, stack].filter(Boolean).join(' ');
+    drawDepthScale($('depth-scale'), d.single);
+    renderCovered();
   }
 
+}
+
+/**
+ * The record the search keeps: every field examined in this browser and the
+ * sky they cover. A null result over a stated area at a stated depth is a
+ * constraint; kept in localStorage and never shown, it was not one.
+ */
+function renderCovered() {
+  const el = $('depth-covered');
+  const list = state.examined ?? [];
+  el.hidden = !list.length;
+  const area = list.reduce((sum, f) => sum + (Number(f.area) || 0), 0);
+  el.textContent = list.length ? t('depth.covered', { n: list.length, area: fmt(area, 2) }) : '';
 }
 
 /**
@@ -972,6 +1008,9 @@ function readRunPaint() {
     accent: get('--color-accent', '#6cc4f0'),
     ink: get('--color-ink', '#e9f1f7'),
     faint: get('--color-rule-strong', '#5a6a7e'),
+    // Text on the run is read, so it takes the text token (6.3:1), not the
+    // boundary one the lines use (3.2:1).
+    label: get('--color-neutral', '#8a9aae'),
   };
 }
 
@@ -1211,9 +1250,15 @@ async function askSkybot(v, signal) {
   asked.asking.add(id);
   asked.failed.delete(id);
   try {
+    // Asked for the middle of the exposure, where the photons were on average;
+    // the index's time is its start, a minute earlier.
+    const { mjd, exptime } = v.frame;
+    const mid = exptime > 0
+      ? new Date((mjd + exptime / 2 / 86400 - 40587) * 86400000).toISOString().replace('Z', '')
+      : v.frame.iso;
     const objects = await skybotCone({
       ra: state.ra, dec: state.dec,
-      radiusDeg: Math.max(0.03, (sky.grid?.spanDeg ?? state.fov) * 0.8), iso: v.frame.iso,
+      radiusDeg: Math.max(0.03, (sky.grid?.spanDeg ?? state.fov) * 0.8), iso: mid,
     }, { signal });
     if (!signal?.aborted && asked === skybot) sky.setKnownObjects(id, objects);
   } catch {
@@ -2339,7 +2384,41 @@ async function buildGate() {
 }
 
 /** The ready fields are markers on the sky now; nothing else lists them. */
-function renderGateJump() {}
+/**
+ * The verified fields, as one line under the search. They live on the sky as
+ * rings, but the sky opens facing the galactic centre and none of the five is
+ * in that view: a first visit met a search box and nothing to put in it. Each
+ * name turns the sky onto its ring and falls in, as pressing the ring does.
+ */
+function renderGateJump() {
+  const box = $('gate-jump');
+  box.replaceChildren();
+  const ready = state.presets.filter((f) => Number.isFinite(f.ra) && Number.isFinite(f.dec));
+  box.hidden = !ready.length;
+  if (!ready.length) return;
+  const head = document.createElement('span');
+  head.className = 'gate__jump-k';
+  head.textContent = t('gate.known');
+  box.append(head);
+  for (const f of ready) {
+    const name = f.key ? t(`preset.${f.key}`) : f.name;
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'gate__jump-go';
+    go.textContent = name;
+    const why = f.why?.[getLanguage()] ?? f.why?.en;
+    if (why) go.title = why;
+    go.addEventListener('click', () => {
+      const hit = { ra: f.ra, dec: f.dec, fov: f.fov, band: f.band ?? 'all', label: name };
+      if (gate) { enterFrom(hit); return; }
+      // Pressed before the sky has been built: straight in, without the flight.
+      if (hit.fov) { state.fov = nearestFov(hit.fov); $('fov').value = String(state.fov); }
+      closeGate();
+      openField(hit);
+    });
+    box.append(go);
+  }
+}
 
 /* --------------------------------------------------------------------- wiring */
 
@@ -2503,9 +2582,16 @@ function wire() {
   });
   $('stretch').addEventListener('change', (e) => sky.setRender({ stretch: e.target.value }));
   $('palette').addEventListener('change', (e) => sky.setRender({ palette: e.target.value }));
+  // The number follows the thumb at once; the repaint of every visit happens
+  // at most once a frame, with whatever value the thumb has reached by then.
+  let clipFrame = 0;
   $('clip').addEventListener('input', (e) => {
     $('clip-value').textContent = Number(e.target.value).toFixed(2);
-    sky.setRender({ clip: Number(e.target.value) });
+    if (clipFrame) return;
+    clipFrame = requestAnimationFrame(() => {
+      clipFrame = 0;
+      sky.setRender({ clip: Number($('clip').value) });
+    });
   });
 
   const overlays = {

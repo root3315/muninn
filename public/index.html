@@ -48,7 +48,7 @@
   Way, computed from galactic coordinates — a model of the disc, said so in the
   fine print, because it is the one thing here that is not a measurement.
 -->
-<section class="gate" id="gate" aria-label="The sky">
+<section class="gate" id="gate" aria-label="The sky" data-i18n-label="aria.gate">
   <canvas class="gate__sky" id="gate-sky"></canvas>
   <div class="gate__vignette" aria-hidden="true"></div>
 
@@ -75,6 +75,9 @@
       </button>
     </form>
     <p class="find-note note" id="gate-note" role="status"></p>
+    <!-- The verified fields, by name. They are rings on the sky too, but the
+         sky opens facing the galactic centre and none of them is in view. -->
+    <p class="gate__jump" id="gate-jump" hidden></p>
 
   </div>
 
@@ -205,7 +208,7 @@
     </div>
    </div>
 
-    <section class="tools" id="tools" hidden aria-label="View">
+    <section class="tools" id="tools" hidden aria-label="View" data-i18n-label="aria.tools">
 
       <label class="row" for="stretch"><span data-i18n="render.stretch"></span>
         <select id="stretch" class="field field--compact">
@@ -267,13 +270,13 @@
   </main>
 
   <!-- ==================================================== right · what was found -->
-  <aside class="side side--right" aria-label="Findings">
+  <aside class="side side--right" aria-label="Findings" data-i18n-label="aria.findings">
 
     <!-- ========================================================= the finding -->
     <!-- What was found, then what that rests on. It heads the findings column
          rather than the page: across the top it took a band of height from the
          picture, and the picture is the one thing on this page that needs it. -->
-    <section class="verdict" aria-label="This field">
+    <section class="verdict" aria-label="This field" data-i18n-label="aria.field">
       <h1 class="verdict__line" id="verdict"></h1>
       <dl class="facts" id="stat-line"></dl>
       <p class="verdict__cue note note--dim" id="field-cue" data-i18n="app.lede"></p>
@@ -308,6 +311,7 @@
       <p class="depth__said" id="depth-said"></p>
       <svg class="depth__scale" id="depth-scale" role="img" aria-hidden="true"></svg>
       <p class="depth__reach note note--dim" id="depth-reach"></p>
+      <p class="depth__covered note note--dim num" id="depth-covered" hidden></p>
     </section>
 
     <section class="part">
@@ -328,7 +332,7 @@
   <!-- Every observation at once: its true date on the lane, a thumbnail of the
        exposure, and under that the twenty sectors of that visit in the grid
        they actually are. Press a frame to go to it. -->
-  <section class="run" id="run" hidden aria-label="Observations">
+  <section class="run" id="run" hidden aria-label="Observations" data-i18n-label="aria.run">
     <div class="run__head">
       <h2 class="run__k" data-i18n="run.legend"></h2>
       <p class="run__found" id="matrix-found"></p>

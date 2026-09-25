@@ -149,7 +149,7 @@ export function drawStrip(canvas, {
       : ctx.measureText(name).width <= room ? name : '';
     if (label) {
       if (label === withYear) lastYear = year;
-      ctx.fillStyle = P.faint;
+      ctx.fillStyle = P.label ?? P.faint;
       ctx.textAlign = 'center';
       ctx.fillText(label, (x0 + x1) / 2, padY + labelH - 2);
     }
@@ -288,7 +288,7 @@ export function drawStrip(canvas, {
     // From the MJD, which is UTC by definition; the ISO string carries no zone
     // and would be read as local time.
     const d = toDate(slots[i].frame.mjd);
-    ctx.fillStyle = i === liveSlot ? P.ink : P.faint;
+    ctx.fillStyle = i === liveSlot ? P.ink : (P.label ?? P.faint);
     ctx.globalAlpha = slots[i].visit ? 1 : 0.55;
     ctx.fillText(
       `${d.getUTCDate()} ${dateMonths[d.getUTCMonth()]}`,

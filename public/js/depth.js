@@ -9,9 +9,11 @@
  * The same functions back `tools/sensitivity.mjs`, so the number printed in the
  * interface and the number in the write-up cannot drift apart.
  *
- * Measured, not quoted: running it over real SPHEREx frames gives 18.07 AB for a
- * single visit, which is what the mission's own documentation says to expect.
- * That is the check — the arithmetic reproduces an independently known answer.
+ * Measured, not quoted: `tools/sensitivity.mjs` over real D1–D6 frames gives
+ * 17.60 AB for a single visit, from the detector's own pixels. On a D2 frame
+ * of the Atala field the pipeline's own VARIANCE plane (about 0.0005 (MJy/sr)²
+ * per blank pixel) says 0.022 MJy/sr against the 0.025 measured here — about
+ * 0.1 mag apart, the robust estimate on the cautious side.
  */
 
 /** SPHEREx delivers 6.15″ pixels. */

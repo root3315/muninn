@@ -7,6 +7,11 @@
  * worth — follows from it. So it is measured from the delivered pixels rather
  * than quoted from a mission page.
  *
+ * The noise is taken from the detector's own pixels over the field's columns
+ * (`stamp.meta.detectorSigma`, after the pipeline's FLAGS are applied), not
+ * from the resampled grid: bilinear resampling smooths the noise and made the
+ * first version of this table about 0.4 mag too deep.
+ *
  * Method lives in `public/js/depth.js`, shared with the page so the number on
  * screen and the number in the write-up cannot drift: robust sky noise from the
  * half of the distribution sources cannot reach, converted to flux through the
@@ -20,7 +25,7 @@ import { parseVOTable } from '../public/js/votable.js';
 import { frameFromRow, groupVisits, toS3 } from '../public/js/catalog.js';
 import { TangentGrid } from '../public/js/wcs.js';
 import { loadStamp } from '../public/js/stamp.js';
-import { skySigma, limitAB } from '../public/js/depth.js';
+import { limitAB } from '../public/js/depth.js';
 
 const RA = Number(process.argv[2] ?? 13.4194);
 const DEC = Number(process.argv[3] ?? 3.8459);
@@ -51,7 +56,7 @@ for (const band of ['D1', 'D2', 'D3', 'D4', 'D5', 'D6']) {
       continue;
     }
     if (!stamp) continue;
-    const sigma = skySigma(stamp.data);
+    const sigma = stamp.meta.detectorSigma;
     if (!sigma) continue;
     const mag = limitAB(sigma);
     if (!byBand.has(band)) byBand.set(band, []);

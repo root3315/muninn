@@ -16,6 +16,7 @@
 
 import { scanHDUs, decodePixels, readHeader, dataLength, padded } from './fits.js';
 import { WCS } from './wcs.js';
+import { skySigma } from './depth.js';
 
 const HEADER_PROBE = 65536;
 const MAX_HEADER = 1 << 20;
@@ -160,6 +161,20 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15 } = {}) 
     if (err?.name === 'AbortError') throw err;
   }
 
+  // The sky noise of the detector's own pixels, over the columns the field
+  // covers. The depth is a statement about detector pixels (6.15″, the pixel
+  // solid angle it is converted through), and the resampled grid is smoother
+  // than they are: bilinear interpolation averages neighbours and reads about
+  // a third low, which made every quoted depth ~0.4 mag too deep.
+  const colFrom = Math.max(0, Math.floor(box.x0) - 1);
+  const colTo = Math.min(nx - 1, Math.ceil(box.x1) - 1);
+  const patch = new Float32Array(Math.max(0, colTo - colFrom + 1) * rows);
+  let n = 0;
+  for (let r = 0; r < rows; r++) {
+    for (let c = colFrom; c <= colTo; c++) patch[n++] = plane[r * nx + c];
+  }
+  const detectorSigma = skySigma(patch.subarray(0, n));
+
   // Bilinear sample, falling back to the nearest valid neighbour around bad pixels.
   const gw = grid.width;
   const gh = grid.height;
@@ -220,6 +235,7 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15 } = {}) 
       pixelScale: wcs.scale * 3600,
       bytesRead: raw.byteLength + (flagged?.bytes ?? 0),
       flaggedPixels: flagged ? flagged.masked : null,
+      detectorSigma,
     },
   };
 }
