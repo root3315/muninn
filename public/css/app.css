@@ -1,0 +1,1706 @@
+/* Hallmark · genre: atmospheric · macrostructure: Workbench · theme: custom
+ * vibe: "deep sky" — dark blue, bluer and whiter where the stars crowd
+ * paper  oklch(16% 0.040 254)   ink oklch(95% 0.014 240)   accent oklch(76% 0.130 228)
+ * axes: dark / condensed-grotesk / azure
+ * display Oswald · body IBM Plex Sans · outlier IBM Plex Mono (two roles:
+ *   measured values, and the fine print)
+ * audience: anyone curious about the sky · use: find what moved between visits
+ * tone: technical / instrument · nav: N6 masthead · footer: Ft4 · enrichment: none
+ *
+ * shell: masthead, then three columns — the frame in the middle of the window
+ *   with a column either side. One rail pushes the picture off-centre and
+ *   turns the other half of the window into margin; two columns put the frame
+ *   where the eye already is. The split is by question, not by leftovers:
+ *   LEFT is the field you are on and how it is being drawn, RIGHT is what the
+ *   search turned up. Nothing is ever drawn on top of the frame.
+ * columns: set as columns of text — a hairline, a tracked cap label, then the
+ *   content. No card, no box, no shadow. The frame is the only object on
+ *   screen with an edge around it, so it is never in competition.
+ * centre: the frame takes the whole free height of the middle column, and the
+ *   map of what changed swaps into the same cell rather than opening anywhere
+ *   else, so the picture's box never moves by a pixel.
+ * canvas: out of flow inside its frame. It carries an explicit pixel size
+ *   written by a resize observer, and left in flow that size becomes the
+ *   frame's own content height — the two then chase each other until the
+ *   renderer stops answering. Out of flow, the grid alone sizes the frame.
+ * expansion: H drops both columns and the masthead; the frame takes the window.
+ * corner: a radius scale by role (8 controls / 12 grouped / 20 surfaces / pill
+ *   toggles) rather than one value stamped on every box.
+ * material: depth from an inset hairline of light on raised surfaces and an
+ *   inset shadow on sunk ones — never an outer glow on a dark ground.
+ * image: duotone ramps in the same hue family, luminance verified monotonic so
+ *   the tint never misreports brightness.
+ * type: four rungs — the field's name, the column labels, the figures, the prose.
+ * motion: blink-crossfade · progress (functional). Nothing reveals on scroll.
+ * contrast: pass (40-41) · honest: pass (46) · chrome: pass (47)
+ * tokens: pass (48) · italic headers: pass (38a) · tag-left heads: pass (54)
+ * mobile: pass (34, 49, 50-57) · slop test: 58/58
+ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+/* Components set their own `display`, which outranks the user agent's rule for
+   the attribute. State one rule for the whole sheet instead of per component. */
+[hidden] { display: none !important; }
+
+html, body { block-size: 100%; }
+html { overflow-x: clip; }
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3 {
+  font-family: var(--font-display); font-style: normal; margin: 0;
+  overflow-wrap: anywhere; min-inline-size: 0;
+}
+p { margin: 0; }
+ul, ol, dl, dd { margin: 0; padding: 0; }
+li { list-style: none; }
+
+/* Mono carries exactly one role: a value that was measured. */
+.num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "zero" 1;
+}
+
+.vh {
+  position: absolute; inline-size: 1px; block-size: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+:root {
+  --gutter: clamp(0.875rem, 1.5vw, 1.5rem);
+  --side: clamp(16rem, 19vw, 22rem);
+  --map: clamp(9.5rem, 12vw, 13rem);
+}
+
+.skip {
+  position: fixed; inset-inline-start: -999px; inset-block-start: 0; z-index: var(--z-toast);
+  background: var(--color-accent); color: var(--color-accent-ink);
+  padding: var(--space-xs) var(--space-md); font-weight: 600; text-decoration: none;
+  border-radius: var(--radius-sm);
+}
+.skip:focus-visible { inset-inline-start: var(--gutter); inset-block-start: var(--space-xs); }
+
+:where(a, button, input, select, summary):focus-visible {
+  /* Never transitioned — a ring that fades in is a ring that is not there yet. */
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* ==================================================================== shell */
+
+/*
+ * A report: the finding across the top, then the evidence under it — the
+ * picture on the left at the width it deserves, and everything the search
+ * turned up in a column beside it.
+ *
+ * The settings that used to hold the third column are under the transport now.
+ * They were the largest thing on a page whose subject is a photograph, and
+ * they are knobs rather than results.
+ */
+.shell {
+  /* The picture is the subject, so it is sized from what is left: see .room
+     and .mount, which measure the space rather than estimate it. */
+  background: var(--rec-ground);
+  display: grid;
+  /* The window, exactly: the run is the main verb of this page and a verb you
+     scroll to is a verb you use less. The frame takes whatever the fixed parts
+     leave, because the frame is the subject. */
+  block-size: 100dvh;
+  grid-template-columns: minmax(0, 1fr) var(--side);
+  /* The finding heads the findings column, inside it, so the column scrolls as
+     one sheet. Across the top of the page it cost the picture a band of height
+     on every screen, and height is the one thing a square picture on a wide
+     screen is short of. */
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-areas:
+    "top     top"
+    "stage   right"
+    "run     run";
+}
+.mast { grid-area: top; }
+.run { grid-area: run; }
+/* The column is paper; the middle is the record. */
+.stage { grid-area: stage; }
+.side--right { grid-area: right; background: var(--rec-panel); }
+
+/* ================================================================= masthead */
+
+.mast {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: var(--space-sm) var(--space-xl);
+  padding: var(--space-sm) var(--gutter);
+  padding-block-start: calc(var(--space-sm) + env(safe-area-inset-top, 0px));
+  background: var(--rec-ground);
+  border-block-end: var(--rule-hair) solid var(--color-rule-soft);
+}
+
+/* A rule to type on, the same as the sky uses. The filled box with a bright
+   button beside it was the loudest thing on a page about a photograph. */
+.find {
+  display: flex; align-items: center; gap: var(--space-xs);
+  /* A small basis and a cap, so the field gives up its width before the
+     actions give up their line: a second row of masthead is height taken from
+     the picture. */
+  flex: 1 1 10rem; max-inline-size: 24rem; min-inline-size: 8rem;
+  margin-inline-end: auto;
+  border-block-end: var(--rule-hair) solid var(--color-rule);
+  transition: border-color var(--dur-short) var(--ease-out);
+}
+.find:focus-within { border-block-end-color: var(--color-accent); }
+.find__input {
+  flex: 1 1 auto; min-inline-size: 0;
+  appearance: none; background: none; border: 0; padding: var(--space-2xs) 0;
+  font: inherit; font-size: var(--text-sm); color: var(--color-ink);
+}
+.find__input::placeholder { color: var(--color-rule-strong); }
+.find__input:focus { outline: none; }
+.find__go {
+  appearance: none; background: none; border: 0; cursor: pointer;
+  display: grid; place-items: center;
+  inline-size: 30px; block-size: 30px; border-radius: var(--radius-round);
+  color: var(--color-rule-strong);
+  transition: color var(--dur-micro) var(--ease-out), transform var(--dur-micro) var(--ease-out);
+}
+.find__go svg { inline-size: 15px; block-size: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.find:focus-within .find__go, .find__go:hover { color: var(--color-accent); }
+.find__go:hover { transform: translateX(2px); }
+
+.brand {
+  display: flex; align-items: center; gap: var(--space-xs);
+  text-decoration: none; color: inherit; min-inline-size: 0; flex: 0 0 auto;
+}
+.brand__glyph { inline-size: 1.7em; block-size: 1.7em; flex: 0 0 auto; }
+.brand__glyph circle { fill: var(--color-ink); }
+.brand__mover { fill: var(--color-accent); }
+.brand__track { stroke: var(--color-accent-dim); stroke-width: 1.4; stroke-linecap: round; fill: none; }
+.brand__text { display: grid; min-inline-size: 0; }
+.brand strong {
+  font-family: var(--font-display); font-weight: 600;
+  font-size: var(--text-md); letter-spacing: 0.03em; line-height: 1.1;
+}
+.brand__tag { font-size: var(--text-xs); color: var(--color-neutral); line-height: 1.3; }
+
+/* The search takes the slack in the middle, over the frame it will fill. */
+.mast__sep {
+  inline-size: var(--rule-hair); block-size: 1em;
+  background: var(--color-rule); align-self: center;
+}
+.mast__acts { display: flex; align-items: center; gap: var(--space-md); flex: 0 0 auto; }
+/* A transient line about the search takes its own row rather than squeezing
+   the field it is about. */
+.find-note { flex: 1 1 100%; order: 9; }
+
+/* ================================================================= verdict */
+
+/*
+ * The label, the finding, the figures.
+ *
+ * The finding leads. You pressed the name of the field to get here, so the name
+ * is the label on the plate — set small, in monospace, the way an observation
+ * is labelled — and the headline is what was found, which is the one thing you
+ * did not already know.
+ */
+/* Label, finding, what it rests on, figures. Across the top at the measure it
+   is set at: pushed into the middle column it squeezed the frame into a third
+   of the page and left the other half empty. */
+.verdict {
+  display: grid; gap: var(--space-sm);
+  padding-block: var(--space-md) var(--space-lg);
+  min-inline-size: 0;
+}
+
+.label {
+  display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: var(--space-2xs) var(--space-md);
+  font-size: var(--text-xs); line-height: 1.5;
+  color: var(--color-rule-strong);
+}
+.label__name {
+  font-family: var(--font-record); font-size: var(--text-md);
+  color: var(--color-muted); font-weight: 500; letter-spacing: 0;
+}
+.label__when { color: var(--color-accent-dim); letter-spacing: 0.08em; }
+.label__pos { overflow-wrap: anywhere; }
+
+/* The finding, in the reading face, at the size a finding deserves. A result
+   is a sentence; set in a condensed grotesque it read like a scoreboard. */
+.verdict__line {
+  font-family: var(--font-record);
+  font-size: clamp(1.3rem, 1.55vw, 1.75rem); font-weight: 500;
+  line-height: 1.15; letter-spacing: -0.012em;
+  text-wrap: balance;
+}
+/* Still reading: said in the grey, because it is not yet an answer. */
+.verdict__line[data-state="reading"] { color: var(--color-muted); font-size: var(--text-md); }
+.verdict__line:empty { display: none; }
+/* Something moved: the second hue exists for exactly this, and it is the
+   difference between a result and the absence of one. */
+.verdict__line[data-found="true"] { color: var(--color-counter); }
+
+.verdict__more {
+  font-size: var(--text-sm); color: var(--color-muted);
+  line-height: 1.45; max-inline-size: 64ch;
+  padding-block-start: var(--space-3xs);
+}
+.verdict__more:empty { display: none; }
+
+/* What the finding rests on, as a ledger: the name of each figure on the
+   left in the reading face, the figure on the right in the measured one, so
+   the numbers line up in a column and can be read down it. */
+.facts {
+  display: grid; grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--space-2xs) var(--space-md);
+  margin: 0;
+}
+.facts:empty { display: none; }
+.facts > div { display: contents; }
+.facts dt { font-size: var(--text-xs); color: var(--color-neutral); line-height: 1.6; }
+.facts dd {
+  font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.6;
+  color: var(--color-ink); text-align: end; overflow-wrap: anywhere;
+}
+.facts dd[data-tone="accent"] { color: var(--color-accent); }
+.verdict__cue { max-inline-size: 62ch; }
+
+/* ================================================================== columns */
+
+.side {
+  display: grid; gap: 0; align-content: start;
+  padding: 0 var(--gutter) var(--space-xl);
+  min-inline-size: 0; min-block-size: 0;
+  overflow-y: auto; overscroll-behavior: contain; overflow-anchor: none;
+  scrollbar-width: thin; scrollbar-color: var(--color-rule) transparent;
+}
+.side::-webkit-scrollbar { inline-size: 5px; }
+.side::-webkit-scrollbar-thumb { background: var(--color-rule); border-radius: var(--radius-round); }
+.side::-webkit-scrollbar { inline-size: 6px; }
+.side::-webkit-scrollbar-thumb { background: var(--color-rule); border-radius: var(--radius-round); }
+
+/* A part of a column: a hairline across the whole column, a head, then the
+   content. The rules run edge to edge so the column reads as one ruled sheet
+   with sections on it — the short accent dash floating over each heading read
+   as four loose labels rather than as a column. */
+.part {
+  display: grid; gap: var(--space-xs); min-inline-size: 0;
+  padding-block: var(--space-md) var(--space-lg);
+  border-block-start: var(--rule-hair) solid var(--color-rule-soft);
+}
+.side > .part:first-child { border-block-start: 0; }
+
+/* The head: the section's name on the left, and at the right the answer it
+   carries in figures, so the column can be scanned down its right edge. */
+.part__head {
+  display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+  gap: var(--space-3xs) var(--space-sm); min-inline-size: 0;
+}
+/* A long name keeps its line; the figure drops under it rather than breaking it. */
+.part__head .part__k { flex: 0 0 auto; }
+.part__head .part__count { margin-inline-start: auto; }
+/* A section names itself in the reading face, in sentence case. Letterspaced
+   uppercase on every block was the loudest generated tell in the whole design,
+   and it said nothing that the words did not. */
+.part__k {
+  font-family: var(--font-record);
+  font-size: var(--text-md); font-weight: 500; letter-spacing: -0.005em;
+  color: var(--color-ink);
+}
+.part__count {
+  font-size: var(--text-xs); color: var(--color-neutral);
+  white-space: nowrap;
+}
+.part__count:empty { display: none; }
+.part__count[data-tone="accent"] { color: var(--color-accent); }
+.part__count[data-tone="counter"] { color: var(--color-counter); }
+.part > .btn, .part > .link { justify-self: start; max-inline-size: 100%; }
+.part > .btn { overflow: hidden; }
+
+/* Run it again: a quiet line of its own at the foot of the section. It runs
+   by itself when a field arrives, so pressing it is the exception. */
+.again {
+  appearance: none; cursor: pointer; font: inherit;
+  justify-self: start;
+  display: inline-flex; align-items: center; gap: var(--space-2xs);
+  padding: var(--space-3xs) 0;
+  background: none; border: 0;
+  font-size: var(--text-xs); color: var(--color-neutral);
+  border-block-end: var(--rule-hair) solid transparent;
+  transition: color var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out);
+}
+/* A spinner only while it is actually searching; at rest a ring with a gap
+   read as the letter C. */
+.again[data-busy="true"]::before {
+  content: ""; inline-size: 0.8em; block-size: 0.8em; flex: 0 0 auto;
+  border: 1.5px solid currentColor; border-inline-end-color: transparent;
+  border-radius: var(--radius-round);
+}
+.again:hover:not(:disabled) { color: var(--color-ink); border-block-end-color: var(--color-accent); }
+.again:disabled { color: var(--color-rule-strong); cursor: default; }
+.again[data-busy="true"]::before { animation: turn 900ms linear infinite; }
+@keyframes turn { to { transform: rotate(1turn); } }
+
+.note { font-size: var(--text-sm); color: var(--color-accent); line-height: 1.5; }
+.note--dim { color: var(--color-neutral); }
+.note:empty { display: none; }
+.cue { font-size: var(--text-sm); color: var(--color-muted); min-inline-size: 0; }
+.hint { font-size: var(--text-sm); color: var(--color-neutral); min-block-size: 1.4em; }
+
+.credit {
+  font-family: var(--font-mono); font-size: 10px;
+  color: var(--color-rule-strong); line-height: 1.55;
+  white-space: pre-line;
+  padding-block-start: var(--space-md);
+  border-block-start: var(--rule-hair) solid var(--color-rule-soft);
+  padding-block-start: var(--space-md);
+  border-block-start: var(--rule-hair) solid var(--color-rule-soft);
+}
+
+/* -------------------------------------------------------------------- depth */
+
+/* The limit is one number, so it is set as one: large, in the measured face,
+   with its unit. The sentence under it says what kind of number it is, and the
+   scale under that says how far it is from the thing being looked for. */
+.depth__figure { display: flex; align-items: baseline; gap: var(--space-2xs); line-height: 1; }
+.depth__mag {
+  font-size: var(--text-2xl); font-weight: 500; letter-spacing: -0.06em;
+  color: var(--color-ink);
+}
+.depth__unit { font-size: var(--text-sm); color: var(--color-neutral); }
+.depth__said { font-size: var(--text-sm); color: var(--color-muted); line-height: 1.45; }
+.depth__reach { line-height: 1.5; }
+
+/* Magnitudes, brighter to the left. The bar is how deep this field went; the
+   band is where Planet X is predicted to sit. The gap between them is the
+   whole of what this field could not rule out. */
+.depth__scale { display: block; inline-size: 100%; block-size: auto; overflow: visible; margin-block: var(--space-2xs); }
+.depth__track { fill: var(--color-paper-3); }
+.depth__reached { fill: var(--color-accent); }
+/* The prediction is a range, drawn as a bar in the second hue on the same
+   line as the reach — dimmed amber on navy only ever read as brown. */
+.depth__target { fill: var(--color-counter); opacity: 0.85; }
+.depth__target-edge { stroke: var(--color-counter); stroke-width: 1.5; }
+.depth__pin { stroke: var(--color-ink); stroke-width: 1.5; }
+.depth__tick { stroke: var(--color-rule); stroke-width: 1; }
+.depth__axis { fill: var(--color-rule-strong); font-family: var(--font-mono); font-size: 10px; }
+.depth__label { font-family: var(--font-body); font-size: 11px; }
+.depth__label--here { fill: var(--color-accent); }
+.depth__label--target { fill: var(--color-counter); }
+
+/* ---------------------------------------------------------- how it is drawn */
+
+.row {
+  display: flex; flex-wrap: wrap; align-items: center;
+  justify-content: space-between; gap: var(--space-2xs) var(--space-sm);
+  font-size: var(--text-sm); color: var(--color-neutral);
+  min-block-size: 32px; min-inline-size: 0;
+}
+/* Name and value on one line, the track under them — the label and the number
+   it reports belong together, not two rows apart. */
+.row--slider .range { flex: 1 1 100%; }
+/* Shrink before overflowing, and take a line of its own rather than push
+   the label off the edge. */
+.row .field--compact { flex: 1 1 7rem; min-inline-size: 6rem; max-inline-size: 100%; }
+.row > span:first-child { flex: 0 1 auto; min-inline-size: 0; }
+.row .num { color: var(--color-muted); }
+#tools .segments { inline-size: 100%; }
+
+/* Which two dates the wipe and the difference compare. Under the modes that
+   use them, not folded into a settings panel three sections away. */
+.compare {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: var(--space-xs) var(--space-lg);
+  padding: var(--space-xs) var(--space-md);
+  background: var(--color-paper-2);
+  border: var(--rule-hair) solid var(--color-rule-soft);
+  border-radius: var(--radius-md);
+}
+.compare .row { flex: 1 1 12rem; }
+.slot {
+  display: inline-grid; place-items: center;
+  inline-size: 20px; block-size: 20px; border-radius: var(--radius-xs);
+  font-family: var(--font-mono); font-size: var(--text-xs);
+  color: var(--color-accent-ink); background: var(--color-accent);
+}
+.slot--b { background: var(--color-counter); }
+
+/* The settings, under the thing they turn. */
+.tools {
+  display: grid; gap: var(--space-xs) var(--space-lg);
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  inline-size: min(100%, 46rem); margin-inline: auto;
+  max-block-size: 34dvh; overflow-y: auto; overscroll-behavior: contain;
+  padding: var(--space-md) var(--space-lg);
+  background: var(--color-paper-2);
+  border: var(--rule-hair) solid var(--color-rule-soft);
+  border-radius: var(--radius-lg);
+  animation: unfold var(--dur-short) var(--ease-out);
+  min-inline-size: 0;
+}
+.tools .segments, .tools .pills, .tools .compare { grid-column: 1 / -1; }
+/* Record, the archive link, and the bare view: things you reach for once in a
+   session, so they live at the foot of the panel rather than in the row under
+   the plate where they were four of six competing links. */
+.tools__acts {
+  grid-column: 1 / -1;
+  display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: var(--space-sm) var(--space-lg);
+  padding-block-start: var(--space-sm);
+  border-block-start: var(--rule-hair) solid var(--color-rule-soft);
+}
+@keyframes unfold { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+
+/* ====================================================================== run */
+
+/*
+ * Every observation at once.
+ *
+ * A strip rather than a scrubber, because the information in this data is in
+ * the differences between frames and a scrubber shows one frame at a time by
+ * design. Its own surface, across the foot of the page, so the run reads as one
+ * object rather than as a control bar.
+ */
+.run {
+  display: grid; gap: var(--space-3xs);
+  padding: var(--space-xs) var(--gutter) var(--space-sm);
+  padding-block-end: calc(var(--space-sm) + env(safe-area-inset-bottom, 0px));
+  min-block-size: 0;
+  background: var(--rec-mount);
+  border-block-start: var(--rule-hair) solid var(--color-rule-soft);
+  min-inline-size: 0;
+}
+.run__head {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: var(--space-2xs) var(--space-lg);
+}
+/* Транспорт и режимы — у ленты: идти по времени там, где время нарисовано. */
+.run__head .deck {
+  margin-inline-start: auto; margin-block: 0; padding-block: 0;
+  border-block-start: 0; flex: 0 1 auto;
+  gap: var(--space-2xs) var(--space-lg); justify-content: flex-end;
+}
+.run__head .compare { flex: 1 1 100%; }
+.run__k {
+  font-family: var(--font-record);
+  font-size: var(--text-md); font-weight: 500; letter-spacing: -0.005em;
+  color: var(--color-ink);
+}
+.run__found { font-size: var(--text-sm); color: var(--color-accent); }
+.run__found[data-calm="true"] { color: var(--color-neutral); }
+.run__axes { font-size: var(--text-xs); color: var(--color-rule-strong); margin-inline-start: auto; }
+.run__hint { font-size: var(--text-xs); color: var(--color-muted); }
+.run__canvas { display: block; inline-size: 100%; }
+.run__scale {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: var(--space-2xs) var(--space-sm);
+  font-size: var(--text-xs); color: var(--color-rule-strong);
+  min-inline-size: 0;
+}
+.run__scale .matrix__ramp { flex: 0 0 auto; }
+
+/* =================================================================== centre */
+
+/*
+ * The two facts that change with every step, above the thing they describe.
+ * Which date this exposure is, and at what wavelength — the rest of the record
+ * is the same from one step to the next and stays in the headline.
+ */
+/*
+ * The label of the exposure, in a column to the left of the plate: when, at
+ * what time, in what light, which of how many — and at its foot, where. Set in
+ * the measured face, because every one of them is a reading. Beside the plate
+ * rather than above and below it, so none of it costs the picture height.
+ */
+.caption {
+  grid-area: cap;
+  display: grid; align-content: start; gap: var(--space-2xs);
+  grid-template-rows: auto auto auto 1fr;
+  min-inline-size: 0; block-size: 100%;
+  padding-block: var(--space-2xs);
+}
+.when { display: grid; gap: var(--space-3xs); }
+.when__date {
+  font-family: var(--font-mono); font-size: var(--text-lg);
+  font-weight: 500; letter-spacing: -0.02em; line-height: 1.15;
+  color: var(--color-ink);
+}
+.when__time { font-size: var(--text-xs); color: var(--color-neutral); }
+.when__band { font-size: var(--text-xs); color: var(--color-accent); padding-block-start: var(--space-xs); }
+.when__of { font-size: var(--text-xs); color: var(--color-neutral); }
+.when__of:empty, .when__band:empty { display: none; }
+.under__pos {
+  align-self: end;
+  font-size: var(--text-xs); line-height: 1.6; color: var(--color-rule-strong);
+  white-space: pre-line;
+}
+
+/*
+ * Step, frame, step.
+ *
+ * Moving through time is the main verb of this page, so it sits either side of
+ * the subject, where the eye already is. Each step is the full height of the
+ * plate, so it is found without aiming; what shows is a round key and the date
+ * it leads to.
+ */
+.step {
+  appearance: none; cursor: pointer; font: inherit;
+  display: grid; justify-items: center; align-content: center; gap: var(--space-xs);
+  inline-size: 100%; block-size: 100%; padding: 0;
+  background: none; border: 0; border-radius: var(--radius-md);
+  color: var(--color-muted);
+  transition: background-color var(--dur-short) var(--ease-out);
+}
+.step--prev { grid-area: prev; }
+.step--next { grid-area: next; }
+.step__key {
+  display: grid; place-items: center;
+  inline-size: 44px; block-size: 44px;
+  border: var(--rule-hair) solid var(--color-rule);
+  border-radius: var(--radius-round);
+  background: var(--color-paper);
+  transition: color var(--dur-micro) var(--ease-out),
+              border-color var(--dur-micro) var(--ease-out),
+              background-color var(--dur-micro) var(--ease-out),
+              transform var(--dur-short) var(--ease-out);
+}
+.step svg {
+  inline-size: 20px; block-size: 20px;
+  fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round;
+}
+/* The word went: an arrow that carries a date needs no caption. */
+.step__d { font-size: var(--text-xs); color: var(--color-neutral); white-space: nowrap; min-block-size: 1.5em; }
+.step:hover:not(:disabled) {
+  background: linear-gradient(to var(--lean, left), transparent, color-mix(in oklab, var(--color-paper-2) 70%, transparent));
+}
+.step--next { --lean: right; }
+.step:hover:not(:disabled) .step__key {
+  color: var(--color-accent-ink); background: var(--color-accent); border-color: var(--color-accent);
+}
+.step:hover:not(:disabled) .step__d { color: var(--color-accent); }
+/* The key leans the way it takes you. */
+.step--prev:hover:not(:disabled) .step__key { transform: translateX(-3px); }
+.step--next:hover:not(:disabled) .step__key { transform: translateX(3px); }
+.step:not(:disabled):active .step__key { transform: scale(0.94); }
+.step:disabled { cursor: default; }
+.step:disabled .step__key { color: var(--color-rule); border-color: var(--color-rule-soft); background: none; }
+.step:disabled .step__d { visibility: hidden; }
+.step:focus-visible { outline: none; }
+.step:focus-visible .step__key { outline: 2px solid var(--color-focus); outline-offset: 3px; }
+
+/* The wavebands, as one chip each. SPHEREx takes six of them and the choice
+   between them is a headline control, not a preference in a settings panel. */
+.lambda { display: flex; flex-wrap: wrap; gap: var(--space-2xs); }
+.lambda__chip {
+  appearance: none; cursor: pointer; font: inherit;
+  padding: var(--space-3xs) var(--space-sm);
+  font-family: var(--font-mono); font-size: var(--text-xs);
+  color: var(--color-neutral);
+  background: none;
+  border: var(--rule-hair) solid var(--color-rule);
+  border-radius: var(--radius-round);
+  white-space: nowrap;
+  transition: color var(--dur-micro) var(--ease-out),
+              border-color var(--dur-micro) var(--ease-out),
+              background-color var(--dur-micro) var(--ease-out);
+}
+.lambda__chip:hover { color: var(--color-ink); border-color: var(--color-neutral); }
+.lambda__chip[aria-pressed="true"] {
+  color: var(--color-accent-ink); background: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.stage {
+  display: grid; overflow: hidden auto; overscroll-behavior: contain;
+  /* The room takes the slack; the settings panel, when it is open, is as tall
+     as it needs to be. The room keeps a floor, so on a short window the open
+     panel scrolls under the picture instead of crushing it to a sliver. */
+  grid-template-rows: minmax(min(100%, 16rem), 1fr) auto;
+  scrollbar-width: thin; scrollbar-color: var(--color-rule) transparent;
+  gap: var(--space-xs);
+  padding: var(--space-sm) var(--gutter);
+  min-block-size: 0; min-inline-size: 0;
+}
+/* The room the mount stands in. It is measured, so the plate can be sized from
+   whichever of its two sides is short — the height on a wide screen, the width
+   on a narrow one — instead of from a guess at what the rest of the page takes. */
+.room {
+  container-type: size;
+  display: grid; place-items: center;
+  min-block-size: 0; min-inline-size: 0;
+}
+.stage__head {
+  display: flex; flex-wrap: wrap; align-items: center;
+  gap: var(--space-xs) var(--space-md); min-block-size: 30px;
+}
+.stage__head .cue { flex: 1 1 12rem; }
+
+/* Two views, one box. Both children sit in the same grid cell so switching
+   between them never moves the frame. */
+/* The frame is given a height rather than handed the remainder.
+   Sized by the remainder it collapsed to a seven-to-one letterbox whenever the
+   headline ran to three lines, and a picture that shape shows a strip of a
+   field that is square. The page scrolls if the window is too short for it;
+   that is the right trade — the picture is the subject. */
+/*
+ * The mount.
+ *
+ * A photograph in an observatory record is held in a mount, and the mount
+ * carries the annotation. That is why the date and the waveband sit on it
+ * rather than floating above the page: they belong to this exposure, not to
+ * the field, and they change with every step.
+ *
+ * Two registration marks rather than four — a corner tick at each end of the
+ * diagonal reads as a mount and four reads as a decoration.
+ */
+.mount {
+  /* Everything on the board but the plate has a fixed width; the plate is the
+     largest picture of the field's own shape that the room has left after
+     them. The shape, --aspect, is set when the field is cut, and the field is
+     cut to the room: a square field on a wide screen left a band of empty
+     board either side of it, and the fix for empty space around a picture is
+     more picture, not wider margins. */
+  --pad: var(--space-md);
+  --gap: var(--space-xs);
+  --cap: 11.5rem;
+  --step: 4.25rem;
+  --bandw: 6.75rem;
+  --aspect: 1;
+  --fixed: calc(var(--cap) + 2 * var(--step) + var(--bandw) + 4 * var(--gap) + 2 * var(--pad));
+  --avail-w: calc(100cqw - var(--fixed));
+  --avail-h: calc(100cqh - 2 * var(--pad));
+  --plate-h: max(12rem, min(var(--avail-h), calc(var(--avail-w) / var(--aspect)), 62rem));
+  --plate-w: calc(var(--plate-h) * var(--aspect));
+
+  position: relative;
+  display: grid;
+  /* The label, a step back, the plate, a step on, the filter wheel — one row,
+     as tall as the plate and no taller. */
+  grid-template-columns: var(--cap) var(--step) var(--plate-w) var(--step) var(--bandw);
+  grid-template-rows: var(--plate-h);
+  grid-template-areas: "cap prev cell next bands";
+  gap: var(--gap);
+  padding: var(--pad);
+  background: var(--rec-mount);
+  border-radius: var(--radius-lg);
+}
+.mount::before, .mount::after {
+  content: ""; position: absolute;
+  inline-size: 12px; block-size: 12px;
+  border: 0 solid var(--rec-tick);
+  pointer-events: none;
+}
+.mount::before {
+  inset-block-start: 9px; inset-inline-start: 9px;
+  border-block-start-width: var(--rule-hair); border-inline-start-width: var(--rule-hair);
+}
+.mount::after {
+  inset-block-end: 9px; inset-inline-end: 9px;
+  border-block-end-width: var(--rule-hair); border-inline-end-width: var(--rule-hair);
+}
+
+/* The plate takes the shape of the field, which is square, and the height the
+   column has left; its width follows from that. A square picture in a wide box
+   is a square picture with a thousand pixels of black either side of it. */
+.stage__cell {
+  grid-area: cell;
+  display: grid; min-inline-size: 0; min-block-size: 0;
+  inline-size: var(--plate-w); block-size: var(--plate-h);
+}
+.bands { grid-area: bands; align-self: center; }
+.bands .lambda { flex-direction: column; align-items: stretch; gap: var(--space-2xs); }
+.bands .lambda__chip { text-align: center; padding-block: var(--space-2xs); }
+/* A short room makes a short plate, and seven chips in a column are taller
+   than it; the wheel folds into two columns rather than hang off the board. */
+@container (max-height: 18.5rem) {
+  .bands .lambda { display: grid; grid-template-columns: 1fr 1fr; }
+  .bands .lambda__chip { padding-inline: 0; }
+  .bands .lambda__chip:first-child { grid-column: 1 / -1; }
+}
+.stage__cell > * { grid-area: 1 / 1; min-block-size: 0; min-inline-size: 0; }
+
+/* The plate itself: square-cornered, sunk into the mount, and the darkest
+   thing on screen — it is a photograph of the night and everything around it
+   is paper. */
+.plate {
+  position: relative; margin: 0;
+  background: var(--color-well);
+  border-radius: var(--radius-xs);
+  overflow: hidden;
+  box-shadow: var(--plate-rim);
+}
+/* Out of flow: see the note at the head of this file. */
+#sky {
+  position: absolute; inset: 0;
+  display: block; cursor: crosshair; touch-action: none;
+}
+.plate[data-mode="wipe"] #sky { cursor: ew-resize; }
+
+/* The card for whatever the pointer is on. The panel's own surface and type,
+   small, never in the way of the pointer. */
+.tip {
+  position: absolute; z-index: var(--z-tooltip);
+  max-inline-size: 30ch; pointer-events: none;
+  display: grid; gap: 2px;
+  padding: var(--space-2xs) var(--space-xs);
+  background: var(--color-paper-2);
+  border: var(--rule-hair) solid var(--color-rule-strong);
+  border-radius: var(--radius-xs);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.35);
+}
+.tip__title { font-family: var(--font-display); font-size: var(--text-sm); font-weight: 500; color: var(--color-ink); line-height: 1.2; }
+.tip__row { font-size: var(--text-xs); color: var(--color-muted); line-height: 1.4; }
+.tip__row:last-child:not(:first-child) { color: var(--color-neutral); }
+
+.plate__state {
+  position: absolute; inset: 0; z-index: var(--z-raised);
+  display: grid; place-content: center; justify-items: center;
+  gap: var(--space-md); padding: var(--space-xl); text-align: center;
+  background: var(--color-scrim);
+}
+.plate__state-line { font-size: var(--text-md); color: var(--color-muted); max-inline-size: 38ch; }
+
+.meter {
+  inline-size: min(260px, 60vw); block-size: 3px;
+  background: var(--color-paper-4); border-radius: var(--radius-round); overflow: hidden;
+}
+.meter__fill {
+  display: block; block-size: 100%; inline-size: 100%;
+  background: var(--color-accent);
+  transform: scaleX(0); transform-origin: left;
+  transition: transform var(--dur-short) var(--ease-out);
+}
+
+/* Time down, sectors across, lit where a sector stopped looking like itself.
+   It gets the frame's whole box, which is the only size at which twenty
+   columns of ten can be compared by eye. */
+.gridview {
+  display: grid; grid-template-rows: minmax(0, 1fr) auto; gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  background: var(--color-paper-2);
+  border: var(--rule-hair) solid var(--color-rule-soft);
+  border-radius: var(--radius-lg);
+}
+.matrix__grid { display: block; inline-size: 100%; block-size: auto; }
+.matrix__cell { fill: var(--color-accent); transition: stroke var(--dur-micro) var(--ease-out); }
+.matrix__cell:not(.matrix__cell--void) { cursor: pointer; }
+.matrix__cell:not(.matrix__cell--void):hover { stroke: var(--color-ink); stroke-width: 0.8; }
+.matrix__cell:focus-visible { outline: none; stroke: var(--color-focus); stroke-width: 1.2; }
+/* No coverage is not the same answer as nothing happened, so it is drawn as an
+   absence rather than as a quiet reading. */
+.matrix__cell--void { fill: var(--color-rule-soft); opacity: 0.4; }
+.matrix__row { fill: var(--color-neutral); font-family: var(--font-mono); }
+.matrix__found { font-size: var(--text-md); color: var(--color-accent); line-height: 1.35; }
+.matrix__found[data-calm="true"] { color: var(--color-neutral); }
+.matrix__scale {
+  display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2xs);
+  font-size: var(--text-xs); color: var(--color-neutral);
+}
+.matrix__ramp {
+  flex: 1 1 6rem; block-size: 4px; border-radius: var(--radius-round);
+  background: linear-gradient(to right,
+    color-mix(in oklab, var(--color-accent) 6%, transparent), var(--color-accent));
+}
+.matrix__axes { color: var(--color-rule-strong); flex: 1 1 100%; }
+
+/* The caption under the plate: the switch, what the cursor is over, and what
+   this exposure is. Hairline above it, the way a caption is ruled off. */
+/*
+ * Over the photograph, not under it.
+ *
+ * A brightness is a property of one pixel, and the pixel is under the hand, so
+ * the figure is written there — over the darkest corner of the frame, on a
+ * gradient that keeps it legible without a panel. It appears when there is a
+ * reading to show, which also retires the line that used to sit below the
+ * picture telling you to point at it.
+ */
+.scan {
+  position: absolute; inset-inline: 0; inset-block-end: 0;
+  z-index: var(--z-raised);
+  display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: var(--space-3xs) var(--space-lg);
+  padding: var(--space-xl) var(--space-sm) var(--space-2xs);
+  background: linear-gradient(to top, var(--scan-fade), transparent);
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--dur-micro) var(--ease-out);
+}
+.plate:hover .scan, .scan:has(.hint[hidden]) { opacity: 1; }
+.readout { display: flex; flex-wrap: wrap; gap: var(--space-2xs) var(--space-lg); min-inline-size: 0; }
+.readout > div { display: flex; align-items: baseline; gap: var(--space-2xs); min-inline-size: 0; }
+.readout dt { font-size: var(--text-xs); color: var(--color-neutral); white-space: nowrap; }
+.readout dd { font-size: var(--text-xs); color: var(--color-ink); overflow-wrap: anywhere; }
+
+/* The survey's cadence, drawn to real dates: the clusters are the story. */
+/* An axis is a line with marks on it. The filled, rounded panel it used to sit
+   in was a box drawn around a line, which is one object more than the page
+   needed. */
+.axis {
+  position: relative; inline-size: 100%; min-inline-size: 0; block-size: 54px;
+  padding-inline: var(--space-2xs);
+}
+.axis__svg { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; display: block; }
+.axis__scrub {
+  position: absolute; inset-inline: 0; inset-block-start: 8px;
+  inline-size: 100%; block-size: 28px;
+  appearance: none; background: none; margin: 0; cursor: pointer;
+}
+.axis__scrub::-webkit-slider-runnable-track { block-size: 28px; background: none; }
+.axis__scrub::-moz-range-track { block-size: 28px; background: none; }
+.axis__scrub::-webkit-slider-thumb { appearance: none; inline-size: 16px; block-size: 28px; background: none; border: 0; }
+.axis__scrub::-moz-range-thumb { inline-size: 16px; block-size: 28px; background: none; border: 0; }
+.axis__scrub:disabled { cursor: default; }
+.axis__empty {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  font-size: var(--text-sm); color: var(--color-neutral);
+}
+
+.tick { fill: var(--color-neutral); }
+.tick--pending { fill: var(--color-rule-strong); }
+.tick--reading { fill: var(--color-accent-dim); }
+.tick--dropped { fill: var(--color-rule); }
+.tick--current { fill: var(--color-accent); }
+.tick--a { fill: var(--color-accent); }
+.tick--b { fill: var(--color-counter); }
+.axis__base { stroke: var(--color-rule); stroke-width: 1; }
+.axis__grid { stroke: var(--color-rule-soft); stroke-width: 1; }
+.axis__label {
+  fill: var(--color-neutral); font-family: var(--font-display);
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em;
+}
+.axis__now { fill: var(--color-accent); font-family: var(--font-mono); font-size: 11px; }
+.axis__slot { fill: var(--color-accent-ink); font-family: var(--font-mono); font-size: 9px; }
+
+/* ===================================================================== deck */
+
+.deck {
+  display: flex; flex-wrap: wrap; align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2xs) var(--space-lg); min-inline-size: 0;
+  padding-block-start: var(--space-2xs);
+  margin-block-start: var(--space-2xs);
+  border-block-start: var(--rule-hair) solid var(--color-rule-soft);
+}
+.keys { display: flex; gap: var(--space-2xs); flex: 0 0 auto; }
+/* Under the modes, in the board's own margin. */
+.mount > .cue { font-size: var(--text-xs); line-height: 1.5; }
+.deck__acts {
+  display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: var(--space-xs) var(--space-md);
+  margin-inline-start: auto; flex: 0 1 auto; min-inline-size: 0;
+  font-size: var(--text-xs);
+}
+.deck > .num { flex: 1 1 100%; order: 6; }
+
+.key {
+  appearance: none; display: grid; place-items: center;
+  inline-size: 32px; block-size: 32px;
+  background: none;
+  border: var(--rule-hair) solid var(--color-rule);
+  border-radius: var(--radius-round);
+  color: var(--color-muted); cursor: pointer;
+  transition: color var(--dur-micro) var(--ease-out),
+              background-color var(--dur-micro) var(--ease-out),
+              border-color var(--dur-micro) var(--ease-out),
+              transform var(--dur-micro) var(--ease-out);
+}
+/* 16px on a 16-unit drawing, so the icon sits on whole pixels in the round
+   key: at 15px it landed on a half pixel and was rounded up and to the left.
+   Round joins, or the sharp tip of the play triangle ran almost a pixel past
+   its drawing and pulled it off to the right. */
+.key svg { inline-size: 16px; block-size: 16px; fill: currentColor; stroke: currentColor; stroke-linejoin: round; }
+.key:hover { color: var(--color-ink); background: var(--color-paper-4); border-color: var(--color-neutral); }
+.key:active { transform: translateY(1px); }
+.key:disabled { color: var(--color-rule-strong); cursor: not-allowed; background: var(--color-paper-2); }
+.key--play { color: var(--color-accent); border-color: var(--color-accent-dim); }
+.key--play:hover { color: var(--color-accent-ink); background: var(--color-accent); border-color: var(--color-accent); }
+.key--play:disabled { color: var(--color-rule-strong); background: var(--color-paper-2); border-color: var(--color-rule); }
+.key__pause { display: none; }
+body[data-playing="true"] .key__play { display: none; }
+body[data-playing="true"] .key__pause { display: block; }
+
+/* ================================================================= Hunter X */
+
+/* A list of things that move, slowest first, because slow is far. */
+.cands { display: grid; gap: var(--space-xs); }
+.cand {
+  display: grid; gap: var(--space-3xs); min-inline-size: 0;
+  padding: var(--space-xs) 0 var(--space-xs) var(--space-sm);
+  border-inline-start: var(--rule-bold) solid var(--color-rule);
+}
+/* Unrecognised is the interesting case, so it is the one that gets colour. */
+.cand:has(.cand__where[data-known="false"]) { border-inline-start-color: var(--color-accent); }
+.cand__where {
+  font-family: var(--font-display); font-size: var(--text-md);
+  font-weight: 500; line-height: 1.15; color: var(--color-muted);
+}
+.cand__where[data-known="false"] { color: var(--color-accent); }
+.cand__rate { font-size: var(--text-xs); color: var(--color-ink); }
+.cand__id { font-size: var(--text-xs); color: var(--color-neutral); }
+.cand__go { justify-self: start; font-size: var(--text-xs); }
+/* The second list in the hunt, flashes, named in the same reading face as the
+   section, a step smaller: a sub-heading, not a new section. */
+.cands__head {
+  font-family: var(--font-record); font-size: var(--text-sm); font-weight: 500;
+  color: var(--color-ink); margin-block-start: var(--space-xs);
+}
+.cands:empty { display: none; }
+/* The unnamed flashes share one card; each date under it goes to its visit. */
+.cand__dates { display: flex; flex-wrap: wrap; gap: var(--space-3xs) var(--space-sm); }
+.cand__dates .cand__go { font-family: var(--font-mono); }
+
+/* ==================================================================== marks */
+
+.marks { display: grid; }
+.mark {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--space-sm);
+  align-items: start; padding-block: var(--space-xs);
+  border-block-end: var(--rule-hair) solid var(--color-rule-soft);
+}
+.mark:last-child { border-block-end: 0; }
+.mark__n {
+  font-family: var(--font-mono); font-size: var(--text-xs);
+  inline-size: 22px; block-size: 22px; display: grid; place-items: center;
+  border: var(--rule-hair) solid var(--color-rule-strong);
+  border-radius: var(--radius-round); color: var(--color-muted);
+}
+.mark__body { min-inline-size: 0; display: grid; gap: var(--space-3xs); }
+/* The answer, in the type the rest of the interface uses for answers. */
+.mark__call {
+  font-family: var(--font-display);
+  font-size: var(--text-md); font-weight: 500;
+  line-height: 1.15; color: var(--color-muted);
+}
+/* The two verdicts worth looking at twice get the signal colour. */
+.mark__call[data-kind="transient"],
+.mark__call[data-kind="moving"] { color: var(--color-accent); }
+.mark__detail { font-size: var(--text-xs); color: var(--color-muted); line-height: 1.45; }
+.mark__pos { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-rule-strong); overflow-wrap: anywhere; }
+.mark__id { font-size: var(--text-xs); color: var(--color-neutral); }
+.mark__id[data-known="false"] { color: var(--color-accent); }
+/* Who a still source is, from SIMBAD or Gaia; the name links to the catalogue. */
+.mark__who { font-size: var(--text-xs); color: var(--color-muted); line-height: 1.45; overflow-wrap: anywhere; }
+.mark__who-name { color: var(--color-ink); text-decoration: underline; text-decoration-color: var(--color-rule-strong); text-underline-offset: 2px; }
+.mark__who-name:hover { text-decoration-color: currentColor; }
+/* Magnitudes in a row read as figures, so they wear the figure face. */
+.mark__phot { font-family: var(--font-mono); color: var(--color-neutral); }
+.mark__kill {
+  appearance: none; background: none; border: 0; padding: var(--space-3xs);
+  color: var(--color-neutral); cursor: pointer; font-size: var(--text-md); line-height: 1;
+  min-inline-size: 28px; min-block-size: 28px; border-radius: var(--radius-round);
+  transition: color var(--dur-micro) var(--ease-out), background-color var(--dur-micro) var(--ease-out);
+}
+.mark__kill:hover { color: var(--color-ink); background: var(--color-paper-3); }
+
+.curve { inline-size: 100%; block-size: auto; max-inline-size: 13rem; margin-block: var(--space-2xs); display: block; }
+.curve__base { stroke: var(--color-rule); stroke-width: 1; }
+.curve__bar { fill: var(--color-accent); }
+.curve__miss { fill: var(--color-rule-strong); }
+
+/* =============================================================== where else */
+
+/* Hairlines throughout: it is a reference, not a picture, and it sits under a
+   label that is already doing the talking. */
+.locator { display: block; inline-size: 100%; block-size: auto; margin-block: var(--space-2xs); overflow: visible; }
+.locator__rim { fill: var(--color-well); stroke: var(--color-rule); stroke-width: 0.012; }
+.locator__grid { fill: none; stroke: var(--color-rule-soft); stroke-width: 0.008; }
+/* The one line on this map that explains the data: SPHEREx's cadence and every
+   asteroid it can catch are both organised around the ecliptic. */
+.locator__ecliptic {
+  fill: none; stroke: var(--color-muted); stroke-width: 0.016;
+  stroke-dasharray: 0.07 0.05; opacity: 0.55;
+}
+.locator__label {
+  fill: var(--color-muted); font-family: var(--font-display);
+  font-size: 0.18px; text-transform: uppercase; letter-spacing: 0.02em; opacity: 0.6;
+}
+/* The record of what has been examined: a soft wash under the markers, so
+   coverage reads as area rather than as more dots. */
+.locator__seen { fill: var(--color-rule-strong); opacity: 0.55; }
+.locator__field { fill: var(--color-muted); opacity: 0.75; }
+.locator__hit { fill: transparent; cursor: pointer; }
+.locator__hit:hover + .locator__field,
+.locator__field:has(+ .locator__hit:hover) { fill: var(--color-ink); opacity: 1; }
+.locator__hit:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 1px; }
+.locator__here { fill: var(--color-accent); }
+.locator__here-ring { fill: none; stroke: var(--color-accent); stroke-width: 0.022; opacity: 0.6; }
+
+.presets { display: flex; flex-wrap: wrap; gap: var(--space-2xs); }
+.preset {
+  display: inline-flex; align-items: baseline; gap: var(--space-xs);
+  appearance: none; cursor: pointer; font: inherit;
+  padding: var(--space-2xs) var(--space-sm);
+  border-radius: var(--radius-round);
+  border: var(--rule-hair) solid var(--color-rule);
+  background: var(--color-paper-2); color: var(--color-muted);
+  white-space: nowrap;
+  transition: color var(--dur-micro) var(--ease-out),
+    background-color var(--dur-micro) var(--ease-out),
+    border-color var(--dur-micro) var(--ease-out);
+}
+.preset:hover { color: var(--color-ink); background: var(--color-paper-3); border-color: var(--color-neutral); }
+.preset:active { transform: translateY(1px); }
+.preset:disabled { color: var(--color-rule-strong); border-color: var(--color-rule-soft); cursor: not-allowed; }
+.preset[aria-current="true"] { color: var(--color-accent-ink); background: var(--color-accent); border-color: var(--color-accent); }
+.preset__name { font-size: var(--text-sm); }
+.preset__why { display: none; }
+.preset__n { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-neutral); }
+.preset[aria-current="true"] .preset__n { color: var(--color-accent-ink); opacity: 0.75; }
+
+/* ================================================================ expansion */
+
+/* H drops both columns and the masthead; the frame takes the window. Nothing
+   is being hidden from over the image — there was never anything over it. */
+@media (min-width: 64.0625rem) and (min-height: 34.0625rem) {
+  body[data-bare="true"] .shell {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: "stage";
+  }
+  /* The run goes too: left on screen it took implicit grid tracks of its own
+     and squeezed the stage to no width at all, so the "sky only" view showed
+     everything except the sky. */
+  body[data-bare="true"] :is(.mast, .side, .verdict, .run) { display: none; }
+  body[data-bare="true"] .stage { grid-template-rows: minmax(0, 1fr); gap: 0; padding: 0; }
+  body[data-bare="true"] :is(.stage__head, .scan, .axis, .deck, .caption, .bands) { display: none; }
+  /* Bare, the board is the plate and its two steps and nothing else. */
+  body[data-bare="true"] .mount {
+    --pad: 0px; --fixed: calc(2 * var(--step) + 2 * var(--gap));
+    grid-template-columns: var(--step) var(--plate-w) var(--step);
+    grid-template-areas: "prev cell next";
+    background: none;
+  }
+  body[data-bare="true"] .mount::before, body[data-bare="true"] .mount::after { display: none; }
+  body[data-bare="true"] .plate { border: 0; border-radius: 0; }
+  body[data-bare="true"] .stamp,
+  body[data-bare="true"] .restore { display: block; }
+}
+
+/* In an expanded sky these are the only two things on screen: which visit this
+   is, and the way back. The tool is about time, and a frame with no date is
+   just a picture. */
+.stamp {
+  position: fixed; z-index: var(--z-toast);
+  inset-block-end: calc(env(safe-area-inset-bottom, 0px) + var(--space-md));
+  inset-inline-start: var(--gutter);
+  display: none;
+  font-family: var(--font-mono); font-size: var(--text-xs);
+  color: var(--color-accent); text-shadow: var(--shade-text);
+  pointer-events: none;
+}
+
+.restore {
+  position: fixed; z-index: var(--z-toast);
+  inset-block-end: calc(env(safe-area-inset-bottom, 0px) + var(--space-md));
+  inset-inline-end: var(--gutter);
+  display: none;
+  appearance: none; cursor: pointer; font: inherit;
+  padding: var(--space-2xs) var(--space-sm);
+  border-radius: var(--radius-round);
+  border: var(--rule-hair) solid var(--color-rule);
+  background: var(--color-paper-2); color: var(--color-neutral);
+  font-size: var(--text-xs); letter-spacing: 0.04em;
+  opacity: 0.55;
+  transition: opacity var(--dur-short) var(--ease-out), color var(--dur-short) var(--ease-out);
+}
+.restore:hover { opacity: 1; color: var(--color-ink); border-color: var(--color-neutral); }
+
+#bare[aria-pressed="true"] { color: var(--color-accent); }
+
+/* ================================================================= controls */
+
+.field {
+  appearance: none; min-inline-size: 0;
+  background: var(--color-paper-2);
+  border: var(--rule-hair) solid var(--color-rule-strong);
+  color: var(--color-ink);
+  font: inherit; font-size: var(--text-sm);
+  padding: var(--space-xs) var(--space-sm);
+  min-block-size: 40px; border-radius: var(--radius-sm);
+  box-shadow: var(--shade-sunk);
+  transition: border-color var(--dur-micro) var(--ease-out), background-color var(--dur-micro) var(--ease-out);
+}
+.field::placeholder { color: var(--color-neutral); }
+.field:hover { border-color: var(--color-neutral); }
+.field:focus { border-color: var(--color-accent); background: var(--color-paper-3); }
+.field:disabled { color: var(--color-neutral); cursor: not-allowed; }
+
+select.field {
+  padding-inline-end: var(--space-xl);
+  background-image: linear-gradient(45deg, transparent 50%, var(--color-neutral) 50%),
+                    linear-gradient(135deg, var(--color-neutral) 50%, transparent 50%);
+  background-position: right 14px center, right 9px center;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+}
+.field--compact {
+  min-block-size: 30px; padding-block: 0;
+  padding-inline: var(--space-xs) var(--space-lg);
+  font-size: var(--text-xs); color: var(--color-muted);
+}
+select.field--compact { background-position: right 9px center, right 5px center; }
+
+.btn {
+  appearance: none;
+  display: inline-grid; place-items: center;
+  min-block-size: 40px; padding-inline: var(--space-md);
+  border: var(--rule-hair) solid transparent;
+  font: inherit; font-size: var(--text-sm); font-weight: 500;
+  text-decoration: none; white-space: nowrap; cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background-color var(--dur-micro) var(--ease-out),
+              color var(--dur-micro) var(--ease-out),
+              border-color var(--dur-micro) var(--ease-out),
+              transform var(--dur-micro) var(--ease-out);
+}
+.btn--primary { background: var(--color-accent); color: var(--color-accent-ink); }
+.btn--primary:hover { background: var(--color-focus); }
+.btn--primary:active { transform: translateY(1px); }
+.btn--primary:disabled { background: var(--color-paper-3); color: var(--color-neutral); cursor: not-allowed; transform: none; }
+
+.btn--quiet {
+  background: var(--color-paper-3); color: var(--color-muted);
+  border-color: var(--color-rule-strong); box-shadow: var(--shade-raise);
+}
+.btn--quiet:hover { color: var(--color-ink); border-color: var(--color-neutral); background: var(--color-paper-4); }
+.btn--quiet:active { transform: translateY(1px); }
+.btn--quiet:disabled { color: var(--color-rule-strong); border-color: var(--color-rule); cursor: not-allowed; transform: none; }
+.btn[data-state="busy"] { color: var(--color-accent); border-color: var(--color-accent-dim); cursor: progress; }
+.btn[data-state="done"] { color: var(--color-accent); border-color: var(--color-accent); }
+
+.link {
+  appearance: none; background: none; border: 0; padding: 0;
+  font: inherit; font-size: var(--text-sm); color: var(--color-muted);
+  cursor: pointer; white-space: nowrap;
+  border-block-end: var(--rule-hair) solid transparent;
+  transition: color var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out);
+}
+.link:hover { color: var(--color-ink); border-block-end-color: var(--color-accent); }
+.link:active { color: var(--color-accent); }
+.link:disabled { color: var(--color-rule-strong); cursor: not-allowed; }
+.link--lang {
+  letter-spacing: 0.1em; font-weight: 500;
+  border: var(--rule-hair) solid var(--color-rule-strong);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3xs) var(--space-xs);
+  min-block-size: 30px;
+}
+.link--lang:hover { border-color: var(--color-accent); color: var(--color-accent); }
+#matrix-open { color: var(--color-accent); }
+
+/* Four words, with the live one underlined. A filled four-button track is the
+   most default control there is, and this page has four of everything else
+   drawn as plainly as possible. */
+.segments {
+  display: flex; gap: var(--space-md);
+  border: 0; background: none; border-radius: 0;
+  margin: 0; padding: 0; min-inline-size: 0; flex: 0 1 auto; flex-wrap: wrap;
+}
+.segment {
+  position: relative; flex: 0 0 auto;
+  display: grid; place-items: center;
+  min-block-size: 28px; padding: 0 0 var(--space-3xs);
+  font-size: var(--text-sm); color: var(--color-rule-strong);
+  cursor: pointer; white-space: nowrap;
+  border-block-end: var(--rule-bold) solid transparent;
+  transition: color var(--dur-micro) var(--ease-out),
+              border-color var(--dur-micro) var(--ease-out);
+}
+.segments--tiny { gap: var(--space-sm); }
+.segments--tiny .segment { min-block-size: 26px; font-size: var(--text-xs); }
+/* The input stays inside the label's own box, so focusing it never scrolls. */
+.segment input { position: absolute; inset: 0; appearance: none; margin: 0; opacity: 0; cursor: pointer; }
+.segment:hover { color: var(--color-ink); }
+.segment:has(input:checked) { color: var(--color-ink); border-block-end-color: var(--color-accent); }
+.segment:has(input:focus-visible) { outline: 2px solid var(--color-focus); outline-offset: 3px; }
+.segment:has(input:disabled) { color: var(--color-rule-soft); cursor: not-allowed; }
+
+.pills { display: flex; flex-wrap: wrap; gap: var(--space-2xs); }
+.pill {
+  position: relative;
+  display: inline-flex; align-items: center; gap: var(--space-2xs);
+  min-block-size: 30px; padding-inline: var(--space-sm);
+  font-size: var(--text-sm); color: var(--color-neutral);
+  border: var(--rule-hair) solid var(--color-rule);
+  border-radius: var(--radius-round);
+  cursor: pointer; white-space: nowrap;
+  transition: color var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out);
+}
+.pill input { position: absolute; inset: 0; appearance: none; margin: 0; opacity: 0; cursor: pointer; }
+.pill::before {
+  content: ""; inline-size: 5px; block-size: 5px; flex: 0 0 auto;
+  background: var(--color-rule-strong); border-radius: var(--radius-round);
+  transition: background-color var(--dur-micro) var(--ease-out);
+}
+.pill:hover { color: var(--color-ink); border-color: var(--color-neutral); }
+.pill:has(input:checked) { color: var(--color-ink); border-color: var(--color-muted); }
+.pill:has(input:checked)::before { background: var(--color-accent); }
+.pill:has(input:focus-visible) { outline: 2px solid var(--color-focus); outline-offset: 1px; }
+
+.range { appearance: none; inline-size: 100%; block-size: 20px; background: none; cursor: pointer; margin: 0; }
+.range::-webkit-slider-runnable-track { block-size: 3px; background: var(--color-paper-4); border-radius: var(--radius-round); }
+.range::-moz-range-track { block-size: 3px; background: var(--color-paper-4); border-radius: var(--radius-round); }
+.range::-webkit-slider-thumb { appearance: none; inline-size: 12px; block-size: 12px; margin-block-start: -5px; background: var(--color-accent); border: 0; border-radius: var(--radius-round); }
+.range::-moz-range-thumb { inline-size: 12px; block-size: 12px; background: var(--color-accent); border: 0; border-radius: var(--radius-round); }
+.range:hover::-webkit-slider-thumb { background: var(--color-focus); }
+.range:hover::-moz-range-thumb { background: var(--color-focus); }
+.range:disabled::-webkit-slider-thumb { background: var(--color-rule-strong); }
+.range:disabled::-moz-range-thumb { background: var(--color-rule-strong); }
+
+/* ==================================================================== sheet */
+
+.sheet {
+  border: var(--rule-hair) solid var(--color-rule-strong);
+  background: var(--color-paper-2); color: var(--color-ink);
+  padding: 0; max-inline-size: min(62ch, 92vw); margin: auto;
+  border-radius: var(--radius-lg); max-block-size: 88dvh;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-rule) transparent;
+}
+.sheet::-webkit-scrollbar { inline-size: 6px; }
+.sheet::-webkit-scrollbar-thumb { background: var(--color-rule); border-radius: var(--radius-round); }
+.sheet__title:focus-visible { outline: none; }
+.sheet::backdrop { background: var(--color-backdrop); }
+.sheet__body { display: grid; gap: var(--space-md); padding: var(--space-xl); }
+.sheet__title { font-size: var(--text-xl); font-weight: 500; letter-spacing: 0.005em; line-height: 1.15; }
+.sheet__body p { color: var(--color-muted); max-inline-size: 60ch; }
+.sheet__rule { inline-size: 100%; block-size: 0; border: 0; border-block-start: var(--rule-hair) solid var(--color-rule-soft); margin: 0; }
+.sheet__fine { font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.7; color: var(--color-neutral); }
+.sheet__body .btn { justify-self: start; }
+
+/* =============================================================== responsive */
+
+/* A column either side of the frame needs a window wide enough for three
+   things. Below that they stack, in reading order: the frame first, then what
+   was found, then the field and the knobs that draw it. */
+@media (max-width: 68rem), (max-height: 34rem) {
+  /* Pinned to the viewport, the columns scroll inside it. Stacked, the page
+     itself is the scroller — and it has to be the ONLY one, or a phone scrolls
+     the inner one to its end before the outer one moves at all. */
+  /* Вертикально страница снова листается, горизонтально — никогда. */
+  html, body { block-size: auto; overflow: visible; overflow-x: clip; }
+  /* Шапка в телефоне: строка поиска берёт свой ряд, действия переносятся. */
+  .find { flex: 1 1 100%; order: 3; }
+  .find-note { order: 4; }
+  .mast__acts { flex-wrap: wrap; min-inline-size: 0; }
+  .mast__sep { display: none; }
+  .run__scale { justify-content: flex-start; }
+  .run__axes { margin-inline-start: 0; }
+  .side { overflow: visible; }
+  .tools { max-block-size: none; overflow: visible; }
+  /* Stacked, the page scrolls and has no height to share out; only the width
+     is measured, and the plate takes it between the two steps. */
+  .room { container-type: inline-size; }
+  .mount {
+    --pad: var(--space-sm);
+    --step: 2.75rem;
+    --plate-w: min(calc(100cqw - 2 * var(--step) - 2 * var(--gap) - 2 * var(--pad)), calc(72svh * var(--aspect)));
+    --plate-h: calc(var(--plate-w) / var(--aspect));
+    inline-size: 100%;
+    grid-template-columns: var(--step) var(--plate-w) var(--step);
+    grid-template-rows: auto var(--plate-h) auto;
+    grid-template-areas: "cap cap cap" "prev cell next" "bands bands bands";
+    justify-content: center;
+  }
+  .caption { grid-template-rows: none; grid-auto-flow: row; block-size: auto; }
+  .under__pos { white-space: normal; }
+  .step__key { inline-size: 36px; block-size: 36px; }
+  .step__d { display: none; }
+  .run__head .deck { margin-inline-start: 0; flex: 1 1 100%; justify-content: flex-start; }
+  .bands .lambda { flex-direction: row; flex-wrap: wrap; justify-content: center; }
+  /* One column, in reading order: the finding first, then the picture it is
+     about, the run, and the rest of the findings. The finding lives inside the
+     findings column, so the column dissolves here and its parts are placed one
+     by one. */
+  .shell {
+    block-size: auto; min-block-size: 100svh;
+    display: flex; flex-direction: column;
+  }
+  .side { display: contents; }
+  .mast { order: 0; }
+  .verdict { order: 1; padding-block: var(--space-sm) var(--space-md); }
+  .stage { order: 2; }
+  .run { order: 3; }
+  .side > :not(.verdict) { order: 4; }
+  .side > * { background: var(--rec-panel); padding-inline: var(--gutter); }
+  .credit { padding-block-end: var(--space-xl); }
+  .stage { grid-template-rows: auto auto; }
+  .matrix__grid { max-inline-size: 26rem; margin-inline: auto; }
+  #bare { display: none; }
+}
+
+@media (max-width: 40rem) {
+  .brand__tag { display: none; }
+  .segment { padding-inline: var(--space-sm); font-size: var(--text-xs); }
+
+  /* One row of bar. The field went to the sky, which is one tap away and is a
+     better way around a phone than a box you have to type a designation into. */
+  .mast {
+    flex-wrap: wrap;
+    gap: var(--space-2xs) var(--space-sm);
+    padding-block: var(--space-xs);
+    padding-block-start: calc(var(--space-xs) + env(safe-area-inset-top, 0px));
+  }
+  .find, .find-note { display: none; }
+  .mast__acts {
+    flex: 1 1 100%; margin-inline-start: 0; justify-content: flex-start;
+    flex-wrap: wrap; gap: var(--space-2xs) var(--space-md);
+  }
+  .mast__acts .link { font-size: var(--text-xs); }
+
+  .deck .segments { inline-size: 100%; }
+  /* And the picture takes what the bar gave back. */
+}
+
+/* The switch above the frame has nothing to switch between until the sectors
+   have been scored; until then it should not be holding a row open. */
+.stage__head:not(:has(#stage-switch:not([hidden]))):not(:has(.cue:not(:empty))) {
+  display: none;
+}
+
+@media (pointer: coarse) {
+  .btn, .key { min-block-size: 44px; }
+  .key { min-inline-size: 44px; }
+  .pill, .segment { min-block-size: 40px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 150ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 150ms !important;
+  }
+}
+
+/* One orchestrated entrance on first load — nothing fades in on scroll. */
+.mast, .side--left, .stage, .side--right {
+  animation: settle var(--dur-long) var(--ease-out) backwards;
+  animation-delay: calc(var(--i, 0) * 70ms);
+}
+.side--left { --i: 1; }
+.stage { --i: 2; }
+.side--right { --i: 3; }
+
+@keyframes settle {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mast, .side--left, .stage, .side--right { animation: fade 150ms linear backwards; }
+  @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+}
+
+/* ==================================================================== gate */
+
+/*
+ * The way in. The sky is the page: the canvas is the whole window and the only
+ * things over it are a wordmark, a line of instruction, a search, and the label
+ * that follows the pointer. No hero panel, no card, no scrim over the middle —
+ * whatever is put on top of a picture is a thing standing in front of it.
+ */
+body[data-gate="open"] { overflow: hidden; }
+body[data-gate="open"] .shell { display: none; }
+
+.gate {
+  position: fixed; inset: 0; z-index: var(--z-modal);
+  display: grid;
+  background: var(--color-well);
+  overflow: hidden;
+}
+.gate__sky {
+  position: absolute; inset: 0;
+  inline-size: 100%; block-size: 100%;
+  display: block;
+  cursor: grab;
+  /* The sky is dragged, so the browser must not try to scroll or zoom on it. */
+  touch-action: none;
+}
+/* Darkens the corners so the type has a ground without a panel under it. */
+.gate__vignette {
+  position: absolute; inset: 0; pointer-events: none;
+  background:
+    radial-gradient(120% 90% at 50% 45%, transparent 45%, oklch(6% 0.02 250 / 0.55) 100%),
+    linear-gradient(to top, oklch(6% 0.02 250 / 0.88) 0%, transparent 42%),
+    linear-gradient(to bottom, oklch(6% 0.02 250 / 0.7) 0%, transparent 22%);
+}
+
+/*
+ * The poster.
+ *
+ * One mark, one line under it, one rule, one instruction, one line to type on,
+ * and a short manifest of what is ready. Set against the sky rather than on a
+ * panel: a panel here would be a rectangle of paint over the only thing worth
+ * looking at, and type carries its own ground with a shadow for free.
+ */
+.gate__poster {
+  position: relative; z-index: 2;
+  align-self: end; justify-self: start;
+  display: grid; gap: var(--space-xs);
+  inline-size: min(28rem, calc(100% - var(--gutter) * 2));
+  margin: var(--gutter);
+  margin-block-end: calc(var(--gutter) + env(safe-area-inset-bottom, 0px));
+}
+.gate__mark { display: flex; align-items: center; gap: var(--space-xs); }
+.gate__glyph { inline-size: 1.5em; block-size: 1.5em; flex: 0 0 auto; }
+.gate__glyph circle { fill: var(--color-ink); }
+.gate__word {
+  font-family: var(--font-display); font-weight: 600;
+  font-size: var(--text-2xl); letter-spacing: 0.05em; line-height: 1;
+  text-shadow: var(--shade-text);
+}
+.gate__tag {
+  font-size: var(--text-sm); color: var(--color-muted);
+  padding-block-end: var(--space-sm);
+  border-block-end: var(--rule-hair) solid var(--color-rule);
+  text-shadow: var(--shade-text);
+}
+.gate__lede {
+  font-size: var(--text-md); color: var(--color-ink);
+  line-height: 1.45; max-inline-size: 34ch;
+  padding-block-start: var(--space-2xs);
+  text-shadow: var(--shade-text);
+}
+
+/* A line to type on, not a box to fill in. Over a picture a filled control is
+   a hole cut in it; a rule under the text is not. */
+.gate__find {
+  display: flex; align-items: center; gap: var(--space-xs);
+  border-block-end: var(--rule-bold) solid var(--color-rule-strong);
+  transition: border-color var(--dur-short) var(--ease-out);
+  margin-block-start: var(--space-2xs);
+}
+.gate__find:focus-within { border-block-end-color: var(--color-accent); }
+.gate__input {
+  flex: 1 1 auto; min-inline-size: 0;
+  appearance: none; background: none; border: 0; padding: var(--space-xs) 0;
+  font: inherit; font-size: var(--text-md); color: var(--color-ink);
+  text-shadow: var(--shade-text);
+}
+.gate__input::placeholder { color: var(--color-neutral); }
+.gate__input:focus { outline: none; }
+.gate__go {
+  appearance: none; background: none; border: 0; cursor: pointer;
+  display: grid; place-items: center;
+  inline-size: 34px; block-size: 34px; border-radius: var(--radius-round);
+  color: var(--color-neutral);
+  transition: color var(--dur-micro) var(--ease-out),
+              transform var(--dur-micro) var(--ease-out);
+}
+.gate__go svg { inline-size: 17px; block-size: 17px; fill: none; stroke: currentColor; stroke-width: 1.6; }
+.gate__find:focus-within .gate__go, .gate__go:hover { color: var(--color-accent); }
+.gate__go:hover { transform: translateX(2px); }
+.gate__go:active { transform: translateX(0); }
+
+.gate__known { display: grid; gap: var(--space-2xs); padding-block-start: var(--space-xs); }
+/* The count is a column with a heading, not a word repeated on every row. */
+.gate__known-head {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: var(--space-sm);
+}
+.gate__known-k {
+  font-family: var(--font-body);
+  font-size: var(--text-xs); font-weight: 500;
+  text-transform: uppercase; letter-spacing: 0.16em;
+  color: var(--color-neutral); text-shadow: var(--shade-text);
+}
+
+/* A manifest, not a chip cloud: the count is the reason to choose one, and a
+   count needs a column to be compared in. */
+.manifest { display: grid; }
+.manifest__row {
+  inline-size: 100%;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline; gap: var(--space-xs);
+  appearance: none; background: none; cursor: pointer; font: inherit;
+  padding: var(--space-2xs) var(--space-2xs) var(--space-2xs) 0;
+  border: 0; border-block-end: var(--rule-hair) solid var(--color-rule-soft);
+  color: var(--color-muted); text-align: start;
+  transition: color var(--dur-micro) var(--ease-out),
+              padding-inline-start var(--dur-short) var(--ease-out),
+              border-color var(--dur-micro) var(--ease-out);
+}
+.manifest li:last-child .manifest__row { border-block-end: 0; }
+.manifest__row:hover {
+  color: var(--color-ink); padding-inline-start: var(--space-xs);
+  border-block-end-color: var(--color-rule);
+}
+.manifest__row:active { transform: translateY(1px); }
+.manifest__name {
+  font-size: var(--text-sm); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; text-shadow: var(--shade-text);
+}
+.manifest__n { font-size: var(--text-sm); color: var(--color-accent); }
+.manifest__k { font-size: var(--text-xs); color: var(--color-neutral); }
+
+/* One line, and the provenance behind it. */
+.gate__src { padding-block-start: var(--space-2xs); }
+.gate__src summary {
+  font-size: var(--text-xs); color: var(--color-rule-strong);
+  cursor: pointer; list-style: none; inline-size: fit-content;
+  transition: color var(--dur-micro) var(--ease-out);
+}
+.gate__src summary::-webkit-details-marker { display: none; }
+.gate__src summary::after {
+  content: " \203A"; display: inline-block;
+  transition: transform var(--dur-short) var(--ease-out);
+}
+.gate__src[open] summary::after { transform: rotate(90deg); }
+.gate__src summary:hover { color: var(--color-neutral); }
+.gate__fine {
+  font-family: var(--font-mono); font-size: var(--text-xs);
+  color: var(--color-rule-strong); line-height: 1.6;
+  padding-block-start: var(--space-2xs); max-inline-size: 46ch;
+}
+
+/* The label rides with the pointer: a rule against the thing, then its name. */
+.gate__pin {
+  position: absolute; z-index: 3; pointer-events: none;
+  display: grid; gap: 1px;
+  transform: translate(var(--space-md), calc(-50% - 1.1em));
+  padding-inline-start: var(--space-xs);
+  border-inline-start: var(--rule-bold) solid var(--color-accent);
+  animation: pin var(--dur-short) var(--ease-out);
+}
+.gate__pin[data-flip="true"] {
+  transform: translate(calc(-100% - var(--space-md)), calc(-50% - 1.1em));
+  border-inline-start: 0;
+  border-inline-end: var(--rule-bold) solid var(--color-accent);
+  padding-inline: 0 var(--space-xs); text-align: end;
+}
+.gate__pin-name {
+  font-family: var(--font-display); font-size: var(--text-md); font-weight: 500;
+  line-height: 1.15; text-shadow: var(--shade-text); letter-spacing: 0.01em;
+}
+.gate__pin-sub { font-size: var(--text-xs); color: var(--color-muted); text-shadow: var(--shade-text); }
+@keyframes pin {
+  from { opacity: 0; transform: translate(var(--space-sm), calc(-50% - 1.1em)); }
+}
+
+/*
+ * Falling through.
+ *
+ * The travel itself is drawn in the canvas — stars streak because they are
+ * re-projected, not because anything is blurred. All that is left for CSS is
+ * the type: it is not in the sky, so it goes before the sky starts moving
+ * rather than sliding across it.
+ */
+.gate[data-entering="true"] { pointer-events: none; }
+.gate[data-entering="true"] :is(.gate__poster, .gate__vignette) {
+  animation: dim 260ms var(--ease-in) forwards;
+}
+@keyframes dim { to { opacity: 0; } }
+
+/*
+ * Arriving. The frame comes in from very slightly too big, which is the end of
+ * the same movement — you were travelling toward it and you stop.
+ */
+body[data-gate="closed"] .stage__cell { animation: land 520ms var(--ease-out) backwards; }
+body[data-gate="closed"] :is(.mast, .side--left, .side--right) {
+  animation: settle 420ms var(--ease-out) backwards;
+  animation-delay: 160ms;
+}
+@keyframes land {
+  from { opacity: 0; transform: scale(1.08); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gate[data-entering="true"] :is(.gate__poster, .gate__vignette) {
+    animation-duration: 120ms;
+  }
+  body[data-gate="closed"] :is(.stage__cell, .mast, .side--left, .side--right) { animation: none; }
+}
+
+@media (max-width: 48rem) {
+  .gate__poster {
+    inline-size: calc(100% - var(--gutter) * 2);
+    gap: var(--space-2xs);
+  }
+  .gate__word { font-size: var(--text-xl); }
+  /* Sixteen pixels or iOS zooms the page in on focus and leaves it there. */
+  .gate__input { font-size: 16px; padding-block: var(--space-sm); }
+  .gate__go { inline-size: 44px; block-size: 44px; }
+  /* A thumb is on the sky, not beside it: the label goes above the poster
+     rather than trying to ride a pointer that is under a finger. */
+  /* Parked at the top: clear of the poster, and clear of the hand. */
+  .gate__pin {
+    inset-inline: var(--gutter) auto;
+    inset-block: calc(var(--gutter) + env(safe-area-inset-top, 0px)) auto;
+    transform: none;
+    max-inline-size: calc(100% - var(--gutter) * 2);
+  }
+  .gate__pin[data-flip="true"] {
+    transform: none; text-align: start;
+    border-inline: var(--rule-bold) solid var(--color-accent) 0;
+    padding-inline: var(--space-xs) 0;
+  }
+}
+
+/* ==================================================================== theme */
+
+/* Night and day, one key: the icon shows where it takes you. */
+.theme-key {
+  appearance: none; cursor: pointer;
+  display: grid; place-items: center;
+  inline-size: 34px; block-size: 34px; padding: 0;
+  background: none; color: var(--color-muted);
+  border: var(--rule-hair) solid var(--color-rule);
+  border-radius: var(--radius-round);
+  transition: color var(--dur-micro) var(--ease-out), border-color var(--dur-micro) var(--ease-out),
+              transform var(--dur-short) var(--ease-out);
+}
+.theme-key svg { inline-size: 17px; block-size: 17px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
+.theme-key:hover:not(:disabled) { color: var(--color-accent); border-color: var(--color-accent); transform: rotate(-18deg); }
+/* While the sky changes, the key turns slowly with it and takes no second press. */
+.theme-key:disabled { cursor: default; color: var(--color-accent); border-color: var(--color-accent-dim); }
+.theme-key:disabled svg { animation: turn 3.6s linear; }
+.theme-key .to-day { display: block; }
+.theme-key .to-night { display: none; }
+:root[data-theme="light"] .theme-key .to-day { display: none; }
+:root[data-theme="light"] .theme-key .to-night { display: block; }
+
+/*
+ * The change itself, drawn by twilight.js over a View Transition.
+ *
+ * The browser freezes the outgoing page as ::view-transition-old(root) and
+ * paints the new one live underneath; the script clips the old snapshot away
+ * along a moving horizon, so both themes stay readable on either side of it.
+ * Its own default cross-fade would wash the two together, so it goes.
+ *
+ * A transition lives as long as some animation runs on its layers, and with
+ * the cross-fade gone there would be none — Chrome could close it on the first
+ * frame, before the clip is attached. This one does nothing but exist, from the
+ * first frame, and the script finishes it when the horizon is past the top.
+ */
+@keyframes vt-hold { from { opacity: 1; } to { opacity: 1; } }
+::view-transition-old(root) { animation: vt-hold 30s linear forwards; mix-blend-mode: normal; z-index: 1; }
+::view-transition-new(root) { animation: none; mix-blend-mode: normal; z-index: 0; }
+/* Without this the incoming snapshot lies over the outgoing one and buries the
+   whole effect; isolation is what lets the two z-indexes mean anything. */
+::view-transition-image-pair(root) { isolation: auto; }
+
+/* The light, the stars and the shadow are painted on a canvas above both
+   themes. Named, so the transition carries it as a layer of its own on top
+   rather than inside the new page under the old one. */
+.twilight {
+  position: fixed; inset: 0; z-index: 3000;
+  inline-size: 100vw; block-size: 100vh;
+  pointer-events: none;
+  view-transition-name: twilight;
+}
+::view-transition-group(twilight),
+::view-transition-old(twilight),
+::view-transition-new(twilight) { animation: none; }
+::view-transition-group(twilight) { z-index: 2; }
+
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*), ::view-transition-old(root), ::view-transition-new(root) { animation: none !important; }
+}

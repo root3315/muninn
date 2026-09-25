@@ -1,0 +1,81 @@
+{
+  "generated": "2026-09-18",
+  "note": "Visit counts come from IRSA SIA2 on the generated date. Frame indexes for these fields live in data/fields/ and are served without a round trip.",
+  "targets": [
+    {
+      "key": "atala",
+      "name": "(152) Atala · 25 Dec 2025",
+      "ra": 13.4194,
+      "dec": 3.8459,
+      "fov": 0.3,
+      "band": "D2",
+      "why": {
+        "en": "An asteroid sits dead centre on one visit only.",
+        "ru": "Астероид стоит в центре ровно в одном заходе."
+      },
+      "visits": 15,
+      "spanDays": 369,
+      "truncated": false
+    },
+    {
+      "key": "nep",
+      "name": "North Ecliptic Pole",
+      "ra": 269.7,
+      "dec": 66.56,
+      "fov": 0.3,
+      "band": "all",
+      "why": {
+        "en": "The most-visited patch of sky there is.",
+        "ru": "Самый посещаемый кусок неба."
+      },
+      "visits": 157,
+      "spanDays": 449,
+      "truncated": true
+    },
+    {
+      "key": "sep",
+      "name": "South Ecliptic Pole",
+      "ra": 90,
+      "dec": -66.56,
+      "fov": 0.3,
+      "band": "all",
+      "why": {
+        "en": "The southern deep field, same cadence.",
+        "ru": "Южное глубокое поле, тот же темп."
+      },
+      "visits": 174,
+      "spanDays": 449,
+      "truncated": true
+    },
+    {
+      "key": "m51",
+      "name": "M51 · Whirlpool",
+      "ra": 202.4696,
+      "dec": 47.1953,
+      "fov": 0.45,
+      "band": "all",
+      "why": {
+        "en": "A control field — nothing here should move.",
+        "ru": "Контрольное поле — здесь ничто не движется."
+      },
+      "visits": 44,
+      "spanDays": 410,
+      "truncated": false
+    },
+    {
+      "key": "m42",
+      "name": "M42 · Orion Nebula",
+      "ra": 83.8221,
+      "dec": -5.3911,
+      "fov": 0.45,
+      "band": "all",
+      "why": {
+        "en": "Bright and structured. Lower the white point.",
+        "ru": "Ярко и структурно. Опустите точку белого."
+      },
+      "visits": 27,
+      "spanDays": 193,
+      "truncated": false
+    }
+  ]
+}
