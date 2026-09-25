@@ -244,7 +244,7 @@ because the first version tripped over them:
 
 What survives is worth stating precisely. Over a 369-day baseline the astrometry
 reaches 0.002″ per hour, and Planet X needs 0.18–0.35″, so precision is not the
-obstacle. Two things are. **The brightness is out of reach** — 17.98 AB per
+obstacle. Two things are. **The brightness is out of reach** — 17.60 AB per
 visit against a prediction of V 22–25. And the tracker as built measures each
 place in a fixed box about ±12″ across, while a body at 400–800 AU shifts by
 8–17′ between SPHEREx's two visits a year: it follows a mover within one season,
@@ -256,42 +256,47 @@ That is a far more useful account than either "we found it" or "we cannot look".
 The challenge is named for Planet X, so the first honest thing to establish is
 whether SPHEREx could see it. That is one number, and `tools/sensitivity.mjs`
 measures it from delivered pixels rather than quoting a mission page: the robust
-sky noise of real frames, converted to flux through the 6.15″ pixel's solid
-angle, summed over a 3×3 aperture, stated as a 5σ point-source limit.
+sky noise of the detector's own pixels (after the pipeline's `FLAGS`), converted
+to flux through the 6.15″ pixel's solid angle, summed over a 3×3 aperture, stated
+as a 5σ point-source limit. An earlier version took the noise from the resampled
+grid, which bilinear interpolation smooths, and came out about 0.4 mag too deep.
 
 | | 5σ point source |
 | --- | --- |
-| one visit | **17.98 AB** (17.07 in D6 to 18.42 in D4) |
-| 10 visits stacked | 19.23 AB |
-| 100 visits | 20.48 AB |
-| 200 visits, deep field | 20.86 AB |
+| one visit | **17.60 AB** (16.68 in D6 to 18.04 in D4) |
+| 10 visits, if coadded | 18.85 AB |
+| 100 visits | 20.10 AB |
+| 200 visits, deep field | 20.47 AB |
 
 Planet Nine is predicted at V ≈ 22–25. Even coadding two hundred deep-field
-visits leaves us short by 1.1 magnitudes at the bright end of that range — a
-factor of 3 in flux — and 4.1 magnitudes at the faint end, a factor of 45. The
-comparison is generous to us as it stands: the prediction is in V, while SPHEREx
-works at 0.75–5 µm where a cold body reflects less.
+visits leaves us short by 1.5 magnitudes at the bright end of that range — a
+factor of 4 in flux — and 4.5 magnitudes at the faint end, a factor of 65. The
+prediction is in V and SPHEREx works at 0.75–5 µm: for a grey, sunlike reflector
+the two are within a few tenths of a magnitude, and a cold, methane-rich body
+reflects less in the infrared, which only widens the gap.
 
 **So this tool does not find Planet Nine, and says so on screen.** Every field it
-opens reports the depth it actually reached and what that rules out, computed
-from that field's own noise by `public/js/depth.js` — the same module the
+opens reports the depth it actually searched at — one visit, since nothing here
+coadds before looking — and what a coadd would add, computed from that field's own
+noise by `public/js/depth.js` — the same module the
 command-line tool uses, so the number in the interface and the number here cannot
 drift apart.
 
 What is left is a real search rather than a consolation prize:
 
-- **Slow movers brighter than ~18 AB per visit.** SPHEREx has only just begun
+- **Slow movers brighter than ~17.6 AB per visit.** SPHEREx has only just begun
   delivering and nobody has mined it for moving objects. That discovery space is
   open and unexamined.
 - **An upper limit.** A null result over a stated area at a stated depth is a
-  constraint, not a failure. The locator accumulates the fields examined, so the
-  coverage is a record rather than an impression.
+  constraint, not a failure. The depth panel keeps a count of the fields examined
+  in this browser and the square degrees they cover, so the coverage is a record
+  rather than an impression.
 - **A spectrum for anything found.** This is the part no other survey offers.
   Checking the real observing schedule of one field: on 25 Dec 2025 SPHEREx took
   it in D2, D3, D5 and D6 — four bands the same day — and the best three-day
   window covers all six, 0.75–5.01 µm. D4 (2.40–3.85 µm) and D5 (3.81–4.43 µm)
-  straddle the 3 µm water-ice band. Finding a moving object and asking what it is
-  made of are the same click.
+  straddle the 3 µm water-ice band. The viewer does not extract spectra yet; the
+  schedule says the data to do it are already there.
 
 ### Showing all of the frame
 
@@ -340,9 +345,10 @@ What comes back is a classification, not a fabricated trend:
 | --- | --- |
 | *nothing above the noise* | no 5σ peak in any visit |
 | *there on \<date\> and in none of the others* | exactly one detection |
-| *in N of M visits — \<dates\>* | two or three detections; the dates are listed, because two points always fit a line perfectly and quoting a scatter would be a number with no information in it |
-| *in N of M visits, steady to X″* | four or more, no significant motion |
-| *moving X″/h* | four or more, and a straight-line fit in time beats its own residual |
+| *in N of M visits — \<dates\>* | two or three detections, not in every visit; the dates are listed, because two points always fit a line perfectly and quoting a scatter would be a number with no information in it |
+| *in N of M visits, steady to X″* | four or more, not in every visit, no measurable motion |
+| *steady to X″* | in every visit, no measurable motion |
+| *moving X″/h* | three or more, and the straight-line motion across the baseline beats both a detector pixel and twice the fit's own residual. Hunter X is stricter and ranks a mover only from four detections |
 
 Brightness ranges are only reported when every detection came from the same band —
 position compares across bands, brightness does not.
@@ -408,8 +414,9 @@ of the image and read the verdict: one visit, named by SkyBoT as the asteroid.
 - **Brightness across bands is not comparable.** SPHEREx is a spectral survey with a linear
   variable filter; the wavelength at a given pixel depends on where it falls on the
   detector. The band filter and the per-band wavelength labels exist for this reason.
-- **Known-object marks are geocentric.** SPHEREx is in low-Earth orbit; the parallax against
-  a main-belt asteroid is far below one pixel, but it would matter for a close approach.
+- **Known-object marks are geocentric.** SPHEREx is in low-Earth orbit, about 7 000 km from
+  the Earth's centre, which shifts a main-belt asteroid by 3–7″ — up to about one pixel,
+  inside the two-pixel radius a SkyBoT match allows, but it would matter for anything closer.
 - **The centroid is simple.** Background annulus, peak, flux-weighted centre. It is honest
   about failing (it reports "nothing above the noise") but it is not PSF photometry.
 - **Cosmic rays look like transients.** They are single-frame, sharp, and common. The ones

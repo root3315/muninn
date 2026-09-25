@@ -38,10 +38,21 @@ export const STRETCHES = {
  * `hiPercent` is the user-facing knob — 99.5 keeps faint structure, 99.99 keeps
  * only the brightest cores from blowing out.
  */
-export function limits(data, { loPercent = 5, hiPercent = 99.5, floorSigma = 1 } = {}) {
-  // Typed and sorted natively, for the reason skySigma gives: a plain Array of
-  // two hundred thousand boxed numbers through a JS comparator took a quarter of
-  // a second per frame, and every frame was re-cut each time another arrived.
+export function limits(data, opts = {}) {
+  return limitsFromSorted(sortedFinite(data), opts);
+}
+
+/**
+ * The finite values of a frame, sorted. The expensive half of a cut, and it
+ * does not depend on the clip at all — so a visit sorts once and the white
+ * point slider only reads percentiles off it. Re-sorting ten frames on every
+ * step of the slider was about a second of frozen page per step.
+ *
+ * Typed and sorted natively, for the reason skySigma gives: a plain Array of
+ * two hundred thousand boxed numbers through a JS comparator took a quarter of
+ * a second per frame.
+ */
+export function sortedFinite(data) {
   const Buf = ArrayBuffer.isView(data) ? data.constructor : Float64Array;
   const all = new Buf(data.length);
   let n = 0;
@@ -49,9 +60,14 @@ export function limits(data, { loPercent = 5, hiPercent = 99.5, floorSigma = 1 }
     const v = data[i];
     if (v === v && v > -Infinity && v < Infinity) all[n++] = v;
   }
-  if (n < 8) return { lo: 0, hi: 1, valid: n };
   const valid = all.subarray(0, n);
   valid.sort();
+  return valid;
+}
+
+/** The cut, read off values already sorted by sortedFinite. */
+export function limitsFromSorted(valid, { loPercent = 5, hiPercent = 99.5, floorSigma = 1 } = {}) {
+  if (valid.length < 8) return { lo: 0, hi: 1, valid: valid.length };
   const at = (p) => valid[Math.min(valid.length - 1, Math.max(0, Math.round((p / 100) * (valid.length - 1))))];
   const median = at(50);
   const sigma = Math.max(median - at(15.87), 0);
@@ -143,17 +159,21 @@ export function paint(target, data, lut, {
  */
 export function paintDifference(target, a, b, lut, { sigmaSpan = 10, gamma = 1.9, blankAlpha = 0 } = {}) {
   const diff = new Float32Array(a.length).fill(NaN);
-  const sample = [];
+  // Typed and sorted natively: a boxed Array through a comparator made every
+  // new A/B pair a second of frozen page.
+  const all = new Float32Array(a.length);
+  let m = 0;
   for (let i = 0; i < a.length; i++) {
     if (a[i] === a[i] && b[i] === b[i]) {
       diff[i] = a[i] - b[i];
-      sample.push(Math.abs(diff[i]));
+      all[m++] = Math.abs(diff[i]);
     }
   }
-  if (!sample.length) return { image: target, scale: 0 };
-  sample.sort((x, y) => x - y);
+  if (!m) return { image: target, scale: 0 };
+  const sample = all.subarray(0, m);
+  sample.sort();
   // Median absolute deviation → a noise estimate that bright sources don't drag around.
-  const mad = sample[Math.floor(sample.length * 0.5)] || 1e-9;
+  const mad = sample[Math.floor(m * 0.5)] || 1e-9;
   const scale = Math.max(mad * 1.4826 * sigmaSpan, 1e-9);
 
   const px = target.data;

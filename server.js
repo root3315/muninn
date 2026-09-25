@@ -80,6 +80,13 @@ async function withTimeout(url, ms) {
 /* ------------------------------------------------------------------- caching */
 
 const memory = new Map();
+/** Answers kept in memory; the disk keeps the rest. Oldest out first. */
+const MEMORY_MAX = 256;
+/**
+ * Distinct positions being asked of IRSA at once. Behind a public tunnel a
+ * crawler could otherwise open as many slow archive queries as it liked.
+ */
+const INFLIGHT_MAX = 6;
 
 const cacheKey = (ra, dec, radius) =>
   `sia_${ra.toFixed(4)}_${dec.toFixed(4)}_${radius.toFixed(4)}`.replace(/[^\w.-]/g, '_');
@@ -92,15 +99,21 @@ async function readCache(key) {
     const info = await stat(file);
     if (Date.now() - info.mtimeMs > CACHE_TTL_MS) return null;
     const value = JSON.parse(await readFile(file, 'utf8'));
-    memory.set(key, { at: info.mtimeMs, value });
+    remember(key, { at: info.mtimeMs, value });
     return value;
   } catch {
     return null;
   }
 }
 
+function remember(key, entry) {
+  memory.delete(key);
+  memory.set(key, entry);
+  while (memory.size > MEMORY_MAX) memory.delete(memory.keys().next().value);
+}
+
 async function writeCache(key, value) {
-  memory.set(key, { at: Date.now(), value });
+  remember(key, { at: Date.now(), value });
   try {
     await mkdir(CACHE, { recursive: true });
     await writeFile(join(CACHE, `${key}.json`), JSON.stringify(value), 'utf8');
@@ -232,6 +245,9 @@ async function handleSearch(url, res) {
   if (cached) return json(res, 200, { ok: true, cached: true, ...cached });
 
   let pending = inflight.get(key);
+  if (!pending && inflight.size >= INFLIGHT_MAX) {
+    return json(res, 503, { ok: false, error: 'The archive relay is busy with other positions; try again in a moment.' });
+  }
   if (!pending) {
     pending = lookup(ra, dec, radius, key).finally(() => inflight.delete(key));
     inflight.set(key, pending);

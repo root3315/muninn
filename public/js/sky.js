@@ -17,7 +17,7 @@
  * blinking stays smooth while the sliders are being dragged.
  */
 
-import { limits, paint, paintDifference, rampFromToken, resolveColor } from './render.js';
+import { limitsFromSorted, sortedFinite, paint, paintDifference, rampFromToken, resolveColor } from './render.js';
 import { SECTOR_COLS, SECTOR_ROWS, sectorBounds } from './sectors.js';
 import { deltaRA } from './wcs.js';
 
@@ -195,10 +195,16 @@ export class SkyView {
     return entry;
   }
 
-  /** One visit's own black and white point, cut once per clip setting. */
+  /**
+   * One visit's own black and white point, cut once per clip setting. The
+   * sorted pixels are kept, so a new clip is a lookup rather than a sort.
+   */
   ownLimits(v) {
     const key = this.render.clip;
-    if (v.cut?.key !== key) v.cut = { key, lim: limits(v.stamp.data, { loPercent: 5, hiPercent: key }) };
+    if (v.cut?.key !== key) {
+      v.sorted ??= sortedFinite(v.stamp.data);
+      v.cut = { key, lim: limitsFromSorted(v.sorted, { loPercent: 5, hiPercent: key }) };
+    }
     return v.cut.lim;
   }
 
