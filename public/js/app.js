@@ -21,6 +21,7 @@ import { drawStrip } from './strip.js';
 import { themeTransition } from './twilight.js';
 import { planetsNow } from './ephemeris.js';
 import { rankCandidates } from './hunt.js';
+import { seasonOf, seasonStep, averaged, SEASON_DAYS } from './stack.js';
 import { TangentGrid, separation, deltaRA } from './wcs.js';
 import { loadStamp } from './stamp.js';
 import { SkyView, shortName } from './sky.js';
@@ -1034,7 +1035,7 @@ function drawAxis() {
   if (box.hidden) { runHits = []; return; }
   if (!runPaint) readRunPaint();
 
-  const shown = sky.mode === 'single' || sky.mode === 'blink' ? sky.index : sky.a;
+  const shown = sky.indexed ? sky.index : sky.a;
   runHits = drawStrip($('run-canvas'), {
     slots,
     sectors: state.sectors,
@@ -1077,7 +1078,7 @@ function syncScrub() {
     el.min = String(lo);
     el.max = String(hi === lo ? lo + 1 : hi);
     el.step = String(Math.max((hi - lo) / 2000, 1e-6));
-    const shown = sky.mode === 'single' || sky.mode === 'blink' ? sky.index : sky.a;
+    const shown = sky.indexed ? sky.index : sky.a;
     if (list[shown]) el.value = String(list[shown].frame.mjd);
   }
   drawAxis();
@@ -1086,6 +1087,8 @@ function syncScrub() {
   describeCanvas();
   updateIdentity();
   fillSlots();
+  // The stack's line carries the season's own numbers, which change with it.
+  if (sky?.mode === 'stack') $('mode-hint').textContent = modeHint('stack');
 }
 
 /** The A/B pickers — one line, instead of two buttons on every visit. */
@@ -1175,6 +1178,29 @@ function renderWhen() {
   const shown = sky?.current;
   const frame = shown?.frame;
   const i = list.indexOf(shown);
+
+  // A stack is a season, so it is dated as one, and the steps go by season.
+  if (sky?.mode === 'stack' && frame) {
+    const season = seasonOf(list, i).map((k) => list[k].frame).sort((p, q) => p.mjd - q.mjd);
+    const first = season[0];
+    const last = season[season.length - 1];
+    // Days on the big line, the year or years on the small one where a
+    // single visit keeps its time: the range fits the column without breaking.
+    const y0 = first.iso.slice(0, 4);
+    const y1 = last.iso.slice(0, 4);
+    $('when-date').textContent = first === last
+      ? fmtDay(first.iso)
+      : `${fmtDay(first.iso)} – ${fmtDay(last.iso)}`;
+    $('when-time').textContent = y0 === y1 ? y0 : `${y0} – ${y1}`;
+    $('when-band').textContent = `${frame.band} · ${fmt(frame.emMin, 2)}–${fmt(frame.emMax, 2)} µm`;
+    $('when-of').textContent = t('frame.stack', { n: season.length });
+    for (const [id, dir] of [['prev', -1], ['next', 1]]) {
+      const k = seasonStep(list, i, dir);
+      $(id).disabled = k === i;
+      $(`${id}-date`).textContent = k === i ? '' : fmtDay(list[k].frame.iso);
+    }
+    return;
+  }
 
   $('when-date').textContent = frame ? fmtDate(frame.iso).replace(/\s*г\.?$/, '') : '—';
   $('when-time').textContent = frame ? fmtTime(frame.iso) : '';
@@ -2424,6 +2450,31 @@ function renderGateJump() {
 
 const MODE_HINT = { blink: 'mode.blinkHint', wipe: 'mode.wipeHint', difference: 'mode.diffHint', single: 'mode.singleHint' };
 
+/**
+ * The line under the run for a mode. The stack's says what this season adds
+ * up to: how many visits, and roughly how deep — the per-visit depth of the
+ * band plus what averaging those visits buys.
+ */
+function modeHint(mode) {
+  if (mode !== 'stack') return t(MODE_HINT[mode] ?? MODE_HINT.blink);
+  const visits = sky?.visits ?? [];
+  const band = visits[sky?.index]?.frame.band ?? '';
+  const n = visits.length ? seasonOf(visits, sky.index).length : 0;
+  if (n < 2) return t('mode.stackAlone', { band, days: SEASON_DAYS });
+  const single = state.depth?.band === band ? state.depth.single : null;
+  if (single == null) return t('mode.stackHintNoDepth', { n, band });
+  const mag = fmt(single + 2.5 * Math.log10(Math.sqrt(averaged(n))), 1);
+  return t('mode.stackHint', { n, band, mag });
+}
+
+/** One step along the run: a visit, or in the stack a whole season. */
+function stepBy(dir) {
+  holdStill();
+  sky.setIndex(sky.mode === 'stack' ? seasonStep(sky.visits, sky.index, dir) : sky.index + dir);
+  syncScrub();
+  refreshKnownObjects();
+}
+
 function setTools(open) {
   $('tools').hidden = !open;
   const toggle = $('tools-toggle');
@@ -2472,7 +2523,7 @@ function syncLambda() {
 function applyMode(mode) {
   sky.setMode(mode);
   $('plate').dataset.mode = mode;
-  $('mode-hint').textContent = t(MODE_HINT[mode]);
+  $('mode-hint').textContent = modeHint(mode);
   const comparing = mode === 'wipe' || mode === 'difference';
   $('compare').hidden = !comparing;
   if (mode !== 'blink') stopPlayback();
@@ -2489,7 +2540,7 @@ function jumpToNearest(mjd) {
     const d = Math.abs(v.frame.mjd - mjd);
     if (d < gap) { gap = d; best = i; }
   });
-  if (sky.mode === 'single' || sky.mode === 'blink') sky.setIndex(best);
+  if (sky.indexed) sky.setIndex(best);
   else sky.setAB(best, null);
   syncScrub();
   refreshKnownObjects();
@@ -2560,8 +2611,8 @@ function wire() {
   window.addEventListener('resize', () => { if (!$('run').hidden) drawAxis(); });
 
   $('play').addEventListener('click', togglePlayback);
-  $('prev').addEventListener('click', () => { holdStill(); sky.setIndex(sky.index - 1); syncScrub(); refreshKnownObjects(); });
-  $('next').addEventListener('click', () => { holdStill(); sky.setIndex(sky.index + 1); syncScrub(); refreshKnownObjects(); });
+  $('prev').addEventListener('click', () => stepBy(-1));
+  $('next').addEventListener('click', () => stepBy(1));
 
   $('scrub').addEventListener('input', (e) => { holdStill(); jumpToNearest(Number(e.target.value)); });
 
@@ -2708,8 +2759,8 @@ function wire() {
     const pressable = e.target instanceof Element && e.target.closest('button, a[href], summary, [role="button"]');
     if (e.key === ' ' && !pressable) { e.preventDefault(); togglePlayback(); }
     // The same steps the ‹ › buttons take, SkyBoT included.
-    if (e.key === 'ArrowLeft') { holdStill(); sky.setIndex(sky.index - 1); syncScrub(); refreshKnownObjects(); }
-    if (e.key === 'ArrowRight') { holdStill(); sky.setIndex(sky.index + 1); syncScrub(); refreshKnownObjects(); }
+    if (e.key === 'ArrowLeft') stepBy(-1);
+    if (e.key === 'ArrowRight') stepBy(1);
     if (e.key === 'h' || e.key === 'H' || e.key === 'р' || e.key === 'Р') setBare(!state.bare);
     if (e.key === 'Escape' && state.bare) setBare(false);
   });
@@ -2726,7 +2777,7 @@ function relabel() {
   readRunPaint();
   labelTheme();
   $('lang-name').textContent = getLanguage() === 'en' ? 'RU' : 'EN';
-  $('mode-hint').textContent = t(MODE_HINT[document.querySelector('input[name="mode"]:checked').value]);
+  $('mode-hint').textContent = modeHint(document.querySelector('input[name="mode"]:checked').value);
   $('rate-value').textContent = t('play.fps', { n: state.rate });
   $('play').setAttribute('aria-label', t(state.playing ? 'play.pause' : 'play.play'));
   $('tools-toggle').textContent = t($('tools').hidden ? 'tools.toggle' : 'tools.hide');

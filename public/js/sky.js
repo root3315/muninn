@@ -20,6 +20,7 @@
 import { limitsFromSorted, sortedFinite, paint, paintDifference, rampFromToken, resolveColor } from './render.js';
 import { SECTOR_COLS, SECTOR_ROWS, sectorBounds } from './sectors.js';
 import { deltaRA } from './wcs.js';
+import { coadd, seasonOf } from './stack.js';
 
 const RAMP_TOKENS = { deep: '--cmap-deep', ice: '--cmap-ice', infrared: '--cmap-infrared' };
 
@@ -172,6 +173,7 @@ export class SkyView {
     this.a = 0;
     this.b = 1;
     this.diffCache = null;
+    this.stackCache = null;
     this.draw();
   }
 
@@ -221,6 +223,9 @@ export class SkyView {
   setOverlays(patch) { Object.assign(this.overlays, patch); this.draw(); }
   setMode(mode) { this.mode = mode; this.diffCache = null; this.draw(); }
 
+  /** Modes that show one visit, or one visit's season, by index. */
+  get indexed() { return this.mode === 'single' || this.mode === 'blink' || this.mode === 'stack'; }
+
   setIndex(i) {
     if (!this.visits.length) return;
     this.index = ((i % this.visits.length) + this.visits.length) % this.visits.length;
@@ -259,7 +264,33 @@ export class SkyView {
     const shared = this.render.shared ? this.sharedLimits() : null;
     for (const v of this.visits) this.paintVisit(v, shared);
     this.diffCache = null;
+    this.stackCache = null;
     this.draw();
+  }
+
+  /**
+   * The season of the visit on screen, added up (see stack.js) and cut and
+   * tinted like any single visit. Rebuilt only when the season, the cut or the
+   * palette changes.
+   */
+  stackCanvas() {
+    const ref = this.visits[this.index];
+    if (!ref) return null;
+    const members = seasonOf(this.visits, this.index);
+    const key = `${members.map((k) => this.visits[k].frame.obsId).join('|')}|${this.render.clip}|${this.render.stretch}|${this.render.palette}`;
+    if (this.stackCache?.key === key) return this.stackCache;
+    const data = coadd(members.map((k) => this.visits[k].stamp.data));
+    const lim = limitsFromSorted(sortedFinite(data), { loPercent: 5, hiPercent: this.render.clip });
+    const cv = document.createElement('canvas');
+    cv.width = ref.stamp.width;
+    cv.height = ref.stamp.height;
+    const ctx = cv.getContext('2d');
+    const img = ctx.createImageData(cv.width, cv.height);
+    const lut = this.ramps[this.render.palette] ?? this.ramps.deep;
+    paint(img, data, lut, { lo: lim.lo, hi: lim.hi, stretch: this.render.stretch });
+    ctx.putImageData(img, 0, 0);
+    this.stackCache = { key, canvas: cv, data, members };
+    return this.stackCache;
   }
 
   differenceCanvas() {
@@ -281,7 +312,7 @@ export class SkyView {
   }
 
   get current() {
-    if (this.mode === 'single' || this.mode === 'blink') return this.visits[this.index] ?? null;
+    if (this.indexed) return this.visits[this.index] ?? null;
     return this.visits[this.a] ?? null;
   }
 
@@ -313,6 +344,9 @@ export class SkyView {
         const diff = this.differenceCanvas();
         if (diff) this.place(ctx, diff.canvas);
         else if (this.visits[this.a]) this.place(ctx, this.visits[this.a].canvas);
+      } else if (this.mode === 'stack') {
+        const stack = this.stackCanvas();
+        if (stack) this.place(ctx, stack.canvas);
       } else if (this.mode === 'wipe') {
         const a = this.visits[this.a];
         const b = this.visits[this.b] ?? a;
@@ -339,7 +373,9 @@ export class SkyView {
     if (this.grid) {
       if (this.overlays.grid) this.drawGrid(ctx);
       if (this.overlays.compass) this.taken.push(this.compassBox(ctx));
-      if (this.overlays.skybot) this.drawKnownObjects(ctx);
+      // SkyBoT's rings are positions at one exposure's moment; on a season's
+      // sum they would pin a body to a place it held for one of the visits.
+      if (this.overlays.skybot && this.mode !== 'stack') this.drawKnownObjects(ctx);
       if (this.overlays.catalog) this.drawCatalog(ctx);
       if (this.overlays.sectors || this.sector) this.drawSectors(ctx);
       if (this.overlays.marks) this.drawMarks(ctx);
@@ -802,7 +838,9 @@ export class SkyView {
     if (v) {
       const ii = Math.round(i);
       const jj = Math.round(j);
-      const raw = v.stamp.data[jj * v.stamp.width + ii];
+      // On a stack the value under the pointer is the stack's.
+      const data = this.mode === 'stack' && this.stackCache ? this.stackCache.data : v.stamp.data;
+      const raw = data[jj * v.stamp.width + ii];
       value = raw === raw ? raw : null;
     }
     return { ra, dec, value, visit: v?.frame ?? null, i, j };
