@@ -19,6 +19,7 @@
 
 import { limits, paint, paintDifference, rampFromToken, resolveColor } from './render.js';
 import { SECTOR_COLS, SECTOR_ROWS, sectorBounds } from './sectors.js';
+import { deltaRA } from './wcs.js';
 
 const RAMP_TOKENS = { deep: '--cmap-deep', ice: '--cmap-ice', infrared: '--cmap-infrared' };
 
@@ -51,6 +52,8 @@ export class SkyView {
     this.overlays = { grid: true, compass: true, catalog: true, skybot: true, marks: true, sectors: false };
     /* Which sector the matrix is pointing at, if any. */
     this.sector = null;
+    /* Label boxes already drawn this frame, which later labels avoid. */
+    this.taken = [];
     /* SkyBoT's answer for each visit, keyed by the frame's obsId rather than its
        place in the list: visits are sorted by date as they arrive, and an answer
        filed under a position drifted onto the wrong visit when one landed early. */
@@ -323,10 +326,15 @@ export class SkyView {
     }
 
     this.hits = [];
+    // Room already spoken for — SkyBoT's names and the compass — which a star's
+    // label steps around instead of landing on ("BD+02′128" was the scale bar
+    // drawn through a name).
+    this.taken = [];
     if (this.grid) {
       if (this.overlays.grid) this.drawGrid(ctx);
-      if (this.overlays.catalog) this.drawCatalog(ctx);
+      if (this.overlays.compass) this.taken.push(this.compassBox(ctx));
       if (this.overlays.skybot) this.drawKnownObjects(ctx);
+      if (this.overlays.catalog) this.drawCatalog(ctx);
       if (this.overlays.sectors || this.sector) this.drawSectors(ctx);
       if (this.overlays.marks) this.drawMarks(ctx);
       if (this.overlays.compass) this.drawCompass(ctx);
@@ -502,7 +510,8 @@ export class SkyView {
       const w = ctx.measureText(text).width;
       const right = x + 9 + w <= this.cssW - 4;
       const box = { x0: right ? x + 8 : x - 9 - w, x1: right ? x + 9 + w : x - 8, y0: y - 7, y1: y + 7 };
-      if (placed.some((b) => b.x0 < box.x1 && box.x0 < b.x1 && b.y0 < box.y1 && box.y0 < b.y1)) return;
+      const hit = (b) => b.x0 < box.x1 && box.x0 < b.x1 && b.y0 < box.y1 && box.y0 < b.y1;
+      if (placed.some(hit) || this.taken.some(hit)) return;
       placed.push(box);
       ctx.textAlign = right ? 'left' : 'right';
       this.label(ctx, text, right ? x + 9 : x - 9, y, this.colors.muted);
@@ -587,7 +596,12 @@ export class SkyView {
       const name = o.num ? `(${o.num})` : o.name;
       const text = rate > 0 ? `${name} ${this.labels.rate(rate)}` : name;
       // Near the right edge the label goes on the ring's left, or it is cut off.
-      const right = x + 16 + ctx.measureText(text).width <= this.cssW - 4;
+      const w = ctx.measureText(text).width;
+      const right = x + 16 + w <= this.cssW - 4;
+      this.taken.push(
+        { x0: x - 13, x1: x + 13, y0: y - 13, y1: y + 13 },
+        { x0: right ? x + 15 : x - 17 - w, x1: right ? x + 17 + w : x - 15, y0: y - 7, y1: y + 8 },
+      );
       ctx.textAlign = right ? 'left' : 'right';
       this.label(ctx, text, right ? x + 16 : x - 16, y + 1, this.colors.accent);
       ctx.textAlign = 'left';
@@ -636,12 +650,8 @@ export class SkyView {
     ctx.restore();
   }
 
-  /**
-   * Orientation and scale as one legend, set on the clear ground at the foot
-   * of the frame. North is up and east is left because every frame is
-   * reprojected onto the same north-up tangent plane.
-   */
-  drawCompass(ctx) {
+  /** Where the compass and scale bar go, and the box they fill. */
+  compassLayout(ctx) {
     const pad = 20;
     const len = 22;
     const gap = 22;
@@ -650,6 +660,26 @@ export class SkyView {
     const bar = BAR_STEPS.find((b) => b >= target) ?? BAR_STEPS[BAR_STEPS.length - 1];
     const px = bar / arcsecPerPx;
     const label = bar >= 60 ? `${bar / 60}′` : `${bar}″`;
+    ctx.save();
+    ctx.font = this.fonts.compass;
+    const labelW = ctx.measureText(label).width;
+    ctx.restore();
+    const total = 12 + len + gap + px + 8 + labelW;
+    const ox = Math.round((this.cssW - total) / 2) + 12 + len;
+    const y = Math.round(this.cssH - pad - this.chrome.bottom);
+    const box = { x0: ox - len - 14, x1: ox + gap + px + 10 + labelW, y0: y - len - 15, y1: y + 7 };
+    return { len, gap, px, label, ox, y, box };
+  }
+
+  compassBox(ctx) { return this.compassLayout(ctx).box; }
+
+  /**
+   * Orientation and scale as one legend, set on the clear ground at the foot
+   * of the frame. North is up and east is left because every frame is
+   * reprojected onto the same north-up tangent plane.
+   */
+  drawCompass(ctx) {
+    const { len, gap, px, label, ox, y } = this.compassLayout(ctx);
 
     ctx.save();
     ctx.strokeStyle = this.colors.muted;
@@ -658,11 +688,6 @@ export class SkyView {
     ctx.lineWidth = 1;
     ctx.font = this.fonts.compass;
     ctx.textBaseline = 'middle';
-
-    const labelW = ctx.measureText(label).width;
-    const total = 12 + len + gap + px + 8 + labelW;
-    const ox = Math.round((this.cssW - total) / 2) + 12 + len;
-    const y = Math.round(this.cssH - pad - this.chrome.bottom);
 
     ctx.beginPath();
     ctx.moveTo(ox, y); ctx.lineTo(ox, y - len);
@@ -886,7 +911,7 @@ export class SkyView {
       return { slope: (n * sxy - sx * sy) / den, intercept: (sy * sxx - sx * sxy) / den };
     };
 
-    const raArc = track.map((p) => (p.ra - ra) * cosd * 3600);
+    const raArc = track.map((p) => deltaRA(p.ra, ra) * cosd * 3600);
     const decArc = track.map((p) => (p.dec - dec) * 3600);
     const fRa = fit(raArc);
     const fDec = fit(decArc);

@@ -166,9 +166,11 @@
     oklch(74% 0.120 45), oklch(97% 0.035 80);
   /* Diverging, for the difference view. The two arms were solved numerically to
      carry equal luminance weight — 0.0% imbalance — so "brighter now" and
-     "brighter before" are comparable rather than one just louder. */
-  --cmap-diff: oklch(78.7% 0.115 228), oklch(46.1% 0.115 228), oklch(13% 0.030 250),
-    oklch(48.3% 0.130 62), oklch(80.3% 0.130 62);
+     "brighter before" are comparable rather than one just louder.
+     Low end is B, high end is A (the view draws A − B), so each arm wears the
+     colour of its own chip: brighter in A is the accent, brighter in B amber. */
+  --cmap-diff: oklch(80.3% 0.130 62), oklch(48.3% 0.130 62), oklch(13% 0.030 250),
+    oklch(46.1% 0.115 228), oklch(78.7% 0.115 228);
 }
 
 /*
@@ -234,6 +236,6 @@
     oklch(44% 0.130 340), oklch(20% 0.070 290);
   /* Diverging on paper: the neutral middle is the glass, and the two arms darken
      toward their ends at matched lightness, so neither sign is the louder one. */
-  --cmap-diff: oklch(46% 0.130 236), oklch(71% 0.090 232), oklch(96.5% 0.004 250),
-    oklch(71% 0.110 62), oklch(46% 0.120 58);
+  --cmap-diff: oklch(46% 0.120 58), oklch(71% 0.110 62), oklch(96.5% 0.004 250),
+    oklch(71% 0.090 232), oklch(46% 0.130 236);
 }
