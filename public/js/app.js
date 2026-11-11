@@ -1058,17 +1058,24 @@ function drawAxis() {
   // date is known before its pixels are, so the lane is drawn whole at once
   // and the frames fill their places as they land, instead of the row
   // reshuffling each time one arrives.
-  const slots = state.visits
+  let slots = state.visits
     .filter((e) => e.status !== 'dropped')
     .map((e) => {
       const at = visits.findIndex((v) => v.frame === e.frame);
-      return { frame: e.frame, visit: visits[at] ?? null, at };
+      return { frame: e.frame, visit: visits[at] ?? null, at, status: e.status, landedAt: e.landedAt };
     })
     .sort((p, q) => p.frame.mjd - q.frame.mjd);
+  // While the archive is still being asked, a run that is already on screen
+  // stays, as empty places: it used to vanish at every new field and come
+  // back a second later, which moved the whole page twice.
+  if (slots.length < 2 && state.loading && !box.hidden) {
+    slots = Array.from({ length: runSlots || MAX_VISITS }, () => ({ frame: null, visit: null, at: -1, status: 'pending' }));
+  }
   // Shown as soon as there is a run to show, before any of its pixels: the page
   // takes its final shape once, instead of again when the first frame lands.
   box.hidden = slots.length < 2;
   if (box.hidden) { runHits = []; return; }
+  if (slots.some((s) => s.frame)) runSlots = slots.length;
   if (!runPaint) readRunPaint();
 
   const shown = sky.indexed ? sky.index : sky.a;
@@ -1079,8 +1086,32 @@ function drawAxis() {
     hover: runHover,
     lang: getLanguage(),
     paint: runPaint,
+    now: performance.now(),
+    motion: !matchMedia('(prefers-reduced-motion: reduce)').matches,
   });
   runHeight = box.offsetHeight || runHeight;
+  animateRun(slots);
+}
+
+/** How many places the last run had, so the empty one keeps its width. */
+let runSlots = 0;
+let runFrame = 0;
+
+/**
+ * Keeps the run moving while it has something in flight: frames being read
+ * (the wave over them) or frames just landed (their fade). Thirty frames a
+ * second, and nothing at all once the field is in.
+ */
+function animateRun(slots) {
+  if (runFrame || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const now = performance.now();
+  const busy = slots.some((s) => !s.visit) && state.loading
+    || slots.some((s) => s.landedAt && now - s.landedAt < 360);
+  if (!busy) return;
+  runFrame = setTimeout(() => {
+    runFrame = 0;
+    requestAnimationFrame(() => { if (!$('run').hidden) drawAxis(); });
+  }, 33);
 }
 
 /**
@@ -1978,6 +2009,9 @@ async function openField({ ra, dec, label = '', band = null }) {
   // fieldGrid for why its short side is the one the size control sets.
   let grid = fieldGrid(ra, dec);
   sky.reset(grid);
+  // The mount names the frame on the plate; with none on it yet it must not
+  // go on naming the last field's.
+  renderWhen();
   sky.setCatalog([]);
   showTip(null);
   skybot = { asking: new Set(), failed: new Set() };
@@ -2056,6 +2090,7 @@ async function openField({ ra, dec, label = '', band = null }) {
         entry.status = 'dropped';
       } else {
         entry.status = 'ready';
+        entry.landedAt = performance.now();
         entry.bytes = stamp.meta.bytesRead;
         bytes += stamp.meta.bytesRead;
         sky.addVisit(entry.frame, stamp);
