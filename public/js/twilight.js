@@ -33,8 +33,8 @@
 const TAU = Math.PI * 2;
 
 /** Long enough to watch; much past four seconds a transition becomes a wait. */
-const DAWN_MS = 3600;
-const DUSK_MS = 3800;
+const DAWN_MS = 3000;
+const DUSK_MS = 3200;
 /** Points along the horizon, for the clip and the crisp line on it. */
 const SEGMENTS = 120;
 /** Key frames for the clip; the clip is stepped between them by the clock. */
@@ -712,7 +712,10 @@ moonPhoto.src = new URL('../img/moon-nearside-lro.jpg', import.meta.url).href;
  */
 function risingMoon(w, h, s) {
   const m = Math.min(w, h);
-  const R = m * 0.08;
+  // A full Moon is half a degree across; a disc a sixth of the screen tall
+  // read as a sticker. This is still far larger than life, but it sits in the
+  // sky rather than in front of it.
+  const R = Math.max(26, m * 0.056);
   // East of the picture, clear of the findings column's text.
   const u = 0.7 + (Math.random() - 0.5) * 0.05;
   const x = w * u;
@@ -758,21 +761,23 @@ function risingMoon(w, h, s) {
       ctx.globalCompositeOperation = 'source-over';
       // Wider than tall, and sitting low, so it runs down into the shadow.
       const r = night.width / 2;
-      stamp(ctx, night, x, y + R * 0.9, r * 1.45, r, show);
+      stamp(ctx, night, x, y + R * 0.9, r * 1.45, r, 0.62 * show);
       ctx.globalCompositeOperation = 'lighter';
-      stamp(ctx, wide, x, y, R * 5, R * 5, 0.55 * show);
-      stamp(ctx, corona, x, y, corona.width / 2, corona.width / 2, 0.9 * show);
-      stamp(ctx, near, x, y, R * 1.75, R * 1.75, 0.55 * show);
+      stamp(ctx, wide, x, y, R * 5.5, R * 5.5, 0.4 * show);
+      stamp(ctx, corona, x, y, corona.width / 2, corona.width / 2, 0.55 * show);
+      stamp(ctx, near, x, y, R * 1.5, R * 1.5, 0.32 * show);
       ctx.restore();
     },
     disc(ctx, { y, live, show }) {
       ctx.save();
       if (live) ctx.clip(moonClip);
       ctx.globalCompositeOperation = 'source-over';
-      stamp(ctx, disc, x, y, R, R, show * 1.4);
+      // The sprite carries a feathered margin, so it is stamped a little larger
+      // than the disc it holds.
+      stamp(ctx, disc, x, y, R * MOON_PAD, R * MOON_PAD, show * 1.4);
       // Moonlight is bright enough to spill over its own edge in any lens.
       ctx.globalCompositeOperation = 'lighter';
-      stamp(ctx, near, x, y, R * 1.28, R * 1.28, 0.28 * show);
+      stamp(ctx, near, x, y, R * 1.22, R * 1.22, 0.16 * show);
       ctx.restore();
     },
     spill(ctx, { y, show }) {
@@ -846,29 +851,53 @@ function coronaSprite(R) {
  * mosaic was taken at low sun for relief; a full Moon is flat and bright, so
  * it is brightened, its contrast eased and its colour taken out.
  */
+/** How much larger than the disc its sprite is: room for a feathered limb. */
+const MOON_PAD = 1.06;
+
 function photoMoon(R) {
   const scale = 2;
-  const size = Math.round(R * 2 * scale);
+  const d = Math.round(R * 2 * scale);
+  const size = Math.round(d * MOON_PAD);
   const c = makeCanvas(size, size);
   const g = c.getContext('2d');
   const r = size / 2;
-  g.beginPath();
-  g.arc(r, r, r, 0, TAU);
-  g.clip();
+  const rd = d / 2;
   // The disc fills the frame but for a thin black margin, and a caption in a
   // corner the circle leaves out.
   const k = moonPhoto.naturalWidth / 960;
+  // Halved a step at a time with the good filter. Squeezed from the full mosaic
+  // in one draw, every crater rim aliased into a black speck and the Moon came
+  // out looking dusty.
+  let src = makeCanvas(942 * k, 942 * k);
+  src.getContext('2d').drawImage(moonPhoto, 9 * k, 9 * k, 942 * k, 942 * k, 0, 0, src.width, src.height);
+  while (src.width > d * 2) {
+    const half = makeCanvas(src.width / 2, src.height / 2);
+    const hg = half.getContext('2d');
+    hg.imageSmoothingQuality = 'high';
+    hg.drawImage(src, 0, 0, half.width, half.height);
+    src = half;
+  }
   // Silver with the faintest cream in it, which is the colour of a bright Moon
   // to the eye, not the neutral grey of the mosaic.
-  g.filter = 'brightness(2.35) contrast(0.64) saturate(0) sepia(0.14)';
-  g.drawImage(moonPhoto, 9 * k, 9 * k, 942 * k, 942 * k, 0, 0, size, size);
+  g.imageSmoothingQuality = 'high';
+  g.filter = 'brightness(2.2) contrast(0.7) saturate(0) sepia(0.12)';
+  g.drawImage(src, r - rd, r - rd, d, d);
   g.filter = 'none';
   // The faintest darkening at the rim, which is what makes a disc a sphere.
-  const rim = g.createRadialGradient(r, r, r * 0.7, r, r, r);
+  const rim = g.createRadialGradient(r, r, rd * 0.72, r, r, rd);
   rim.addColorStop(0, 'rgba(0, 0, 0, 0)');
-  rim.addColorStop(1, 'rgba(0, 0, 10, 0.22)');
+  rim.addColorStop(1, 'rgba(0, 0, 10, 0.18)');
   g.fillStyle = rim;
   g.fillRect(0, 0, size, size);
+  // A limb a pixel or two soft, as any lens and any air leaves it: cut with a
+  // hard circle it was the one ruled edge in a picture of light.
+  g.globalCompositeOperation = 'destination-in';
+  const limb = g.createRadialGradient(r, r, rd - 2.5 * scale, r, r, rd + 0.5 * scale);
+  limb.addColorStop(0, 'rgba(0, 0, 0, 1)');
+  limb.addColorStop(1, 'rgba(0, 0, 0, 0)');
+  g.fillStyle = limb;
+  g.fillRect(0, 0, size, size);
+  g.globalCompositeOperation = 'source-over';
   return c;
 }
 
