@@ -4,7 +4,7 @@
  * ground  oklch(16% 0.040 254)   ink oklch(95% 0.014 240)
  * accent  oklch(76% 0.130 228) azure · counter oklch(80% 0.135 62) amber
  * axes: dark / condensed-grotesk / azure
- * display IBM Plex Sans Condensed · body IBM Plex Sans · outlier IBM Plex Mono (two roles:
+ * display and body Geologica · outlier IBM Plex Mono (two roles:
  *   measured values, and the fine print)
  *
  * Every value is measured rather than eyeballed: converted to OKLCH, the scale
@@ -20,17 +20,15 @@
 
 :root {
   /* ---- type ------------------------------------------------------------- */
-  /* One superfamily, three widths of one voice. Four unrelated faces — a
-     signage condensed, a reading serif, a grotesque and a mono — made every
-     panel look assembled from a different kit. Plex was drawn as a system,
-     for instruments and documentation, and all three cuts carry Cyrillic. */
-  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", ui-sans-serif, sans-serif;
-  --font-body: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  /* Two faces. Geologica for every word — headings, findings, labels and
+     text — chosen by the team from four candidates set side by side: a
+     grotesque drawn with Cyrillic from the start, sharp enough at display
+     size and calm in a paragraph. Plex Mono only for what was measured. */
+  --font-display: "Geologica", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Geologica", ui-sans-serif, system-ui, sans-serif;
   /* one role only: a value that was measured — coordinates, times, fluxes */
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  /* Headings and findings: the condensed cut, so a sentence-long result fits
-     a narrow column on two lines rather than four. */
-  --font-record: "IBM Plex Sans Condensed", "Arial Narrow", ui-sans-serif, sans-serif;
+  --font-record: "Geologica", ui-sans-serif, system-ui, sans-serif;
 
   --text-xs: 0.75rem;
   --text-sm: 0.875rem;
