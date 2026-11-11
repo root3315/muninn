@@ -1410,7 +1410,10 @@ select.field--compact { background-position: right 9px center, right 5px center;
  * whatever is put on top of a picture is a thing standing in front of it.
  */
 body[data-gate="open"] { overflow: hidden; }
-body[data-gate="open"] .shell { display: none; }
+/* Hidden, not removed: a field opened from the sky is cut to the shape of the
+   room it will land in, and a room that is display:none measures 0 × 0 — every
+   field entered by the dive came out square on a wide screen. */
+body[data-gate="open"] .shell { visibility: hidden; }
 
 .gate {
   position: fixed; inset: 0; z-index: var(--z-modal);
@@ -1505,11 +1508,14 @@ body[data-gate="open"] .shell { display: none; }
 /* The verified fields as one line of names under the search: type, not chips,
    so the corner stays a caption on the sky rather than a panel over it. */
 .gate__jump {
-  display: flex; flex-wrap: wrap; align-items: baseline;
-  gap: var(--space-3xs) var(--space-xs);
+  display: grid; gap: var(--space-2xs);
   padding-block-start: var(--space-xs);
   font-size: var(--text-sm); color: var(--color-neutral);
   text-shadow: var(--shade-text);
+}
+.gate__jump-line {
+  display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: var(--space-3xs) var(--space-xs);
 }
 .gate__jump-k {
   font-size: var(--text-xs); font-weight: 500;

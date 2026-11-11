@@ -106,6 +106,50 @@ mirror, IRSA, SIMBAD, SkyBoT — and nothing else.
 Keyboard: <kbd>Space</kbd> play/pause, <kbd>←</kbd> <kbd>→</kbd> step between visits,
 <kbd>H</kbd> give the sky the whole window.
 
+### The challenge's own test targets
+
+The challenge names five fields to test a tool like this on. Each opens in one press
+from the line *Challenge targets* under the search, or by URL, for example
+`/#ra=133.7951&dec=-7.2451&fov=0.3&band=D6`. Their frame indexes ship with the
+page, like the original five.
+
+| target | why it is a test | what to do in Muninn | archive, at bake time |
+| --- | --- | --- | --- |
+| Barnard's Star | fastest proper motion in the sky, 10.3″/yr | blink; mark the star and read the verdict | 10 D2 visits over 212 days |
+| ε Indi B | a pair of brown dwarfs beside their star, ε Indi A | blink in D2, then D6 | 22 D2 visits over 371 days |
+| WISE 0855−0714 | the coldest known brown dwarf, 8.1″/yr | opens in D6, the only band it is bright in; try Stack | 17 D6 visits over 370 days |
+| RW Aurigae | a young, irregular variable star | switch to shared scaling, which shows brightness change | 10 D2 visits over 182 days |
+| R Draconis | a Mira variable near the north ecliptic pole | shared scaling; step season to season | 63 D3 visits over 392 days |
+
+What the motion test can and cannot show is stated in *What this can and cannot find*
+below: over a baseline of about a year, a star has to move more than one 6.15″ detector
+pixel to be seen to move, and Barnard's Star and WISE 0855 only just do.
+
+### NASA data and services used
+
+| what | from | used for |
+| --- | --- | --- |
+| SPHEREx Level-2 spectral images (Quick Release 2) | NASA/JPL-Caltech · IPAC/IRSA, via the AWS Open Data mirror `nasa-irsa-spherex` | every pixel on screen, read by HTTP range request |
+| SPHEREx frame index | IRSA Simple Image Access v2, collections `spherex_qr2` and `spherex_qr2_deep` | which frames cover a position, when, and in which band |
+| SPHEREx `FLAGS` plane | the same files | masking cosmic-ray hits and bad pixels before anything is measured |
+| AllWISE W1/W2 | NASA WISE, through CDS VizieR | identifying a marked source at 3.4 and 4.6 µm |
+| Gaia DR3 | ESA Gaia, through CDS VizieR | identifying a faint marked star, and whether Gaia saw it vary |
+| Known solar-system objects | SkyBoT, IMCCE | naming asteroids at the moment of each exposure |
+
+### When a new SPHEREx release lands
+
+SPHEREx data arrive in releases, each published by IRSA as a new SIA collection on the
+same S3 mirror. Nothing in the page stores pixels, so new data need no rebuild:
+
+1. Arbitrary positions see a new release as soon as its collection name is added to
+   `public/js/release.js`. That one list feeds the local relay, the edge function and
+   the bake script.
+2. `npm run bake` refreshes the frame indexes that ship with the page, so the ten
+   ready fields open with the new visits too.
+3. `npm test`, then deploy. The relay caches IRSA answers for twelve hours, so new
+   frames added to an existing collection reach arbitrary positions within half a day;
+   the ten baked fields see them at the next bake.
+
 ### Nothing sits on the picture
 
 The layout is one grid of four cells — top bar, rail, sky, dock — and no control
@@ -384,7 +428,7 @@ The opening preset is not decorative. It was found by searching real SPHEREx fra
 the ecliptic for catalogued objects bright enough to detect (`tools/find-mover.mjs`), then
 checked photometrically (`tools/verify-mover.mjs`).
 
-Field: **RA 13.4194, Dec +3.8459**, 9′ wide, band D2 (1.10–1.65 µm). Fifteen D2 visits over
+Field: **RA 13.4194, Dec +3.8459**, band D2 (1.10–1.65 µm). Fifteen D2 visits over
 369 days. Signal-to-noise at the exact field centre, visit by visit:
 
 ```
@@ -478,11 +522,12 @@ public/
   js/depth.js             sky noise, 5σ limits, what a coadd would reach
   js/hunt.js              rate to distance, and the guards on it
   js/sectors.js           the 5 × 4 sector scores
+  js/release.js           which SPHEREx release (IRSA collections) is read
   js/catalog.js           SIA, SkyBoT, SIMBAD, coordinate parsing
   js/votable.js           just enough IVOA VOTable for both services
   js/i18n.js              English and Russian
   js/app.js               state, wiring, the loading choreography
-  data/targets.json       the five opening fields, with counts from the archive
+  data/targets.json       the ten opening fields, with counts from the archive
   data/fields/*.json      their frame indexes, pre-resolved so they open in ~80 ms
 tools/                    the scripts that verified all of the above
 tests/                    npm test — offline, no network

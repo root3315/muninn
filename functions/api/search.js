@@ -21,8 +21,8 @@
 
 import { parseVOTable } from '../../public/js/votable.js';
 import { frameFromRow } from '../../public/js/catalog.js';
+import { COLLECTIONS } from '../../public/js/release.js';
 
-const COLLECTIONS = ['spherex_qr2', 'spherex_qr2_deep'];
 const SIA = 'https://irsa.ipac.caltech.edu/SIA';
 
 /**

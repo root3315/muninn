@@ -37,6 +37,8 @@ const ROWS = 4;
 
 /** Scores are clamped here rather than normalised to the field's own maximum. */
 const TOP = 12;
+/** A cell is lit, and can be pressed, from here: the bar standouts() uses. */
+const LIT = 4;
 
 /** Under a frame the month is part of a date, so Russian takes the genitive. */
 const DATE_MONTHS_RU = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
@@ -268,9 +270,11 @@ export function drawStrip(canvas, {
       } else {
         ctx.fillStyle = P.accent;
         ctx.globalAlpha = Math.min(1, Math.max(0.05, z / TOP));
-        // A cell is a place to look, so it can be pressed: that visit, with
-        // that sector lit on the picture. The 1px gutter goes to the cell.
-        hits.push({ x: cx, y: cy, w: cw + 1, h: ch + 1, i: at, sector: s + 1, score: z });
+        // A lit cell is a place to look, so it can be pressed: that visit,
+        // with that sector lit on the picture. The 1px gutter goes to the cell.
+        // An unlit one is the ordinary frame, and a press there is a press on
+        // its thumbnail.
+        if (z >= LIT) hits.push({ x: cx, y: cy, w: cw + 1, h: ch + 1, i: at, sector: s + 1, score: z });
       }
       ctx.fillRect(cx, cy, cw, ch);
     }

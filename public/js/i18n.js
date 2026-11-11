@@ -25,6 +25,7 @@ const STRINGS = {
     'view.sectors': 'Sectors',
     'gate.lede': 'Point at the sky. Press to fall into SPHEREx\u2019s frames of that place.',
     'gate.known': 'Ready now',
+    'gate.challenge': 'Challenge targets',
     'aria.gate': 'The sky',
     'aria.tools': 'View settings',
     'aria.findings': 'Findings',
@@ -35,6 +36,11 @@ const STRINGS = {
     'preset.sep': 'S. ecliptic pole',
     'preset.m51': 'M51',
     'preset.m42': 'M42',
+    'preset.barnard': "Barnard's Star",
+    'preset.epsindib': 'ε Indi B',
+    'preset.wise0855': 'WISE 0855',
+    'preset.rwaur': 'RW Aur',
+    'preset.rdra': 'R Dra',
     'gate.sources': 'Where this sky comes from',
     'gate.modelled': 'The band and the faint field are a drawn model of the galactic disc, not a survey.',
     'gate.back': 'The sky',
@@ -60,6 +66,7 @@ const STRINGS = {
     'verdict.working': 'Reading the archive and checking every sector that stands out\u2026',
     'verdict.moved': '{n} of them moved.',
     'verdict.still': 'Nothing here moved.',
+    'verdict.asking': 'Checking the catalogue of known solar-system bodies…',
     'verdict.checked': '{checked} places that stood out were tracked.',
     'verdict.depth': 'The search reached {mag} AB.',
     'verdict.depthShort': 'The search reached {mag} AB — {gap} magnitudes short of Planet X as predicted.',
@@ -72,7 +79,7 @@ const STRINGS = {
     'depth.said': 'The faintest point source one visit here could have shown, at 5σ.',
     'depth.stackShort': '{band} · {n} stacked',
     'depth.singleShort': '{band} · per visit',
-    'depth.stackNote': 'Coadding all {n} visits in {band} would reach about {mag} AB for a source that stays put; Muninn searches visit by visit and does not coadd.',
+    'depth.stackNote': 'Coadding all {n} visits in {band} would reach about {mag} AB for a source that stays put; the automatic search works visit by visit, and Stack adds up one season at a time.',
     'depth.here': 'this field',
     'depth.target': 'Planet X',
     'depth.scale': 'Reached {mag} AB; Planet X is predicted at {lo}–{hi}',
@@ -163,10 +170,11 @@ const STRINGS = {
     'mode.single': 'Single',
     'mode.stack': 'Stack',
     'mode.stackWhen': 'This season’s visits in one band, added up: deeper, for anything that stays put over a week or two',
-    'mode.stackHint': 'This season: {n} {band} visits added, about {mag} AB at 5σ. From ~500 AU out a body stays within two pixels here; ← → goes to another season, where it would have jumped.',
-    'mode.stackHintNoDepth': 'This season: {n} {band} visits added. From ~500 AU out a body stays within two pixels here; ← → goes to another season, where it would have jumped.',
-    'mode.stackAlone': 'No other {band} visit within {days} days of this one — nothing to add. ← → goes to another season.',
-    'frame.stack': '{n} visits added',
+    'mode.stackHint': 'This season: {n} {band} {n:visit|visits} added, about {mag} AB at 5σ. From ~500 AU out a body stays within two pixels here; ← → goes to another season, where it would have jumped.',
+    'mode.stackHintNoDepth': 'This season: {n} {band} {n:visit|visits} added. From ~500 AU out a body stays within two pixels here; ← → goes to another season, where it would have jumped.',
+    'mode.stackAlone': 'The archive has no other {band} visit in this season — nothing to add. ← → goes to another season.',
+    'mode.stackReading': 'Reading {done} of {total}…',
+    'frame.stack': '{n} {n:visit|visits} added',
     'mode.blinkHint': 'Cycles every visit. A source that moves will jump.',
     'mode.wipeHint': 'Drag the divider. A and B meet in the middle.',
     'mode.diffHint': 'A minus B. Blue is brighter in A, amber brighter in B.',
@@ -375,6 +383,7 @@ const STRINGS = {
     'view.sectors': 'Секторы',
     'gate.lede': 'Наведите на небо. Нажмите — и влетите в кадры SPHEREx.',
     'gate.known': 'Открывается сразу',
+    'gate.challenge': 'Цели задания',
     'aria.gate': 'Небо',
     'aria.tools': 'Настройки вида',
     'aria.findings': 'Находки',
@@ -385,6 +394,11 @@ const STRINGS = {
     'preset.sep': 'юж. полюс эклиптики',
     'preset.m51': 'M51',
     'preset.m42': 'M42',
+    'preset.barnard': 'звезда Барнарда',
+    'preset.epsindib': 'ε Индейца B',
+    'preset.wise0855': 'WISE 0855',
+    'preset.rwaur': 'RW Возничего',
+    'preset.rdra': 'R Дракона',
     'gate.sources': 'Откуда это небо',
     'gate.modelled': 'Полоса и слабый фон — нарисованная модель галактического диска, не съёмка.',
     'gate.back': 'К небу',
@@ -410,6 +424,7 @@ const STRINGS = {
     'verdict.working': 'Читаю архив и проверяю каждый сектор, который выделился\u2026',
     'verdict.moved': 'Сдвинулось: {n}.',
     'verdict.still': 'Здесь ничего не сдвинулось.',
+    'verdict.asking': 'Сверяю с каталогом известных тел Солнечной системы…',
     'verdict.checked': 'Отслежено мест, которые выделились: {checked}.',
     'verdict.depth': 'Поиск дошёл до {mag} AB.',
     'verdict.depthShort': 'Поиск дошёл до {mag} AB — на {gap}ᵐ мельче, чем предсказанная Планета X.',
@@ -422,7 +437,7 @@ const STRINGS = {
     'depth.said': 'Слабейший точечный источник, который мог показать один заход в этом поле, при 5σ.',
     'depth.stackShort': '{band} · сложено {n}',
     'depth.singleShort': '{band} · один заход',
-    'depth.stackNote': 'Если сложить все {n} {n:заход|захода|заходов} в {band}, неподвижный источник был бы виден примерно до {mag} AB; Muninn ищет по одному заходу и кадры не складывает.',
+    'depth.stackNote': 'Если сложить все {n} {n:заход|захода|заходов} в {band}, неподвижный источник был бы виден примерно до {mag} AB; автоматический поиск идёт по одному заходу, а «Стек» складывает один сезон.',
     'depth.here': 'это поле',
     'depth.target': 'Планета X',
     'depth.scale': 'Дошли до {mag} AB; Планета X предсказана на {lo}–{hi}',
@@ -515,7 +530,8 @@ const STRINGS = {
     'mode.stackWhen': 'Заходы этого сезона в одной полосе, сложенные вместе: глубже для всего, что неделю-другую стоит на месте',
     'mode.stackHint': 'Этот сезон: сложено {n} {n:заход|захода|заходов} в {band}, около {mag} AB при 5σ. Тело дальше ~500 а.е. сдвигается здесь меньше чем на два пикселя; ← → — другой сезон, куда оно бы прыгнуло.',
     'mode.stackHintNoDepth': 'Этот сезон: сложено {n} {n:заход|захода|заходов} в {band}. Тело дальше ~500 а.е. сдвигается здесь меньше чем на два пикселя; ← → — другой сезон, куда оно бы прыгнуло.',
-    'mode.stackAlone': 'В {band} нет другого захода в пределах {days} {days:дня|дней|дней} от этого — складывать нечего. ← → — другой сезон.',
+    'mode.stackAlone': 'В архиве нет другого захода в {band} за этот сезон — складывать нечего. ← → — другой сезон.',
+    'mode.stackReading': 'Читаю {done} из {total}…',
     'frame.stack': 'сложено {n} {n:заход|захода|заходов}',
     'mode.blinkHint': 'Перебирает все заходы. Движущийся источник прыгает.',
     'mode.wipeHint': 'Тяните разделитель. A и Б встречаются посередине.',
@@ -723,10 +739,12 @@ export const getLanguage = () => current;
 /**
  * Russian nouns agree with the number before them in three forms — 1 заход,
  * 3 захода, 7 заходов — so a string can say {n:заход|захода|заходов} and get
- * the one that fits. English strings never need it.
+ * the one that fits. English has two forms, {n:visit|visits}.
  */
 function pluralForm(n, forms) {
   const a = Math.abs(Math.trunc(Number(n)));
+  // Two forms is English: one, and everything else.
+  if (forms.length === 2) return a === 1 ? forms[0] : forms[1];
   if (!Number.isFinite(a) || forms.length < 3) return forms[forms.length - 1] ?? '';
   const d = a % 10;
   const h = a % 100;
