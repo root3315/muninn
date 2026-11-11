@@ -2017,6 +2017,7 @@ async function openField({ ra, dec, label = '', band = null }) {
     drawAxis();
     try {
       const stamp = await readStamp(toS3(entry.frame.url), grid, { signal: ctrl.signal });
+      await afterDive();
       if (ctrl.signal.aborted) return;
       if (!stamp) {
         entry.status = 'dropped';
@@ -2349,6 +2350,26 @@ function nameOnSky(hit) {
  * archive happens during the travel rather than after it.
  */
 let flying = false;
+/** Visits that landed mid-dive, each waiting for a frame of its own. */
+const diveWaiters = [];
+
+/**
+ * Resolves once the dive is over. A visit that lands mid-flight costs a few
+ * dozen milliseconds to colour and score, which is a dropped frame of the dive
+ * for something nobody can see yet; held here, they go in one per frame after
+ * the sky has handed over.
+ */
+function afterDive() {
+  if (!flying) return Promise.resolve();
+  return new Promise((resolve) => { diveWaiters.push(resolve); });
+}
+
+function releaseDiveWaiters() {
+  const next = diveWaiters.shift();
+  if (!next) return;
+  next();
+  requestAnimationFrame(releaseDiveWaiters);
+}
 
 async function enterFrom(hit) {
   if (flying) return;
@@ -2368,6 +2389,7 @@ async function enterFrom(hit) {
   } finally {
     closeGate();
     flying = false;
+    releaseDiveWaiters();
   }
 }
 
