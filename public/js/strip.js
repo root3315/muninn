@@ -61,7 +61,7 @@ const toMjd = (date) => date.getTime() / 86400000 + MJD_UNIX;
  * @returns {{x:number, y:number, w:number, h:number, i:number}[]}
  */
 export function drawStrip(canvas, {
-  slots, sectors, index, hover = -1, lang = 'ru', paint,
+  slots, sectors, index, hover = -1, lang = 'ru', paint, now = 0, motion = true,
 }) {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const cssW = canvas.clientWidth || 1;
@@ -107,7 +107,10 @@ export function drawStrip(canvas, {
   const sigY = thumbY + thumbH + gapB;
   const dateY = sigY + sigH + gapC;
 
-  const mjds = slots.map((s) => s.frame.mjd);
+  // Before the archive has answered there are places but no dates: the run
+  // keeps its shape and its frames, with nothing on the lane yet.
+  const skeleton = !slots.some((s) => s.frame);
+  const mjds = skeleton ? [0] : slots.map((s) => s.frame.mjd);
   const lo = Math.min(...mjds);
   const hi = Math.max(...mjds);
   const span = hi - lo || 1;
@@ -130,7 +133,7 @@ export function drawStrip(canvas, {
   const first = toDate(lo);
   let cursor = new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), 1));
   let lastYear = null;
-  while (toMjd(cursor) <= hi) {
+  while (!skeleton && toMjd(cursor) <= hi) {
     const next = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1));
     const x0 = atTime(Math.max(lo, toMjd(cursor)));
     const x1 = atTime(Math.min(hi, toMjd(next)));
@@ -183,7 +186,7 @@ export function drawStrip(canvas, {
     ctx.bezierCurveTo(tx, laneY + bend, bx, thumbY - bend, bx, thumbY);
     ctx.stroke();
   };
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < n && !skeleton; i++) {
     if (i === liveSlot || i === hoverSlot) continue;
     drawLink(i, P.ruleSoft, 1, slots[i].visit ? 0.9 : 0.45);
   }
@@ -218,10 +221,16 @@ export function drawStrip(canvas, {
       ctx.globalAlpha = 1;
     }
   };
-  for (let i = 0; i < n; i++) if (i !== liveSlot) dot(i);
+  for (let i = 0; i < n && !skeleton; i++) if (i !== liveSlot) dot(i);
   if (liveSlot >= 0) dot(liveSlot);
 
   /* ---- the frames ------------------------------------------------------ */
+  // Frames still being read carry one soft band of light that travels along
+  // the whole row, left to right, every 1.6 s: one wave across the run rather
+  // than ten separate blinks. A frame that lands fades in over a third of a
+  // second instead of popping into its place.
+  const WAVE_MS = 1600;
+  const wave = motion ? ((now % WAVE_MS) / WAVE_MS) * 1.6 - 0.3 : -1;
   const hits = [];
   for (let i = 0; i < n; i++) {
     const v = slots[i].visit;
@@ -231,6 +240,8 @@ export function drawStrip(canvas, {
     ctx.fillStyle = P.well;
     ctx.fillRect(x, thumbY, thumbW, thumbH);
     if (v?.canvas?.width) {
+      const age = motion && slots[i].landedAt ? (now - slots[i].landedAt) / 320 : 1;
+      ctx.globalAlpha = Math.max(0, Math.min(1, age));
       // `contain`: a thumbnail that crops is a thumbnail that lies about what
       // the frame holds.
       const k = Math.min(thumbW / v.canvas.width, thumbH / v.canvas.height);
@@ -239,18 +250,26 @@ export function drawStrip(canvas, {
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'low';
       ctx.drawImage(v.canvas, x + (thumbW - w) / 2, thumbY + (thumbH - h) / 2, w, h);
+      ctx.globalAlpha = 1;
       ctx.strokeStyle = live ? P.accent : (i === hoverSlot ? P.ink : P.rule);
       ctx.lineWidth = live ? 1.6 : 1;
       ctx.setLineDash([]);
       ctx.strokeRect(x + 0.5, thumbY + 0.5, thumbW - 1, thumbH - 1);
       hits.push({ x, y: thumbY, w: thumbW, h: thumbH + gapB + sigH, i: slots[i].at });
     } else {
-      // Still on its way: the place it will take, and nothing pretending to be it.
-      ctx.strokeStyle = P.rule;
+      // Still on its way: the place it will take, and nothing pretending to be
+      // it — only the light of the wave passing over it.
+      const centre = (x + thumbW / 2) / (padX * 2 + inner);
+      const lit = wave < -0.5 ? 0 : Math.exp(-(((centre - wave) / 0.12) ** 2));
+      const reading = slots[i].status === 'reading';
+      ctx.fillStyle = P.accent;
+      ctx.globalAlpha = (reading ? 0.05 : 0.025) + 0.16 * lit;
+      ctx.fillRect(x, thumbY, thumbW, thumbH);
+      ctx.globalAlpha = 0.5 + 0.5 * lit;
+      ctx.strokeStyle = lit > 0.2 ? P.accent : P.rule;
       ctx.lineWidth = 1;
-      ctx.setLineDash([3, 3]);
       ctx.strokeRect(x + 0.5, thumbY + 0.5, thumbW - 1, thumbH - 1);
-      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -287,7 +306,7 @@ export function drawStrip(canvas, {
   // Every date if they fit, otherwise every other one — a row of overlapping
   // dates is a grey smear, not a scale.
   const every = thumbW < 46 ? 2 : 1;
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < n && !skeleton; i++) {
     if (i % every && i !== liveSlot) continue;
     // From the MJD, which is UTC by definition; the ISO string carries no zone
     // and would be read as local time.
