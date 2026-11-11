@@ -196,6 +196,37 @@ function readHash() {
 
 /* ------------------------------------------------------------------ chrome */
 
+/**
+ * The wait, shown as what it is: the visits being read, one line each, with
+ * the date, the band, and how many megabytes of that file it took. A field
+ * whose frames come slowly used to be a black plate and one sentence; this is
+ * the same wait with the archive's own work on it.
+ */
+function renderPlateLog() {
+  const log = $('plate-log');
+  const show = !$('plate-state').hidden && state.visits.length > 0 && !sky?.visits.length;
+  log.hidden = !show;
+  if (!show) return;
+  log.replaceChildren(...state.visits.map(({ frame, status, bytes }) => {
+    const li = document.createElement('li');
+    li.className = 'plate__log-row';
+    li.dataset.status = status;
+    const date = document.createElement('span');
+    date.className = 'plate__log-date';
+    date.textContent = fmtDate(frame.iso);
+    const band = document.createElement('span');
+    band.className = 'plate__log-band';
+    band.textContent = frame.band;
+    const what = document.createElement('span');
+    what.className = 'plate__log-what';
+    what.textContent = status === 'ready'
+      ? t('log.ready', { mb: fmt((bytes ?? 0) / 1048576, 1) })
+      : t(`log.${status}`);
+    li.append(date, band, what);
+    return li;
+  }));
+}
+
 function setPlateState(message, { progress = null, hidden = false, retry = false } = {}) {
   $('plate-state').hidden = hidden;
   $('plate-message').textContent = message ?? '';
@@ -205,6 +236,7 @@ function setPlateState(message, { progress = null, hidden = false, retry = false
   const meter = $('plate-meter');
   meter.hidden = progress == null;
   if (progress != null) $('plate-meter-fill').style.transform = `scaleX(${clamp(progress, 0, 1)})`;
+  renderPlateLog();
 }
 
 /**
@@ -2015,6 +2047,7 @@ async function openField({ ra, dec, label = '', band = null }) {
     if (ctrl.signal.aborted) return;
     entry.status = 'reading';
     drawAxis();
+    renderPlateLog();
     try {
       const stamp = await readStamp(toS3(entry.frame.url), grid, { signal: ctrl.signal });
       await afterDive();
@@ -2023,6 +2056,7 @@ async function openField({ ra, dec, label = '', band = null }) {
         entry.status = 'dropped';
       } else {
         entry.status = 'ready';
+        entry.bytes = stamp.meta.bytesRead;
         bytes += stamp.meta.bytesRead;
         sky.addVisit(entry.frame, stamp);
         if (sky.visits.length === 1) setPlateState('', { hidden: true });
@@ -2039,6 +2073,8 @@ async function openField({ ra, dec, label = '', band = null }) {
     if (ctrl.signal.aborted) return;
     if (!sky.visits.length) {
       setPlateState(t('epochs.loading', { done, total: chosen.length }), { progress: done / chosen.length });
+    } else {
+      renderPlateLog();
     }
     drawAxis();
     updateIdentity();
