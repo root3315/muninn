@@ -1410,7 +1410,10 @@ select.field--compact { background-position: right 9px center, right 5px center;
  * whatever is put on top of a picture is a thing standing in front of it.
  */
 body[data-gate="open"] { overflow: hidden; }
-body[data-gate="open"] .shell { display: none; }
+/* Hidden, not removed: a field opened from the sky is cut to the shape of the
+   room it will land in, and a room that is display:none measures 0 × 0 — every
+   field entered by the dive came out square on a wide screen. */
+body[data-gate="open"] .shell { visibility: hidden; }
 
 .gate {
   position: fixed; inset: 0; z-index: var(--z-modal);
