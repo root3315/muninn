@@ -20,45 +20,59 @@
  * Shifting each visit along a trial distance before adding — the classic
  * shift-and-stack — was measured too and is not done here: inside a season the
  * shift at Planet X distances is the same pixel or so as no shift at all.
+ *
+ * Seasons are cut from every visit the archive lists in the band, not from the
+ * few the viewer loaded for its blink: those are spread across the whole
+ * baseline and usually leave one per season, which would stack to nothing.
  */
 
-/** Visits within this many days of each other, in one band, are one season. */
-export const SEASON_DAYS = 20;
+/** A gap longer than this, with no visit in the band, starts a new season. */
+export const SEASON_GAP_DAYS = 30;
+/**
+ * And no season runs longer than this from its first visit. Fields near the
+ * ecliptic poles are seen all year round; the cap keeps a "season" to the span
+ * over which the stillness above was measured.
+ */
+export const SEASON_SPAN_DAYS = 20;
+/** The most visits one stack adds, nearest in time to the one on screen. */
+export const STACK_MAX = 6;
+/** Exposures closer than this belong to one visit (the archive's own grouping). */
+const SAME_VISIT_DAYS = 6 / 24;
 
 /**
- * The indices of the visits in the same season as visit `i`: the same band,
- * and no more than SEASON_DAYS from it. `visits` carry `frame.mjd` and
- * `frame.band`.
+ * The seasons of one band's visits: arrays of frames in date order. `frames`
+ * are visits of a single band, each with `mjd`.
  */
-export function seasonOf(visits, i, { days = SEASON_DAYS } = {}) {
-  const ref = visits[i]?.frame;
-  if (!ref) return [];
-  const out = [];
-  visits.forEach((v, k) => {
-    if (v.frame.band === ref.band && Math.abs(v.frame.mjd - ref.mjd) <= days) out.push(k);
-  });
-  return out;
+export function seasonChunks(frames, { gap = SEASON_GAP_DAYS, span = SEASON_SPAN_DAYS } = {}) {
+  const sorted = [...frames].sort((a, b) => a.mjd - b.mjd);
+  const chunks = [];
+  let cur = null;
+  let last = -Infinity;
+  for (const f of sorted) {
+    if (!cur || f.mjd - last > gap || f.mjd - cur[0].mjd > span) {
+      cur = [];
+      chunks.push(cur);
+    }
+    cur.push(f);
+    last = f.mjd;
+  }
+  return chunks;
+}
+
+/** The index of the season a moment falls in, or −1. */
+export function chunkAt(chunks, mjd) {
+  return chunks.findIndex((c) => mjd >= c[0].mjd - SAME_VISIT_DAYS && mjd <= c[c.length - 1].mjd + SAME_VISIT_DAYS);
 }
 
 /**
- * The first visit of the next season in direction `dir` (+1 later, −1
- * earlier), or `i` itself when there is none. Seasons are counted in the same
- * band, so "all bands" steps through the band of the visit on screen.
+ * What to stack for the visit on screen: the frame already shown stands for
+ * its own visit, and the rest of the season is filled in nearest-first up to
+ * `max`. Returned in date order.
  */
-export function seasonStep(visits, i, dir, { days = SEASON_DAYS } = {}) {
-  const ref = visits[i]?.frame;
-  if (!ref) return i;
-  const order = visits
-    .map((v, k) => ({ k, f: v.frame }))
-    .filter(({ f }) => f.band === ref.band)
-    .sort((a, b) => a.f.mjd - b.f.mjd);
-  const next = dir > 0
-    ? order.find(({ f }) => f.mjd - ref.mjd > days)
-    : [...order].reverse().find(({ f }) => ref.mjd - f.mjd > days);
-  if (!next) return i;
-  // Land on the season's earliest visit, so stepping back and forth is stable.
-  const start = order.find(({ f }) => Math.abs(f.mjd - next.f.mjd) <= days);
-  return (start ?? next).k;
+export function forStack(chunk, ref, max = STACK_MAX) {
+  const others = chunk.filter((f) => Math.abs(f.mjd - ref.mjd) > SAME_VISIT_DAYS);
+  const nearest = others.sort((a, b) => Math.abs(a.mjd - ref.mjd) - Math.abs(b.mjd - ref.mjd));
+  return [ref, ...nearest.slice(0, Math.max(0, max - 1))].sort((a, b) => a.mjd - b.mjd);
 }
 
 /**

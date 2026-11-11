@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 
 import { parseVOTable } from './public/js/votable.js';
 import { frameFromRow } from './public/js/catalog.js';
+import { COLLECTIONS } from './public/js/release.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
@@ -26,7 +27,6 @@ const CACHE = join(ROOT, '.cache');
 const PORT = Number(process.env.PORT) || 5173;
 const HOST = process.env.HOST || '127.0.0.1';
 
-const COLLECTIONS = ['spherex_qr2', 'spherex_qr2_deep'];
 const SIA = 'https://irsa.ipac.caltech.edu/SIA';
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 /**

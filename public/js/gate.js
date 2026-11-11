@@ -137,6 +137,12 @@ const FOV_WIDE = 78;
 const FOV_MIN = 20;
 const FOV_MAX = 108;
 const FOV_DIVE = 1.0;
+/**
+ * The pixel density a dive is drawn at. Every star is a trail by then, and a
+ * trail is a smear, so the full density buys nothing the eye can find; the
+ * frame is filled by the GPU, and fewer pixels is what keeps it on time.
+ */
+const DIVE_DPR = 0.7;
 
 export class Gate {
   /**
@@ -295,8 +301,9 @@ export class Gate {
     return true;
   }
 
-  measure() {
-    const dpr = Math.min(this.quality.dpr, window.devicePixelRatio || 1);
+  /** @param {number} [cap] a lower ceiling on the pixel density, for a dive */
+  measure(cap = Infinity) {
+    const dpr = Math.min(this.quality.dpr, window.devicePixelRatio || 1, cap);
     const w = this.canvas.clientWidth || 1;
     const h = this.canvas.clientHeight || 1;
     this.box = { width: w * dpr, height: h * dpr, dpr, cssW: w, cssH: h };
@@ -606,8 +613,9 @@ export class Gate {
    */
   drawBand(target) {
     if (!this.band) return;
-    /** Screen pixels per sample. The disc has no detail this fine. */
-    const SS = this.quality.band;
+    /** Screen pixels per sample. The disc has no detail this fine — and in a
+     * dive it is smeared by the motion anyway, so it is sampled coarser. */
+    const SS = this.quality.band * (this.flight ? 1.6 : 1);
     const { width, height } = this.box;
     const W = Math.max(2, Math.ceil(width / SS));
     const H = Math.max(2, Math.ceil(height / SS));
@@ -659,7 +667,9 @@ export class Gate {
 
     this.lowCtx.putImageData(this.lowImg, 0, 0);
     target.imageSmoothingEnabled = true;
-    target.imageSmoothingQuality = 'high';
+    // The disc is a smooth gradient; the cheap filter is the same picture, and
+    // in a dive it is one less full-frame pass for the GPU.
+    target.imageSmoothingQuality = this.flight ? 'low' : 'high';
     target.globalCompositeOperation = 'lighter';
     target.drawImage(this.low, 0, 0, width, height);
     target.globalCompositeOperation = 'source-over';
@@ -674,6 +684,11 @@ export class Gate {
     // Where things were a fifth of a second ago, for the trails.
     const focalPrev = f ? (height / 2) / Math.tan((f.fovPrev / 2) * D2R) : focal;
     const streak = !!f && Math.abs(focalPrev - focal) > 0.5;
+    // A trail longer than this is clipped at its far end. Near the end of the
+    // dive the fifth-of-a-second displacement runs past the edge of the frame,
+    // and rasterising thousands of window-length lines was what made the dive
+    // stutter: the script took 15 ms a frame and the paint behind it 60.
+    this.trailMax = 0.22 * Math.max(width, height);
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.fillStyle = this.paint.well;
@@ -688,7 +703,9 @@ export class Gate {
       ctx.fillStyle = '#cfe0f2';
       ctx.strokeStyle = '#cfe0f2';
       ctx.lineWidth = dpr;
-      ctx.lineCap = 'round';
+      // Butt ends in a dive: a round cap on every trail doubles the work and
+      // is invisible at that speed.
+      ctx.lineCap = streak ? 'butt' : 'round';
       for (const b of this.haze.buckets) {
         const { idx } = b;
         ctx.globalAlpha = b.alpha;
@@ -703,9 +720,11 @@ export class Gate {
           const x = this.px;
           const y = this.py;
           if (x < -2 || x > width + 2 || y < -2 || y > height + 2) continue;
-          if (streak && this.at(vx, vy, vz, focalPrev)) {
-            ctx.moveTo(this.px, this.py);
-            ctx.lineTo(x, y);
+          if (streak) {
+            // A third of the faint field is plenty of trails: in motion it
+            // reads as texture, and each one costs a line to rasterise.
+            if (k % 3 || !this.at(vx, vy, vz, focalPrev)) continue;
+            this.trail(ctx, x, y);
           } else {
             ctx.rect(x, y, dpr, dpr);
           }
@@ -748,7 +767,7 @@ export class Gate {
       ctx.globalAlpha = 1;
     }
 
-    ctx.lineCap = 'round';
+    ctx.lineCap = streak ? 'butt' : 'round';
     const TAU = Math.PI * 2;
     for (const b of this.starBuckets) {
       const { idx } = b;
@@ -767,8 +786,7 @@ export class Gate {
         if (x < -6 || x > width + 6 || y < -6 || y > height + 6) continue;
         if (streak) {
           if (!this.at(vx, vy, vz, focalPrev)) continue;
-          ctx.moveTo(this.px, this.py);
-          ctx.lineTo(x, y);
+          this.trail(ctx, x, y);
           drew = true;
           continue;
         }
@@ -828,6 +846,26 @@ export class Gate {
       this.drawHit(ctx);
     }
     this.drawArrival(ctx);
+  }
+
+  /**
+   * One trail, from where the point was (`px`, `py`, just projected) to where
+   * it is now, no longer than `trailMax`: the far end is pulled in along the
+   * same line, so the direction stays the real one.
+   */
+  trail(ctx, x, y) {
+    let x0 = this.px;
+    let y0 = this.py;
+    const dx = x - x0;
+    const dy = y - y0;
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len > this.trailMax) {
+      const k = this.trailMax / len;
+      x0 = x - dx * k;
+      y0 = y - dy * k;
+    }
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x, y);
   }
 
   /**
@@ -1147,6 +1185,7 @@ export class Gate {
     const dRA = ((at.ra - from.ra + 540) % 360) - 180;
     const dDec = at.dec - from.dec;
 
+    this.measure(DIVE_DPR);
     return new Promise((resolve) => {
       const t0 = performance.now();
       // Where the camera is, and how wide, at a given point in the run.
@@ -1176,6 +1215,7 @@ export class Gate {
         if (t < 1) { this.flightRaf = requestAnimationFrame(step); return; }
         this.flight = null;
         this.cam.fov = out ? FOV_WIDE : FOV_DIVE;
+        this.measure();
         this.draw();
         resolve();
       };
