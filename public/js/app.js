@@ -1065,10 +1065,11 @@ function drawAxis() {
       return { frame: e.frame, visit: visits[at] ?? null, at, status: e.status, landedAt: e.landedAt };
     })
     .sort((p, q) => p.frame.mjd - q.frame.mjd);
-  // While the archive is still being asked, a run that is already on screen
-  // stays, as empty places: it used to vanish at every new field and come
-  // back a second later, which moved the whole page twice.
-  if (slots.length < 2 && state.loading && !box.hidden) {
+  // While the archive is still being asked, the run is already there, as
+  // empty places: it used to vanish at every new field, and on the way in
+  // from the sky it was missing until the index answered, and either way it
+  // arrived a second late and moved the whole page.
+  if (slots.length < 2 && state.loading) {
     slots = Array.from({ length: runSlots || MAX_VISITS }, () => ({ frame: null, visit: null, at: -1, status: 'pending' }));
   }
   // Shown as soon as there is a run to show, before any of its pixels: the page
