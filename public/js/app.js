@@ -14,14 +14,14 @@
  */
 
 import { t, setLanguage, getLanguage, applyTranslations, fmt, fmtDate, fmtDay, fmtTime } from './i18n.js';
-import { skySigma, stackDepth, shortfall, PLANET_NINE_V } from './depth.js';
+import { skySigma, stackDepth, shortfall, limitAB, PLANET_NINE_V } from './depth.js';
 import { scoreSectors, standouts, peakIndex, sectorBounds, SECTOR_COUNT } from './sectors.js';
 import { Gate, loadStars } from './gate.js';
 import { drawStrip } from './strip.js';
 import { themeTransition } from './twilight.js';
 import { planetsNow } from './ephemeris.js';
 import { rankCandidates } from './hunt.js';
-import { seasonOf, seasonStep, averaged, SEASON_DAYS } from './stack.js';
+import { seasonChunks, chunkAt, forStack, averaged } from './stack.js';
 import { TangentGrid, separation, deltaRA } from './wcs.js';
 import { loadStamp } from './stamp.js';
 import { SkyView, shortName } from './sky.js';
@@ -412,8 +412,8 @@ const breathe = (() => {
 /**
  * Bumped by every field that opens. Anything that awaited across that change
  * holds a stale number and drops its answer instead of writing it over the new
- * field. Names sent off to be resolved are counted separately (askSeq), so a
- * name that turns out not to exist does not cancel the field on screen.
+ * field. Names sent off to be resolved are counted separately (askSeq, see
+ * submitTarget), so a name that turns out not to exist cancels nothing.
  */
 let fieldSeq = 0;
 let askSeq = 0;
@@ -514,7 +514,9 @@ function renderHunt() {
   const movers = found?.all
     ? rankCandidates(found.all.map((c) => {
       const catalog = huntVerdict(c);
-      return { ...c, catalog, known: catalog.state === 'match' ? catalog.name : null };
+      // Known only if the name explains every visit it was seen in.
+      const explained = catalog.state === 'match' && !catalog.unmatched?.length;
+      return { ...c, catalog, known: explained ? catalog.name : null };
     }))
     : [];
 
@@ -864,8 +866,10 @@ function measureDepth({ final = true } = {}) {
     sigmas.push(sigma ?? 0);
     // The depth is quoted from the detector's own pixels (see stamp.js); the
     // grid's noise stays the floor for the sector scores, which live on the grid.
+    // No fallback to the grid's noise: it reads about a third low and would
+    // pull the median deep. A visit without a detector figure is left out.
     const detector = v.stamp.meta?.detectorSigma;
-    if (detector || sigma) per.push({ band: v.frame.band, sigma: detector || sigma });
+    if (detector > 0) per.push({ band: v.frame.band, sigma: detector });
   }
   state.depth = per.length ? stackDepth(per) : null;
   measureSectors(sigmas, { final });
@@ -1088,7 +1092,7 @@ function syncScrub() {
   updateIdentity();
   fillSlots();
   // The stack's line carries the season's own numbers, which change with it.
-  if (sky?.mode === 'stack') $('mode-hint').textContent = modeHint('stack');
+  if (sky?.mode === 'stack') refreshStack();
 }
 
 /** The A/B pickers — one line, instead of two buttons on every visit. */
@@ -1181,7 +1185,7 @@ function renderWhen() {
 
   // A stack is a season, so it is dated as one, and the steps go by season.
   if (sky?.mode === 'stack' && frame) {
-    const season = seasonOf(list, i).map((k) => list[k].frame).sort((p, q) => p.mjd - q.mjd);
+    const season = sky.stackMembers().map((m) => m.frame);
     const first = season[0];
     const last = season[season.length - 1];
     // Days on the big line, the year or years on the small one where a
@@ -1198,7 +1202,7 @@ function renderWhen() {
     $('when-band').textContent = `${frame.band} · ${fmt(frame.emMin, 2)}–${fmt(frame.emMax, 2)} µm`;
     $('when-of').textContent = t('frame.stack', { n: season.length });
     for (const [id, dir] of [['prev', -1], ['next', 1]]) {
-      const k = seasonStep(list, i, dir);
+      const k = stackStep(dir);
       $(id).disabled = k === i;
       $(`${id}-date`).textContent = k === i ? '' : fmtDay(list[k].frame.iso);
     }
@@ -1438,7 +1442,9 @@ function retrackMarks() {
 function nameMarks() {
   for (const m of sky.marks) {
     m.catalog = skybotVerdict(seenAt(m.analysis, { ra: m.ra, dec: m.dec, obsId: m.obsId }));
-    m.known = m.catalog.state === 'match' ? m.catalog.name : null;
+    // A body that explains some of the visits leaves the others unexplained,
+    // and the picture must not draw the mark as accounted for.
+    m.known = m.catalog.state === 'match' && !m.catalog.unmatched?.length ? m.catalog.name : null;
     identifyMark(m);
     m.tag = tagOf(m);
   }
@@ -1476,8 +1482,12 @@ function identifyMark(m) {
 
   // The measured centre, not the click: that is what a catalogue should be asked about.
   const pts = a.track.length ? a.track : [{ ra: m.ra, dec: m.dec }];
+  // Averaged as offsets from the first point, so a spot on the 0h meridian
+  // (359.999° and 0.001°) averages to itself and not to 180°.
+  const ra0 = pts[0].ra;
+  const meanRA = ra0 + pts.reduce((s, p) => s + deltaRA(p.ra, ra0), 0) / pts.length;
   const at = {
-    ra: pts.reduce((s, p) => s + p.ra, 0) / pts.length,
+    ra: ((meanRA % 360) + 360) % 360,
     dec: pts.reduce((s, p) => s + p.dec, 0) / pts.length,
   };
   const key = `${at.ra.toFixed(5)} ${at.dec.toFixed(5)}`;
@@ -1939,6 +1949,9 @@ async function openField({ ra, dec, label = '', band = null }) {
   sky.setCatalog([]);
   showTip(null);
   skybot = { asking: new Set(), failed: new Set() };
+  stackPlanned = [];
+  stackAsking = new Set();
+  stackDropped = new Set();
   renderMarks();
   renderDepth();
   renderMatrix();
@@ -1987,6 +2000,8 @@ async function openField({ ra, dec, label = '', band = null }) {
     grid = refit;
     sky.reset(grid);
     skybot = { asking: new Set(), failed: new Set() };
+    stackAsking = new Set();
+    stackDropped = new Set();
     renderMarks();
   }
   updateIdentity();
@@ -2132,19 +2147,23 @@ async function submitTarget(raw) {
   if (/^[\d\s.+-]+$/.test(text)) { note.textContent = t('target.badCoords'); return; }
 
   note.textContent = t('target.resolving');
-  // A name takes seconds to resolve; a field opened in the meantime, or a
-  // second name typed, wins over this one when it finally answers.
+  // A name takes seconds to resolve. A second name typed meanwhile wins, and
+  // its own note stands; going somewhere else on the sky meanwhile wins too,
+  // and this one's "resolving" goes quietly. Changing the band or the width
+  // reopens the same place, which is not going anywhere, so it cancels nothing.
   const ticket = ++askSeq;
-  const openedAt = fieldSeq;
-  const stale = () => ticket !== askSeq || openedAt !== fieldSeq;
+  const from = `${state.ra}|${state.dec}`;
+  const movedOn = () => `${state.ra}|${state.dec}` !== from;
   try {
     const hit = await resolveName(text);
-    if (stale()) return;
+    if (ticket !== askSeq) return;
+    if (movedOn()) { note.textContent = ''; return; }
     if (!hit) { note.textContent = t('target.notFound'); return; }
     note.textContent = '';
     openField({ ra: hit.ra, dec: hit.dec, label: hit.name });
   } catch {
-    if (!stale()) note.textContent = t('target.offline');
+    if (ticket !== askSeq) return;
+    note.textContent = movedOn() ? '' : t('target.offline');
   }
 }
 
@@ -2461,20 +2480,104 @@ const MODE_HINT = { blink: 'mode.blinkHint', wipe: 'mode.wipeHint', difference: 
  */
 function modeHint(mode) {
   if (mode !== 'stack') return t(MODE_HINT[mode] ?? MODE_HINT.blink);
-  const visits = sky?.visits ?? [];
-  const band = visits[sky?.index]?.frame.band ?? '';
-  const n = visits.length ? seasonOf(visits, sky.index).length : 0;
-  if (n < 2) return t('mode.stackAlone', { band, days: SEASON_DAYS });
-  const single = state.depth?.band === band ? state.depth.single : null;
-  if (single == null) return t('mode.stackHintNoDepth', { n, band });
-  const mag = fmt(single + 2.5 * Math.log10(Math.sqrt(averaged(n))), 1);
-  return t('mode.stackHint', { n, band, mag });
+  const band = sky?.current?.frame.band ?? '';
+  const members = sky?.current ? sky.stackMembers() : [];
+  const n = members.length;
+  const loaded = new Set(members.map((m) => m.frame.url));
+  const pending = stackPlanned.filter((f) => !loaded.has(f.url) && !stackDropped.has(f.url)).length;
+  const reading = pending ? t('mode.stackReading', { done: n, total: n + pending }) : '';
+  if (n < 2 && !reading) return t('mode.stackAlone', { band });
+  // The depth of this very stack: its own visits' detector noise, then what
+  // averaging them buys (see averaged in stack.js).
+  const sigmas = members.map((m) => m.stamp.meta?.detectorSigma).filter((x) => x > 0).sort((a, b) => a - b);
+  const single = sigmas.length ? limitAB(sigmas[sigmas.length >> 1]) : null;
+  const line = single == null || n < 2
+    ? t('mode.stackHintNoDepth', { n, band })
+    : t('mode.stackHint', { n, band, mag: fmt(single + 2.5 * Math.log10(Math.sqrt(averaged(n))), 1) });
+  return reading ? `${line} ${reading}` : line;
+}
+
+/* ------------------------------------------------------------------ stack */
+
+/** What the stack on screen is meant to add, and exposures already asked for. */
+let stackPlanned = [];
+let stackAsking = new Set();
+/** Exposures that could not be read, or turned out not to cover the field. */
+let stackDropped = new Set();
+
+/**
+ * The seasons of one band, cut from every visit the archive listed for this
+ * field — not from the ten loaded for the blink, which are spread across the
+ * whole baseline and usually leave one per season.
+ */
+function bandSeasons(band) {
+  return seasonChunks(groupVisits(state.frames, { ra: state.ra, dec: state.dec, band }));
+}
+
+/** The loaded visit to show for the next season each way, or the one shown. */
+function stackStep(dir) {
+  const v = sky?.current;
+  if (!v) return sky?.index ?? 0;
+  const chunks = bandSeasons(v.frame.band);
+  const at = chunkAt(chunks, v.frame.mjd);
+  if (at < 0) return sky.index;
+  for (let c = at + dir; c >= 0 && c < chunks.length; c += dir) {
+    // Seasons with no loaded visit are passed over: there is nothing to stand
+    // for them on screen, and the run would not show where they are.
+    const k = sky.visits
+      .map((x, idx) => ({ x, idx }))
+      .filter(({ x }) => x.frame.band === v.frame.band && chunkAt(chunks, x.frame.mjd) === c)
+      .sort((a, b) => a.x.frame.mjd - b.x.frame.mjd)[0];
+    if (k) return k.idx;
+  }
+  return sky.index;
+}
+
+/**
+ * Point the stack at the season of the visit on screen and read whatever of
+ * it is not loaded yet. The extra exposures are the stack's alone: the run,
+ * the sectors and the hunt keep to the visits they were given.
+ */
+function refreshStack() {
+  const v = sky?.current;
+  if (!v || sky.mode !== 'stack') return;
+  const chunks = bandSeasons(v.frame.band);
+  const at = chunkAt(chunks, v.frame.mjd);
+  stackPlanned = at >= 0 ? forStack(chunks[at], v.frame) : [v.frame];
+  sky.setStack(stackPlanned.map((f) => f.url));
+  $('mode-hint').textContent = modeHint('stack');
+  renderWhen();
+
+  const have = new Set([...sky.visits, ...sky.extra.values()].map((x) => x.frame.url));
+  const missing = stackPlanned.filter((f) => !have.has(f.url) && !stackAsking.has(f.url) && !stackDropped.has(f.url));
+  if (!missing.length) return;
+  const signal = state.abort?.signal;
+  const grid = sky.grid;
+  for (const f of missing) stackAsking.add(f.url);
+  pool(missing, 2, async (frame) => {
+    if (signal?.aborted || sky.grid !== grid) return;
+    try {
+      const stamp = await readStamp(toS3(frame.url), grid, { signal });
+      if (signal?.aborted || sky.grid !== grid) return;
+      // Null is a frame that does not cover enough of the field to use.
+      if (!stamp) stackDropped.add(frame.url);
+      else {
+        sky.addExtra(frame, stamp);
+        state.bytes += stamp.meta.bytesRead;
+        renderBytes();
+      }
+    } catch {
+      // A stack with one visit fewer is still a stack; not asked again.
+      if (!signal?.aborted) stackDropped.add(frame.url);
+    }
+    if (sky.mode === 'stack') { $('mode-hint').textContent = modeHint('stack'); renderWhen(); }
+  });
 }
 
 /** One step along the run: a visit, or in the stack a whole season. */
 function stepBy(dir) {
   holdStill();
-  sky.setIndex(sky.mode === 'stack' ? seasonStep(sky.visits, sky.index, dir) : sky.index + dir);
+  sky.setIndex(sky.mode === 'stack' ? stackStep(dir) : sky.index + dir);
   syncScrub();
   refreshKnownObjects();
 }

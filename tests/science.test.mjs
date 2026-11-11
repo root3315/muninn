@@ -71,6 +71,12 @@ test('depth: robust sigma reads the noise, not the sources, and √N stacks', ()
   assert.ok(limitAB(0.01) > limitAB(0.02), 'less noise is deeper');
   const d = stackDepth([{ band: 'D2', sigma: 0.02 }, { band: 'D2', sigma: 0.02 }, { band: 'D2', sigma: 0.02 }, { band: 'D2', sigma: 0.02 }]);
   close(d.stacked - d.single, 2.5 * Math.log10(2), 1e-9, 'four visits buy 0.75 mag');
+  // Eight shallow D1 visits must not outvote two deeper D2 ones.
+  const mixed = stackDepth([
+    ...Array.from({ length: 8 }, () => ({ band: 'D1', sigma: 0.03 })),
+    { band: 'D2', sigma: 0.02 }, { band: 'D2', sigma: 0.02 },
+  ]);
+  assert.equal(mixed.band, 'D2');
 });
 
 test('sectors: a steady star scores zero, a one-visit transient stands out', () => {
@@ -99,16 +105,30 @@ test('a cut read off cached sorted pixels equals a fresh one', () => {
   }
 });
 
-test('season stack: seasons by band and date, steps land on a season start', async () => {
-  const { seasonOf, seasonStep, coadd, averaged } = await import('../public/js/stack.js');
-  const v = (mjd, band = 'D2') => ({ frame: { mjd, band } });
-  const visits = [v(100), v(101), v(103, 'D3'), v(110), v(290), v(292), v(470)];
-  assert.deepEqual(seasonOf(visits, 1), [0, 1, 3], 'same band within 20 days');
-  assert.deepEqual(seasonOf(visits, 5), [4, 5]);
-  assert.equal(seasonStep(visits, 1, 1), 4, 'next season, first visit');
-  assert.equal(seasonStep(visits, 5, 1), 6);
-  assert.equal(seasonStep(visits, 6, 1), 6, 'nothing later');
-  assert.equal(seasonStep(visits, 4, -1), 0, 'previous season, first visit');
+test('season stack: seasons are a partition, the stack takes the nearest of one', async () => {
+  const { seasonChunks, chunkAt, forStack, coadd, averaged, STACK_MAX } = await import('../public/js/stack.js');
+  const f = (mjd) => ({ mjd, url: `u${mjd}` });
+  const days = (chunks) => chunks.map((c) => c.map((x) => x.mjd));
+
+  // Six months apart: two seasons, whatever order the visits came in.
+  assert.deepEqual(days(seasonChunks([f(290), f(100), f(110), f(292), f(101)])), [[100, 101, 110], [290, 292]]);
+  // 0, 15, 30: one partition however it is entered, never a season that
+  // depends on which visit is looked at (the old ±20-day window did).
+  const chain = seasonChunks([f(0), f(15), f(30)]);
+  assert.deepEqual(days(chain), [[0, 15], [30]], 'no season runs past 20 days');
+  assert.equal(chunkAt(chain, 15), 0);
+  assert.equal(chunkAt(chain, 30.1), 1, 'another exposure of the same visit belongs to it');
+  assert.equal(chunkAt(chain, 200), -1);
+  // A polar field seen every day: capped, and the stack takes the nearest.
+  const daily = seasonChunks(Array.from({ length: 60 }, (_, d) => f(d)));
+  assert.ok(daily.every((c) => c[c.length - 1].mjd - c[0].mjd <= 20));
+  const pick = forStack(daily[0], daily[0][10]);
+  assert.equal(pick.length, STACK_MAX);
+  assert.ok(pick.includes(daily[0][10]), 'the visit on screen is in its own stack');
+  assert.ok(pick.every((x) => Math.abs(x.mjd - 10) <= 3), 'nearest in time first');
+  // The shown frame stands for its visit: another exposure of it is not added twice.
+  const withTwin = forStack([f(10), f(10.01), f(12)], f(10));
+  assert.deepEqual(withTwin.map((x) => x.mjd), [10, 12]);
 
   // Four planes: the brightest value of each pixel is dropped, NaN is skipped.
   const planes = [[1, NaN], [2, 4], [3, 6], [100, 8]].map((p) => Float32Array.from(p));
