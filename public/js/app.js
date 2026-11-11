@@ -2149,12 +2149,20 @@ function renderLambda(present) {
   box.replaceChildren();
   if (present.length < 2) return;
 
-  const chip = (value, label, title) => {
+  const chip = (value, label, sub) => {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'lambda__chip';
-    b.textContent = label;
-    if (title) b.title = title;
+    const name = document.createElement('span');
+    name.className = 'lambda__name';
+    name.textContent = label;
+    b.append(name);
+    if (sub) {
+      const um = document.createElement('span');
+      um.className = 'lambda__um';
+      um.textContent = sub;
+      b.append(um);
+    }
     b.setAttribute('aria-pressed', String(state.band === value));
     b.addEventListener('click', () => {
       if (state.band === value) return;
@@ -2165,10 +2173,13 @@ function renderLambda(present) {
     box.append(b);
   };
 
-  chip('all', t('field.bandAll'), '');
+  const span = (lo, hi) => `${fmt(lo, 2)}–${fmt(hi, 2)} µm`;
+  const ranges = present.map((b) => bandRange(state.frames, b)).filter(Boolean);
+  chip('all', t('field.bandAll'), ranges.length
+    ? span(Math.min(...ranges.map((r) => r[0])), Math.max(...ranges.map((r) => r[1]))) : '');
   for (const b of present) {
     const range = bandRange(state.frames, b);
-    chip(b, b, range ? `${fmt(range[0], 2)}–${fmt(range[1], 2)} µm` : '');
+    chip(b, b, range ? span(range[0], range[1]) : '');
   }
 }
 
