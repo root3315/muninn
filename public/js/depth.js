@@ -80,8 +80,9 @@ export function limitAB(sigmaMJySr, { sigma = 5, aperturePx = APERTURE_PX } = {}
  *
  * Coadding n frames of equal depth beats the noise down by √n, which is 2.5·log₁₀√n
  * magnitudes. Visits of different bands are not coadded — they are different
- * measurements — so the deepest single band sets the reach, and the count that
- * earns it is the count in that band.
+ * measurements. The band chosen is the one whose single visit goes deepest,
+ * because a single visit is what the search works at; choosing by the stack let
+ * eight shallow D1 visits outvote two deeper D2 ones and understate the depth.
  */
 export function stackDepth(perVisit) {
   const byBand = new Map();
@@ -96,7 +97,7 @@ export function stackDepth(perVisit) {
     const single = limitAB(median(sigmas));
     if (single == null) continue;
     const stacked = single + 2.5 * Math.log10(Math.sqrt(sigmas.length));
-    if (!best || stacked > best.stacked) best = { band, n: sigmas.length, single, stacked };
+    if (!best || single > best.single) best = { band, n: sigmas.length, single, stacked };
   }
   return best;
 }

@@ -20,7 +20,7 @@
 import { limitsFromSorted, sortedFinite, paint, paintDifference, rampFromToken, resolveColor } from './render.js';
 import { SECTOR_COLS, SECTOR_ROWS, sectorBounds } from './sectors.js';
 import { deltaRA } from './wcs.js';
-import { coadd, seasonOf } from './stack.js';
+import { coadd } from './stack.js';
 
 const RAMP_TOKENS = { deep: '--cmap-deep', ice: '--cmap-ice', infrared: '--cmap-infrared' };
 
@@ -55,6 +55,9 @@ export class SkyView {
     this.sector = null;
     /* Label boxes already drawn this frame, which later labels avoid. */
     this.taken = [];
+    /* Exposures read only for the stack, and the set it adds (see reset). */
+    this.extra = new Map();
+    this.stackUrls = null;
     /* SkyBoT's answer for each visit, keyed by the frame's obsId rather than its
        place in the list: visits are sorted by date as they arrive, and an answer
        filed under a position drifted onto the wrong visit when one landed early. */
@@ -174,7 +177,42 @@ export class SkyView {
     this.b = 1;
     this.diffCache = null;
     this.stackCache = null;
+    // Exposures read only for the stack, by URL, and the set the stack adds.
+    this.extra = new Map();
+    this.stackUrls = null;
+    // A lit sector belongs to the field it was lit in.
+    this.sector = null;
     this.draw();
+  }
+
+  /** An exposure read only to be stacked: not a visit, not in the run. */
+  addExtra(frame, stamp) {
+    this.extra.set(frame.url, { frame, stamp });
+    this.stackCache = null;
+    if (this.mode === 'stack') this.draw();
+  }
+
+  /** Which exposures the stack adds, by URL; the app decides, from the archive. */
+  setStack(urls) {
+    this.stackUrls = urls;
+    if (this.mode === 'stack') this.draw();
+  }
+
+  /** The loaded exposures the stack adds right now, visits and extras alike. */
+  stackMembers() {
+    const ref = this.visits[this.index];
+    if (!ref) return [];
+    const want = new Set(this.stackUrls ?? [ref.frame.url]);
+    want.add(ref.frame.url);
+    const seen = new Set();
+    const out = [];
+    for (const item of [...this.visits, ...(this.extra?.values() ?? [])]) {
+      const url = item.frame.url;
+      if (!want.has(url) || seen.has(url)) continue;
+      seen.add(url);
+      out.push(item);
+    }
+    return out.sort((a, b) => a.frame.mjd - b.frame.mjd);
   }
 
   addVisit(frame, stamp) {
@@ -270,16 +308,16 @@ export class SkyView {
 
   /**
    * The season of the visit on screen, added up (see stack.js) and cut and
-   * tinted like any single visit. Rebuilt only when the season, the cut or the
-   * palette changes.
+   * tinted like any single visit. Rebuilt only when the members, the cut or
+   * the palette change.
    */
   stackCanvas() {
     const ref = this.visits[this.index];
     if (!ref) return null;
-    const members = seasonOf(this.visits, this.index);
-    const key = `${members.map((k) => this.visits[k].frame.obsId).join('|')}|${this.render.clip}|${this.render.stretch}|${this.render.palette}`;
+    const members = this.stackMembers();
+    const key = `${members.map((m) => m.frame.url).join('|')}|${this.render.clip}|${this.render.stretch}|${this.render.palette}`;
     if (this.stackCache?.key === key) return this.stackCache;
-    const data = coadd(members.map((k) => this.visits[k].stamp.data));
+    const data = coadd(members.map((m) => m.stamp.data));
     const lim = limitsFromSorted(sortedFinite(data), { loPercent: 5, hiPercent: this.render.clip });
     const cv = document.createElement('canvas');
     cv.width = ref.stamp.width;
