@@ -17,9 +17,9 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import { parseVOTable } from '../public/js/votable.js';
 import { frameFromRow, groupVisits } from '../public/js/catalog.js';
+import { COLLECTIONS } from '../public/js/release.js';
 
 const SIA = 'https://irsa.ipac.caltech.edu/SIA';
-const COLLECTIONS = ['spherex_qr2', 'spherex_qr2_deep'];
 const MAXREC = 500;
 const RADIUS = 0.006;
 const DATA = new URL('../public/data/', import.meta.url);
