@@ -2,7 +2,7 @@
  * vibe: "deep sky" — dark blue, bluer and whiter where the stars crowd
  * paper  oklch(16% 0.040 254)   ink oklch(95% 0.014 240)   accent oklch(76% 0.130 228)
  * axes: dark / condensed-grotesk / azure
- * display Oswald · body IBM Plex Sans · outlier IBM Plex Mono (two roles:
+ * display IBM Plex Sans Condensed · body IBM Plex Sans · outlier IBM Plex Mono (two roles:
  *   measured values, and the fine print)
  * audience: anyone curious about the sky · use: find what moved between visits
  * tone: technical / instrument · nav: N6 masthead · footer: Ft4 · enrichment: none
@@ -187,7 +187,7 @@ li { list-style: none; }
 .brand__text { display: grid; min-inline-size: 0; }
 .brand strong {
   font-family: var(--font-display); font-weight: 600;
-  font-size: var(--text-md); letter-spacing: 0.03em; line-height: 1.1;
+  font-size: var(--text-lg); letter-spacing: 0.01em; line-height: 1;
 }
 .brand__tag { font-size: var(--text-xs); color: var(--color-neutral); line-height: 1.3; }
 
@@ -228,7 +228,7 @@ li { list-style: none; }
 }
 .label__name {
   font-family: var(--font-record); font-size: var(--text-md);
-  color: var(--color-muted); font-weight: 500; letter-spacing: 0;
+  color: var(--color-muted); font-weight: 600; letter-spacing: 0.005em;
 }
 .label__when { color: var(--color-accent-dim); letter-spacing: 0.08em; }
 .label__pos { overflow-wrap: anywhere; }
@@ -237,8 +237,8 @@ li { list-style: none; }
    is a sentence; set in a condensed grotesque it read like a scoreboard. */
 .verdict__line {
   font-family: var(--font-record);
-  font-size: clamp(1.3rem, 1.55vw, 1.75rem); font-weight: 500;
-  line-height: 1.15; letter-spacing: -0.012em;
+  font-size: clamp(1.4rem, 1.7vw, 1.9rem); font-weight: 600;
+  line-height: 1.1; letter-spacing: -0.005em;
   text-wrap: balance;
 }
 /* Still reading: said in the grey, because it is not yet an answer. */
@@ -312,7 +312,8 @@ li { list-style: none; }
    and it said nothing that the words did not. */
 .part__k {
   font-family: var(--font-record);
-  font-size: var(--text-md); font-weight: 500; letter-spacing: -0.005em;
+  font-size: var(--text-lg); font-weight: 600; letter-spacing: 0;
+  line-height: 1.1;
   color: var(--color-ink);
 }
 .part__count {
@@ -355,12 +356,14 @@ li { list-style: none; }
 .cue { font-size: var(--text-sm); color: var(--color-muted); min-inline-size: 0; }
 .hint { font-size: var(--text-sm); color: var(--color-neutral); min-block-size: 1.4em; }
 
+/* Credits are owed, not read: the smallest sans, at the foot of the column,
+   in the quietest colour that still passes. A block of 10 px mono read as a
+   log dump sitting at the level of the findings. */
 .credit {
-  font-family: var(--font-mono); font-size: 10px;
-  color: var(--color-neutral); line-height: 1.55;
-  white-space: pre-line;
-  padding-block-start: var(--space-md);
-  border-block-start: var(--rule-hair) solid var(--color-rule-soft);
+  font-size: var(--text-xs); line-height: 1.5;
+  color: var(--color-neutral);
+  white-space: pre-line; text-wrap: pretty;
+  margin-block-start: auto;
   padding-block-start: var(--space-md);
   border-block-start: var(--rule-hair) solid var(--color-rule-soft);
 }
@@ -491,7 +494,8 @@ li { list-style: none; }
 .run__head .compare { flex: 1 1 100%; }
 .run__k {
   font-family: var(--font-record);
-  font-size: var(--text-md); font-weight: 500; letter-spacing: -0.005em;
+  font-size: var(--text-lg); font-weight: 600; letter-spacing: 0;
+  line-height: 1.1;
   color: var(--color-ink);
 }
 .run__found { font-size: var(--text-sm); color: var(--color-accent); }
@@ -603,24 +607,31 @@ li { list-style: none; }
 /* The wavebands, as one chip each. SPHEREx takes six of them and the choice
    between them is a headline control, not a preference in a settings panel. */
 .lambda { display: flex; flex-wrap: wrap; gap: var(--space-2xs); }
+/* A filter wheel, not a row of pills: each position names its band and the
+   wavelengths it passes, and the one in the beam is marked by a rule at its
+   edge and a tint, the way a selected line is marked in a log. */
 .lambda__chip {
   appearance: none; cursor: pointer; font: inherit;
-  padding: var(--space-3xs) var(--space-sm);
-  font-family: var(--font-mono); font-size: var(--text-xs);
-  color: var(--color-neutral);
+  display: grid; gap: 1px; justify-items: start;
+  padding: var(--space-2xs) var(--space-xs) var(--space-2xs) var(--space-sm);
+  color: var(--color-muted);
   background: none;
-  border: var(--rule-hair) solid var(--color-rule);
-  border-radius: var(--radius-round);
-  white-space: nowrap;
+  border: 0; border-inline-start: 2px solid var(--color-rule);
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  text-align: start; white-space: nowrap;
   transition: color var(--dur-micro) var(--ease-out),
               border-color var(--dur-micro) var(--ease-out),
               background-color var(--dur-micro) var(--ease-out);
 }
-.lambda__chip:hover { color: var(--color-ink); border-color: var(--color-neutral); }
+.lambda__name { font-family: var(--font-display); font-size: var(--text-sm); font-weight: 600; letter-spacing: 0.02em; line-height: 1.15; }
+.lambda__um { font-family: var(--font-mono); font-size: 0.6875rem; color: var(--color-neutral); line-height: 1.2; }
+.lambda__chip:hover { color: var(--color-ink); border-inline-start-color: var(--color-neutral); background: var(--color-paper-2); }
 .lambda__chip[aria-pressed="true"] {
-  color: var(--color-accent-ink); background: var(--color-accent);
-  border-color: var(--color-accent);
+  color: var(--color-ink); background: var(--color-paper-3);
+  border-inline-start-color: var(--color-accent);
 }
+.lambda__chip[aria-pressed="true"] .lambda__name { color: var(--color-accent); }
+.lambda__chip:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 
 .stage {
   display: grid; overflow: hidden auto; overscroll-behavior: contain;
@@ -676,7 +687,7 @@ li { list-style: none; }
   --gap: var(--space-xs);
   --cap: 11.5rem;
   --step: 4.25rem;
-  --bandw: 6.75rem;
+  --bandw: 7.25rem;
   --aspect: 1;
   --fixed: calc(var(--cap) + 2 * var(--step) + var(--bandw) + 4 * var(--gap) + 2 * var(--pad));
   --avail-w: calc(100cqw - var(--fixed));
@@ -720,13 +731,12 @@ li { list-style: none; }
   inline-size: var(--plate-w); block-size: var(--plate-h);
 }
 .bands { grid-area: bands; align-self: center; }
-.bands .lambda { flex-direction: column; align-items: stretch; gap: var(--space-2xs); }
-.bands .lambda__chip { text-align: center; padding-block: var(--space-2xs); }
+.bands .lambda { flex-direction: column; align-items: stretch; gap: 2px; }
 /* A short room makes a short plate, and seven chips in a column are taller
    than it; the wheel folds into two columns rather than hang off the board. */
 @container (max-height: 18.5rem) {
   .bands .lambda { display: grid; grid-template-columns: 1fr 1fr; }
-  .bands .lambda__chip { padding-inline: 0; }
+  .bands .lambda__um { display: none; }
   .bands .lambda__chip:first-child { grid-column: 1 / -1; }
 }
 .stage__cell > * { grid-area: 1 / 1; min-block-size: 0; min-inline-size: 0; }
@@ -995,7 +1005,7 @@ body[data-playing="true"] .key__pause { display: block; }
 /* The second list in the hunt, flashes, named in the same reading face as the
    section, a step smaller: a sub-heading, not a new section. */
 .cands__head {
-  font-family: var(--font-record); font-size: var(--text-sm); font-weight: 500;
+  font-family: var(--font-record); font-size: var(--text-md); font-weight: 600;
   color: var(--color-ink); margin-block-start: var(--space-xs);
 }
 .cands:empty { display: none; }
@@ -1502,7 +1512,7 @@ body[data-gate="open"] .shell { visibility: hidden; }
 .gate__glyph circle { fill: var(--color-ink); }
 .gate__word {
   font-family: var(--font-display); font-weight: 600;
-  font-size: var(--text-2xl); letter-spacing: 0.05em; line-height: 1;
+  font-size: var(--text-2xl); letter-spacing: 0.01em; line-height: 1;
   text-shadow: var(--shade-text);
 }
 .gate__tag {

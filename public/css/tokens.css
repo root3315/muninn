@@ -4,7 +4,7 @@
  * ground  oklch(16% 0.040 254)   ink oklch(95% 0.014 240)
  * accent  oklch(76% 0.130 228) azure · counter oklch(80% 0.135 62) amber
  * axes: dark / condensed-grotesk / azure
- * display Oswald · body IBM Plex Sans · outlier IBM Plex Mono (two roles:
+ * display IBM Plex Sans Condensed · body IBM Plex Sans · outlier IBM Plex Mono (two roles:
  *   measured values, and the fine print)
  *
  * Every value is measured rather than eyeballed: converted to OKLCH, the scale
@@ -20,18 +20,17 @@
 
 :root {
   /* ---- type ------------------------------------------------------------- */
-  /* Condensed industrial signage. Chosen over the usual grotesques because
-     almost every display slot here is a small tracked cap label in a narrow
-     column — and because it carries Cyrillic, which the interface needs. */
-  --font-display: "Oswald", "Arial Narrow", ui-sans-serif, sans-serif;
+  /* One superfamily, three widths of one voice. Four unrelated faces — a
+     signage condensed, a reading serif, a grotesque and a mono — made every
+     panel look assembled from a different kit. Plex was drawn as a system,
+     for instruments and documentation, and all three cuts carry Cyrillic. */
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", ui-sans-serif, sans-serif;
   --font-body: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   /* one role only: a value that was measured — coordinates, times, fluxes */
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  /* The record's own face. A reading serif rather than a condensed grotesque:
-     a result is a sentence to be read, not a score to be glanced at. Chosen
-     over the alternatives for its Cyrillic, which it was actually designed
-     with rather than given later. */
-  --font-record: "Literata", Georgia, "Times New Roman", serif;
+  /* Headings and findings: the condensed cut, so a sentence-long result fits
+     a narrow column on two lines rather than four. */
+  --font-record: "IBM Plex Sans Condensed", "Arial Narrow", ui-sans-serif, sans-serif;
 
   --text-xs: 0.75rem;
   --text-sm: 0.875rem;
