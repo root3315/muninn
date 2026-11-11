@@ -2248,11 +2248,16 @@ function renderVerdict() {
     // no place for "probably nothing". A known asteroid caught is a finding.
     const moved = state.candidates.list?.length ?? 0;
     const caught = [...new Set((state.caught ?? []).map((c) => c.catalog.name))];
+    // "Nothing moved" is only true once SkyBoT has answered for every visit:
+    // said earlier, a field with a catalogued asteroid in it opens by denying it.
+    const asking = skybotOn() && sky.visits.some((v) => !sky.knownObjects.has(v.frame.obsId)
+      && !skybot.failed.has(v.frame.obsId));
     line.textContent = moved
       ? t('verdict.moved', { n: moved })
       : caught.length
         ? t(caught.length === 1 ? 'verdict.caught' : 'verdict.caughtMany', { name: caught[0], n: caught.length })
-        : t('verdict.still');
+        : asking ? t('verdict.asking') : t('verdict.still');
+    if (!moved && !caught.length && asking) line.dataset.state = 'reading';
     // The signal colour is for what nobody has catalogued; a known asteroid
     // caught is the check working, not a discovery.
     line.dataset.found = String(moved > 0);

@@ -384,7 +384,7 @@ The opening preset is not decorative. It was found by searching real SPHEREx fra
 the ecliptic for catalogued objects bright enough to detect (`tools/find-mover.mjs`), then
 checked photometrically (`tools/verify-mover.mjs`).
 
-Field: **RA 13.4194, Dec +3.8459**, 9′ wide, band D2 (1.10–1.65 µm). Fifteen D2 visits over
+Field: **RA 13.4194, Dec +3.8459**, band D2 (1.10–1.65 µm). Fifteen D2 visits over
 369 days. Signal-to-noise at the exact field centre, visit by visit:
 
 ```
