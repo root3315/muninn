@@ -1099,14 +1099,14 @@ let runFrame = 0;
 
 /**
  * Keeps the run moving while it has something in flight: frames being read
- * (the wave over them) or frames just landed (their fade). Thirty frames a
- * second, and nothing at all once the field is in.
+ * (their read line) or frames just landed (laid in from the top). Thirty
+ * frames a second, and nothing at all once the field is in.
  */
 function animateRun(slots) {
   if (runFrame || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   const now = performance.now();
-  const busy = slots.some((s) => !s.visit) && state.loading
-    || slots.some((s) => s.landedAt && now - s.landedAt < 360);
+  const busy = slots.some((s) => s.status === 'reading' || !s.frame)
+    || slots.some((s) => s.landedAt && now - s.landedAt < 460);
   if (!busy) return;
   runFrame = setTimeout(() => {
     runFrame = 0;
