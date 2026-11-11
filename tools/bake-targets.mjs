@@ -115,6 +115,49 @@ const FIELDS = [
       ru: 'Ярко и структурно. Опустите точку белого.',
     },
   },
+  // The five fields the challenge itself names as the test of a tool like this.
+  // High-proper-motion stars are centred where they are now, not at J2000:
+  // Barnard's Star has moved four and a half arcminutes since then.
+  {
+    key: 'barnard', group: 'challenge', name: "Barnard's Star",
+    ra: 269.4463, dec: 4.7680, fov: 0.3, band: 'D2',
+    why: {
+      en: 'The fastest star in the sky, 10.3″ a year — about one detector pixel across this baseline.',
+      ru: 'Самая быстрая звезда неба, 10,3″ в год — около одного пикселя детектора за этот срок.',
+    },
+  },
+  {
+    key: 'epsindib', group: 'challenge', name: 'ε Indi B',
+    ra: 331.0967, dec: -56.8012, fov: 0.3, band: 'D2',
+    why: {
+      en: 'A pair of brown dwarfs; their star, ε Indi A, is in the same field.',
+      ru: 'Пара коричневых карликов; их звезда ε Indi A в том же поле.',
+    },
+  },
+  {
+    key: 'wise0855', group: 'challenge', name: 'WISE 0855−0714',
+    ra: 133.7951, dec: -7.2451, fov: 0.3, band: 'D6',
+    why: {
+      en: 'The coldest known brown dwarf. It is bright only near 4.6 µm, so the field opens in D6.',
+      ru: 'Самый холодный известный коричневый карлик. Ярок только около 4,6 µm, поэтому поле открывается в D6.',
+    },
+  },
+  {
+    key: 'rwaur', group: 'challenge', name: 'RW Aurigae',
+    ra: 76.9564, dec: 30.4014, fov: 0.3, band: 'D2',
+    why: {
+      en: 'A young variable star. Use shared scaling: per-visit stretching hides a brightness change.',
+      ru: 'Молодая переменная звезда. Включите общую шкалу: своя шкала у каждого кадра прячет изменение яркости.',
+    },
+  },
+  {
+    key: 'rdra', group: 'challenge', name: 'R Draconis',
+    ra: 248.1675, dec: 66.7550, fov: 0.3, band: 'D3',
+    why: {
+      en: 'A Mira variable near the north ecliptic pole, seen on more dates than almost anything.',
+      ru: 'Мирида у северного полюса эклиптики: снята в большем числе дат, чем почти что угодно.',
+    },
+  },
 ];
 
 await mkdir(new URL('fields/', DATA), { recursive: true });
@@ -143,7 +186,7 @@ for (const f of FIELDS) {
     `${JSON.stringify({ ra: f.ra, dec: f.dec, radius: RADIUS, truncated, frames })}\n`, 'utf8');
 
   targets.push({
-    key: f.key, name: f.name, ra: f.ra, dec: f.dec, fov: f.fov, band: f.band,
+    key: f.key, ...(f.group ? { group: f.group } : {}), name: f.name, ra: f.ra, dec: f.dec, fov: f.fov, band: f.band,
     why: f.why, visits: visits.length, spanDays, truncated,
   });
   await sleep(500);

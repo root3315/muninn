@@ -2472,28 +2472,42 @@ function renderGateJump() {
   const ready = state.presets.filter((f) => Number.isFinite(f.ra) && Number.isFinite(f.dec));
   box.hidden = !ready.length;
   if (!ready.length) return;
-  const head = document.createElement('span');
-  head.className = 'gate__jump-k';
-  head.textContent = t('gate.known');
-  box.append(head);
-  for (const f of ready) {
-    const name = f.key ? t(`preset.${f.key}`) : f.name;
-    const go = document.createElement('button');
-    go.type = 'button';
-    go.className = 'gate__jump-go';
-    go.textContent = name;
-    const why = f.why?.[getLanguage()] ?? f.why?.en;
-    if (why) go.title = why;
-    go.addEventListener('click', () => {
-      const hit = { ra: f.ra, dec: f.dec, fov: f.fov, band: f.band ?? 'all', label: name };
-      if (gate) { enterFrom(hit); return; }
-      // Pressed before the sky has been built: straight in, without the flight.
-      if (hit.fov) { state.fov = nearestFov(hit.fov); $('fov').value = String(state.fov); }
-      closeGate();
-      openField(hit);
-    });
-    box.append(go);
+  // Two lines: the fields this tool was proven on, and the five the challenge
+  // names as the test of any tool like it.
+  const groups = [
+    ['gate.known', ready.filter((f) => f.group !== 'challenge')],
+    ['gate.challenge', ready.filter((f) => f.group === 'challenge')],
+  ];
+  for (const [label, fields] of groups) {
+    if (!fields.length) continue;
+    const line = document.createElement('span');
+    line.className = 'gate__jump-line';
+    const head = document.createElement('span');
+    head.className = 'gate__jump-k';
+    head.textContent = t(label);
+    line.append(head, ...fields.map(jumpButton));
+    box.append(line);
   }
+}
+
+/** One name under the search: press it and the sky turns onto that field. */
+function jumpButton(f) {
+  const name = f.key ? t(`preset.${f.key}`) : f.name;
+  const go = document.createElement('button');
+  go.type = 'button';
+  go.className = 'gate__jump-go';
+  go.textContent = name;
+  const why = f.why?.[getLanguage()] ?? f.why?.en;
+  if (why) go.title = why;
+  go.addEventListener('click', () => {
+    const hit = { ra: f.ra, dec: f.dec, fov: f.fov, band: f.band ?? 'all', label: name };
+    if (gate) { enterFrom(hit); return; }
+    // Pressed before the sky has been built: straight in, without the flight.
+    if (hit.fov) { state.fov = nearestFov(hit.fov); $('fov').value = String(state.fov); }
+    closeGate();
+    openField(hit);
+  });
+  return go;
 }
 
 /* --------------------------------------------------------------------- wiring */

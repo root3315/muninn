@@ -1508,11 +1508,14 @@ body[data-gate="open"] .shell { visibility: hidden; }
 /* The verified fields as one line of names under the search: type, not chips,
    so the corner stays a caption on the sky rather than a panel over it. */
 .gate__jump {
-  display: flex; flex-wrap: wrap; align-items: baseline;
-  gap: var(--space-3xs) var(--space-xs);
+  display: grid; gap: var(--space-2xs);
   padding-block-start: var(--space-xs);
   font-size: var(--text-sm); color: var(--color-neutral);
   text-shadow: var(--shade-text);
+}
+.gate__jump-line {
+  display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: var(--space-3xs) var(--space-xs);
 }
 .gate__jump-k {
   font-size: var(--text-xs); font-weight: 500;
