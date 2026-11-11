@@ -167,6 +167,24 @@ export function drawStrip(canvas, {
   ctx.moveTo(padX, laneY + 0.5);
   ctx.lineTo(padX + inner, laneY + 0.5);
   ctx.stroke();
+  // No dates yet: the archive's index is being searched, so a short stretch of
+  // the lane runs along it, back and forth, until the dates arrive.
+  if (skeleton && motion) {
+    const t = (now % 2400) / 2400;
+    const k = 0.5 - 0.5 * Math.cos(t * Math.PI * 2);
+    const len = inner * 0.12;
+    const x = padX + (inner - len) * k;
+    const g = ctx.createLinearGradient(x, 0, x + len, 0);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(0.5, P.accent);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.strokeStyle = g;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x, laneY + 0.5);
+    ctx.lineTo(x + len, laneY + 0.5);
+    ctx.stroke();
+  }
 
   /* ---- the lines: which dot is which frame ---------------------------- */
   // One smooth line from each date down to its frame. The two-kink version
@@ -225,12 +243,13 @@ export function drawStrip(canvas, {
   if (liveSlot >= 0) dot(liveSlot);
 
   /* ---- the frames ------------------------------------------------------ */
-  // Frames still being read carry one soft band of light that travels along
-  // the whole row, left to right, every 1.6 s: one wave across the run rather
-  // than ten separate blinks. A frame that lands fades in over a third of a
-  // second instead of popping into its place.
-  const WAVE_MS = 1600;
-  const wave = motion ? ((now % WAVE_MS) / WAVE_MS) * 1.6 - 0.3 : -1;
+  // What is actually happening, drawn: a frame is read a band of detector
+  // rows at a time, so a frame being read has a read line going down it, and
+  // a frame that lands is laid in from the top the same way, as a scan,
+  // instead of fading or popping into place. Frames still queued are simply
+  // empty places.
+  const SWEEP_MS = 1100;
+  const REVEAL_MS = 420;
   const hits = [];
   for (let i = 0; i < n; i++) {
     const v = slots[i].visit;
@@ -240,8 +259,15 @@ export function drawStrip(canvas, {
     ctx.fillStyle = P.well;
     ctx.fillRect(x, thumbY, thumbW, thumbH);
     if (v?.canvas?.width) {
-      const age = motion && slots[i].landedAt ? (now - slots[i].landedAt) / 320 : 1;
-      ctx.globalAlpha = Math.max(0, Math.min(1, age));
+      const age = motion && slots[i].landedAt ? (now - slots[i].landedAt) / REVEAL_MS : 1;
+      const done = Math.max(0, Math.min(1, age));
+      const eased = 1 - (1 - done) ** 3;
+      ctx.save();
+      if (done < 1) {
+        ctx.beginPath();
+        ctx.rect(x, thumbY, thumbW, thumbH * eased);
+        ctx.clip();
+      }
       // `contain`: a thumbnail that crops is a thumbnail that lies about what
       // the frame holds.
       const k = Math.min(thumbW / v.canvas.width, thumbH / v.canvas.height);
@@ -250,7 +276,14 @@ export function drawStrip(canvas, {
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = 'low';
       ctx.drawImage(v.canvas, x + (thumbW - w) / 2, thumbY + (thumbH - h) / 2, w, h);
-      ctx.globalAlpha = 1;
+      ctx.restore();
+      if (done < 1) {
+        // The edge of what has been laid in, as the read line that laid it.
+        ctx.fillStyle = P.accent;
+        ctx.globalAlpha = 0.9 * (1 - done);
+        ctx.fillRect(x, thumbY + thumbH * eased - 1, thumbW, 1.5);
+        ctx.globalAlpha = 1;
+      }
       ctx.strokeStyle = live ? P.accent : (i === hoverSlot ? P.ink : P.rule);
       ctx.lineWidth = live ? 1.6 : 1;
       ctx.setLineDash([]);
@@ -258,17 +291,28 @@ export function drawStrip(canvas, {
       hits.push({ x, y: thumbY, w: thumbW, h: thumbH + gapB + sigH, i: slots[i].at });
     } else {
       // Still on its way: the place it will take, and nothing pretending to be
-      // it — only the light of the wave passing over it.
-      const centre = (x + thumbW / 2) / (padX * 2 + inner);
-      const lit = wave < -0.5 ? 0 : Math.exp(-(((centre - wave) / 0.12) ** 2));
+      // it. Being read, it has the read line going down it, with a short
+      // trail above where the rows have just come in.
       const reading = slots[i].status === 'reading';
-      ctx.fillStyle = P.accent;
-      ctx.globalAlpha = (reading ? 0.05 : 0.025) + 0.16 * lit;
-      ctx.fillRect(x, thumbY, thumbW, thumbH);
-      ctx.globalAlpha = 0.5 + 0.5 * lit;
-      ctx.strokeStyle = lit > 0.2 ? P.accent : P.rule;
+      ctx.strokeStyle = reading ? P.accent : P.rule;
+      ctx.globalAlpha = reading ? 0.55 : 0.7;
       ctx.lineWidth = 1;
       ctx.strokeRect(x + 0.5, thumbY + 0.5, thumbW - 1, thumbH - 1);
+      if (reading) {
+        // Each frame on its own phase, so the row does not move in lockstep.
+        const t = motion ? ((now + i * 173) % SWEEP_MS) / SWEEP_MS : 0.5;
+        const y = thumbY + 1 + (thumbH - 3) * t;
+        const trail = Math.min(thumbH * 0.45, y - thumbY);
+        const g = ctx.createLinearGradient(0, y - trail, 0, y);
+        g.addColorStop(0, 'rgba(0,0,0,0)');
+        g.addColorStop(1, P.accent);
+        ctx.fillStyle = g;
+        ctx.globalAlpha = 0.18;
+        ctx.fillRect(x + 1, y - trail, thumbW - 2, trail);
+        ctx.fillStyle = P.accent;
+        ctx.globalAlpha = 0.85;
+        ctx.fillRect(x + 1, y, thumbW - 2, 1.25);
+      }
       ctx.globalAlpha = 1;
     }
   }
