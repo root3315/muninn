@@ -358,7 +358,12 @@ grid, which bilinear interpolation smooths, and came out about 0.4 mag too deep.
 | 100 visits | 20.10 AB |
 | 200 visits, deep field | 20.47 AB |
 
-Planet Nine is predicted at V ≈ 22–25. Even coadding two hundred deep-field
+Planet Nine is predicted at V ≈ 22–25. The range is from Linder & Mordasini (2016,
+A&A 589, A134), who model the planet as a small Uranus and give, near aphelion, V = 24.3,
+23.7, 23.3 and 22.6 for 5, 10, 20 and 50 Earth masses in reflected light. It is the faint
+case: the same paper puts a 10-Earth-mass planet at 700 AU at V = 21.7, and Brown &
+Batygin (2021, AJ 162, 219) argue it may be closer and brighter than first thought. Even
+at V = 21.7 the deepest stack here is more than a magnitude short. Even coadding two hundred deep-field
 visits leaves us short by 1.5 magnitudes at the bright end of that range — a
 factor of 4 in flux — and 4.5 magnitudes at the faint end, a factor of 65. The
 prediction is in V and SPHEREx works at 0.75–5 µm: for a grey, sunlike reflector

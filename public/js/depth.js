@@ -113,8 +113,9 @@ export function stackDepth(perVisit) {
 }
 
 /**
- * Predicted brightness of Planet Nine, from the dynamical papers that motivate
- * the search. Quoted in V; SPHEREx works at 0.75–5 µm, where a cold body
+ * Predicted brightness of Planet Nine near aphelion, in reflected light:
+ * Linder & Mordasini 2016 (A&A 589, A134) give V = 24.3 to 22.6 for 5 to 50
+ * Earth masses. Their nominal 10-Earth-mass planet at 700 AU is brighter, 21.7. Quoted in V; SPHEREx works at 0.75–5 µm, where a cold body
  * reflects less, so treating an AB limit as directly comparable is generous to
  * us rather than to the prediction.
  */
