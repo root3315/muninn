@@ -6,7 +6,7 @@
 <title>Muninn — SPHEREx time-domain viewer</title>
 <meta name="description" content="Muninn stacks NASA SPHEREx all-sky visits on one patch of sky and shows what moved between them.">
 <meta name="color-scheme" content="dark light">
-<meta name="theme-color" content="#030b18">
+<meta name="theme-color" content="#171721">
 <!-- The link preview (Telegram, Slack, X). Real frames: (152) Atala on one
      visit, and the same spot a week later. -->
 <meta property="og:type" content="website">
@@ -14,43 +14,45 @@
 <meta property="og:title" content="Muninn — see what moved in the infrared sky">
 <meta property="og:description" content="Real NASA SPHEREx frames of any patch of sky, blinked visit by visit in the browser. NASA Space Apps 2026 · Planet X and SPHEREx.">
 <meta property="og:url" content="https://muninn.mydevbox.xyz/">
-<meta property="og:image" content="https://muninn.mydevbox.xyz/img/og.png?v=3">
+<meta property="og:image" content="https://muninn.mydevbox.xyz/img/og.png?v=4">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Two SPHEREx frames of the same field: asteroid (152) Atala ringed on 25 Dec 2025, the same spot empty on 1 Jan 2026.">
 <meta name="twitter:card" content="summary_large_image">
 <script src="js/theme-boot.js"></script>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%230d1b2c'/%3E%3Ccircle cx='11' cy='13' r='2.5' fill='%23e6f0f7'/%3E%3Ccircle cx='21' cy='19' r='2.5' fill='%233fc0f2'/%3E%3C/svg%3E">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23171721'/%3E%3Ccircle cx='11' cy='13' r='2.5' fill='%23e6f0f7'/%3E%3Ccircle cx='21' cy='19' r='2.5' fill='%23b9a5f5'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="preconnect" href="https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geologica:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600&family=Onest:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<!-- Every module, named up front: found one import at a time they arrive
+     three round trips deep. -->
+<link rel="modulepreload" href="js/app.js">
+<link rel="modulepreload" href="js/catalog.js">
+<link rel="modulepreload" href="js/depth.js">
+<link rel="modulepreload" href="js/ephemeris.js">
+<link rel="modulepreload" href="js/fits.js">
+<link rel="modulepreload" href="js/gate.js">
+<link rel="modulepreload" href="js/hunt.js">
+<link rel="modulepreload" href="js/i18n.js">
+<link rel="modulepreload" href="js/net.js">
+<link rel="modulepreload" href="js/release.js">
+<link rel="modulepreload" href="js/render.js">
+<link rel="modulepreload" href="js/sectors.js">
+<link rel="modulepreload" href="js/sky.js">
+<link rel="modulepreload" href="js/stack.js">
+<link rel="modulepreload" href="js/stamp.js">
+<link rel="modulepreload" href="js/strip.js">
+<link rel="modulepreload" href="js/twilight.js">
+<link rel="modulepreload" href="js/votable.js">
+<link rel="modulepreload" href="js/wcs.js">
 <link rel="stylesheet" href="css/tokens.css">
 <link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/redesign.css">
 </head>
 <body>
 <a class="skip" href="#sky" data-i18n="app.skip">Skip to the sky</a>
 
-<!--
-  The picture in the middle of the window, and a column either side of it.
-
-       ┌──────────────── masthead ─────────────────┐
-       │  where you are │   THE PICTURE   │ what   │
-       │  and how it is │   (centred, and │ was    │
-       │  drawn         │   the largest   │ found  │
-       │                │   thing here)   │        │
-       │                │  transport ↓    │        │
-       └───────────────────────────────────────────┘
-
-  Two columns rather than one rail, because they answer two different
-  questions, and splitting them puts the frame in the optical centre of the
-  window instead of shoved to one side. Left is the field you are on and the
-  way it is being drawn; right is everything the search turned up.
-
-  Neither column is a stack of boxes. They are set as columns of text with a
-  hairline between the parts, and the frame is the only object on screen with
-  an edge drawn around it — so there is never a question about what to look at.
--->
 <!--
   The way in: the real sky, and everything on it is a door.
 
@@ -62,12 +64,20 @@
   fine print, because it is the one thing here that is not a measurement.
 -->
 <section class="gate" id="gate" aria-label="The sky" data-i18n-label="aria.gate">
-  <canvas class="gate__sky" id="gate-sky"></canvas>
+  <canvas class="gate__sky" id="gate-sky" aria-hidden="true"></canvas>
   <div class="gate__vignette" aria-hidden="true"></div>
 
   <!-- The type sits in one corner and everything else is sky. Anything put
        over a picture is a thing standing in front of it, so there is as little
        of it as the page can get away with. -->
+  <!-- A visitor whose browser picked the wrong language must not have to open
+       a field to change it. -->
+  <div class="gate__acts">
+    <a class="link" href="talk.html" data-i18n="gate.talk"></a>
+    <button type="button" class="link" id="gate-about" data-i18n="app.about"></button>
+    <button type="button" class="link link--lang" id="gate-lang" data-i18n-title="lang.switch" data-i18n-label="lang.switch"><span id="gate-lang-name">RU</span></button>
+  </div>
+
   <div class="gate__poster">
     <div class="gate__mark">
       <svg class="gate__glyph" viewBox="0 0 24 24" aria-hidden="true">
@@ -78,6 +88,7 @@
       <h1 class="gate__word">Muninn</h1>
     </div>
     <p class="gate__tag" data-i18n="app.tagline"></p>
+    <p class="gate__src" data-i18n="gate.source"></p>
 
     <form class="gate__find" id="gate-find">
       <label class="vh" for="gate-target" data-i18n="target.input"></label>
@@ -96,10 +107,40 @@
 
   <!-- Follows the pointer; the sky is what is being named, so the label goes
        on the sky rather than in a panel somewhere else. -->
-  <p class="gate__pin" id="gate-pin" hidden aria-live="polite">
+  <p class="gate__pin" id="gate-pin" hidden>
     <span class="gate__pin-name" id="gate-pin-name"></span>
-    <span class="gate__pin-sub num" id="gate-pin-sub"></span>
+    <span class="gate__pin-sub" id="gate-pin-sub"></span>
   </p>
+
+  <!-- What was pressed, before anything is opened: a marker or a place on the
+       sky shows its card here, and only the card's own button starts the
+       flight. A ready field brings one real frame of itself. -->
+  <article class="gate-card" id="gate-card" hidden>
+    <figure class="gate-card__frame" id="gate-card-frame" hidden>
+      <img id="gate-card-img" alt="" width="280" height="280" decoding="async">
+      <!-- Where no frame is stored, one is read from the archive on the spot. -->
+      <canvas id="gate-card-live" width="280" height="280" hidden></canvas>
+      <figcaption class="gate-card__tag num" id="gate-card-tag"></figcaption>
+    </figure>
+    <div class="gate-card__body">
+      <div class="gate-card__head">
+        <h2 class="gate-card__name" id="gate-card-name"></h2>
+        <button type="button" class="gate-card__close" id="gate-card-close" data-i18n-label="card.close">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+        <p class="gate-card__kind" id="gate-card-kind"></p>
+      </div>
+      <div class="gate-card__visits" id="gate-card-visits" hidden>
+        <ol class="gate-card__line" id="gate-card-line" aria-hidden="true"></ol>
+        <p class="gate-card__ends num"><span id="gate-card-from"></span><span id="gate-card-to"></span></p>
+      </div>
+      <dl class="gate-card__facts" id="gate-card-facts"></dl>
+      <button type="button" class="gate-card__go" id="gate-card-go">
+        <span id="gate-card-go-label"></span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+    </div>
+  </article>
 
 </section>
 
@@ -107,7 +148,7 @@
 
   <!-- Thin, and only what is needed from anywhere: which field, which tongue. -->
   <header class="mast">
-    <a class="brand" href="#sky">
+    <a class="brand" href="#gate" data-i18n-title="gate.back">
       <svg class="brand__glyph" viewBox="0 0 24 24" aria-hidden="true">
         <circle cx="7.5" cy="15" r="3"/>
         <circle cx="16.5" cy="9" r="3" class="brand__mover"/>
@@ -130,14 +171,17 @@
     </form>
 
     <div class="mast__acts">
-      <button type="button" class="link" id="save-png" data-i18n="export.png" data-i18n-title="export.pngWhat"></button>
-      <button type="button" class="link" id="copy-link" data-i18n="export.link" data-i18n-title="export.linkWhat"></button>
-      <button type="button" class="link" id="tools-toggle" aria-expanded="false" aria-controls="tools" data-i18n="tools.toggle"></button>
-      <span class="mast__sep" aria-hidden="true"></span>
+      <!-- What is done with the picture in front of you, kept together and
+           quieter than where you can go from here. -->
+      <div class="mast__group">
+        <button type="button" class="link" id="save-png" data-i18n="export.png" data-i18n-title="export.pngWhat"></button>
+        <button type="button" class="link" id="copy-link" data-i18n="export.link" data-i18n-title="export.linkWhat"></button>
+        <button type="button" class="link" id="tools-toggle" aria-expanded="false" aria-controls="tools" data-i18n="tools.toggle"></button>
+      </div>
       <button type="button" class="link" id="random" data-i18n="target.random"></button>
       <button type="button" class="link" id="to-sky" data-i18n="gate.back"></button>
       <button type="button" class="link" id="about-open" data-i18n="app.about"></button>
-      <button type="button" class="link link--lang" id="lang" data-i18n-title="lang.switch"><span id="lang-name">RU</span></button>
+      <button type="button" class="link link--lang" id="lang" data-i18n-title="lang.switch" data-i18n-label="lang.switch"><span id="lang-name">RU</span></button>
       <!-- Night or day. The icon is where it takes you: the sun to dawn, the
            moon to dusk. -->
       <button type="button" class="theme-key" id="theme">
@@ -167,6 +211,10 @@
         </p>
         <p class="when__band num" id="when-band"></p>
         <p class="when__of num" id="when-of"></p>
+        <p class="when__of num" id="when-flags"></p>
+        <!-- What the Gaia and WISE marks are, while that overlay is on: beside
+             the picture with the rest of its label, never over it. -->
+        <div class="survey" id="survey-note" role="status" hidden></div>
         <p class="under__pos num" id="field-pos" aria-live="polite">—</p>
       </div>
 
@@ -198,7 +246,7 @@
           <div class="plate__state" id="plate-state">
             <!-- Set only by setPlateState: a translation attribute here put the
                  idle line back over "searching…" whenever labels were refreshed. -->
-            <p class="plate__state-line" id="plate-message"></p>
+            <p class="plate__state-line" id="plate-message" role="status"></p>
             <button type="button" class="btn btn--quiet" id="plate-retry" hidden data-i18n="epochs.retry"></button>
             <div class="meter" id="plate-meter" hidden><span class="meter__fill" id="plate-meter-fill"></span></div>
             <ol class="plate__log" id="plate-log" hidden></ol>
@@ -276,11 +324,20 @@
         <label class="pill"><input type="checkbox" id="ov-sectors"><span data-i18n="overlay.sectors"></span></label>
       </div>
 
+      <!-- Where other missions' catalogues put their sources, over the plate. -->
+      <fieldset class="segments segments--tiny">
+        <legend class="vh" data-i18n="survey.legend"></legend>
+        <label class="segment"><input type="radio" name="survey" value="off" checked><span data-i18n="survey.off"></span></label>
+        <label class="segment"><input type="radio" name="survey" value="gaia"><span data-i18n="survey.gaia"></span></label>
+        <label class="segment"><input type="radio" name="survey" value="wise"><span data-i18n="survey.wise"></span></label>
+        <label class="segment"><input type="radio" name="survey" value="both"><span data-i18n="survey.both"></span></label>
+      </fieldset>
+
       <div class="tools__acts">
         <button type="button" class="link" id="record" data-i18n="export.record" data-i18n-title="export.recordWhat" hidden></button>
         <a class="link" id="open-irsa" href="#" target="_blank" rel="noopener" data-i18n="export.fits" data-i18n-title="export.fitsWhat"></a>
         <button type="button" class="link" id="bare" aria-pressed="false" data-i18n="view.bare"></button>
-        <p class="note note--dim num" id="bytes-note"></p>
+        <p class="note note--dim" id="bytes-note"></p>
       </div>
     </section>
   </main>
@@ -293,7 +350,7 @@
          rather than the page: across the top it took a band of height from the
          picture, and the picture is the one thing on this page that needs it. -->
     <section class="verdict" aria-label="This field" data-i18n-label="aria.field">
-      <h1 class="verdict__line" id="verdict"></h1>
+      <h2 class="verdict__line" id="verdict" aria-live="polite"></h2>
       <dl class="facts" id="stat-line"></dl>
       <p class="verdict__cue note note--dim" id="field-cue" data-i18n="app.lede"></p>
       <p class="vh" id="skybot-note"></p>
@@ -325,9 +382,9 @@
       </header>
       <p class="depth__figure"><span class="depth__mag num" id="depth-mag"></span><span class="depth__unit num">AB</span></p>
       <p class="depth__said" id="depth-said"></p>
-      <svg class="depth__scale" id="depth-scale" role="img" aria-hidden="true"></svg>
+      <svg class="depth__scale" id="depth-scale" role="img"></svg>
       <p class="depth__reach note note--dim" id="depth-reach"></p>
-      <p class="depth__covered note note--dim num" id="depth-covered" hidden></p>
+      <p class="depth__covered note note--dim" id="depth-covered" hidden></p>
     </section>
 
     <section class="part">
@@ -414,12 +471,14 @@
     <p data-i18n="about.p1"></p>
     <p data-i18n="about.p2"></p>
     <p data-i18n="about.pMark"></p>
+    <p data-i18n="about.pSpectrum"></p>
     <p data-i18n="about.p3"></p>
     <p data-i18n="about.p4"></p>
     <hr class="sheet__rule">
     <p class="sheet__fine" data-i18n="foot.built"></p>
     <p class="sheet__fine" data-i18n="foot.credit"></p>
     <p class="sheet__fine" data-i18n="foot.team"></p>
+    <p class="sheet__fine"><a class="link" href="talk.html" data-i18n="gate.talk"></a></p>
     <button type="button" class="btn btn--primary" id="about-close" data-i18n="about.close"></button>
   </article>
 </dialog>

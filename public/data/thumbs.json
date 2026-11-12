@@ -1,0 +1,53 @@
+{
+ "atala": {
+  "iso": "2025-12-25T16:33:36",
+  "band": "D2",
+  "fovArcmin": 3.6,
+  "blink": "2026-01-01T01:44:29"
+ },
+ "nep": {
+  "iso": "2025-11-30T05:03:13",
+  "band": "D2",
+  "fovArcmin": 3.6
+ },
+ "sep": {
+  "iso": "2026-01-25T04:40:20",
+  "band": "D2",
+  "fovArcmin": 3.6
+ },
+ "m51": {
+  "iso": "2025-12-11T09:47:58",
+  "band": "D2",
+  "fovArcmin": 5.4
+ },
+ "m42": {
+  "iso": "2026-03-08T06:36:55",
+  "band": "D2",
+  "fovArcmin": 5.4
+ },
+ "barnard": {
+  "iso": "2025-08-30T16:10:28",
+  "band": "D2",
+  "fovArcmin": 3.6
+ },
+ "epsindib": {
+  "iso": "2025-10-06T12:00:28",
+  "band": "D2",
+  "fovArcmin": 3.6
+ },
+ "wise0855": {
+  "iso": "2026-04-22T18:14:48",
+  "band": "D6",
+  "fovArcmin": 3.6
+ },
+ "rwaur": {
+  "iso": "2026-03-01T05:02:11",
+  "band": "D2",
+  "fovArcmin": 3.6
+ },
+ "rdra": {
+  "iso": "2026-03-10T02:06:03",
+  "band": "D3",
+  "fovArcmin": 6
+ }
+}

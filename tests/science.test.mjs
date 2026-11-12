@@ -50,6 +50,10 @@ test('parallax: opposition rates and the distance they bound', () => {
   // the bound has to be above its true distance, not below it.
   assert.ok(distanceCeilingAU(21.1) > 3.02);
   assert.equal(distanceCeilingAU(0), null);
+  // SPHEREx looks 90° from the Sun, where a body at 2.2 AU moves at its own
+  // orbital rate, faster than the opposition formula allows for that distance.
+  const quadrature22 = (2 * Math.PI * 206265) / (2.2 ** 1.5 * 365.25 * 24);
+  assert.ok(distanceCeilingAU(quadrature22) >= 2.2 - 1e-9, 'the ceiling holds at quadrature too');
 });
 
 test('a rate needs four points and must beat a detector pixel', () => {
@@ -130,14 +134,65 @@ test('season stack: seasons are a partition, the stack takes the nearest of one'
   const withTwin = forStack([f(10), f(10.01), f(12)], f(10));
   assert.deepEqual(withTwin.map((x) => x.mjd), [10, 12]);
 
-  // Four planes: the brightest value of each pixel is dropped, NaN is skipped.
-  const planes = [[1, NaN], [2, 4], [3, 6], [100, 8]].map((p) => Float32Array.from(p));
-  const out = coadd([planes[0].subarray(0, 1), planes[1].subarray(0, 1), planes[2].subarray(0, 1), planes[3].subarray(0, 1)]);
-  close(out[0], 2, 1e-9, 'cosmic ray dropped: mean of 1, 2, 3');
-  const two = coadd([Float32Array.of(NaN, 1), Float32Array.of(4, 3)]);
-  assert.deepEqual([...two], [4, 2], 'fewer than four: plain mean, NaN left out');
+  // Each visit is a flat sky (pixels 2-6) at its own level, with a steady
+  // star of +5 at pixel 1. Pixel 0 is blank sky, hit once by a cosmic ray.
+  const visit = (level, ray = 0) => Float32Array.of(level + ray, level + 5, level, level, level, level, level);
+  const four = coadd([visit(10), visit(11), visit(12), visit(13, 90)]);
+  close(four[0], 11.5, 1e-6, 'cosmic ray dropped; the sky is the mean level of the four');
+  close(four[1], 16.5, 1e-6, 'the star stands 5 above it, whatever each sky was');
+  // Without levelling, the visit with the brightest sky was the one dropped.
+  const noRay = coadd([visit(10), visit(11), visit(12), visit(13)]);
+  close(noRay[2], 11.5, 1e-6, 'sky differences alone drop nothing');
+  const two = coadd([Float32Array.of(NaN, 1, 1, 1), Float32Array.of(4, 3, 3, 3)]);
+  close(two[0], 3, 1e-6, 'fewer than four: the mean; a masked pixel is left out');
+  close(two[1], 2, 1e-6);
   assert.equal(averaged(6), 5);
   assert.equal(averaged(3), 2);
-  const three = coadd([Float32Array.of(1), Float32Array.of(50), Float32Array.of(3)]);
-  assert.equal(three[0], 3, 'three: the middle value, the one-visit spike gone');
+  const three = coadd([visit(1), visit(1, 50), visit(1)]);
+  close(three[0], 1, 1e-6, 'three: the middle value, the one-visit spike gone');
+});
+
+test('a marked star: the aperture holds its light wherever it falls on a pixel', async () => {
+  const { SkyView } = await import('../public/js/sky.js');
+  const { TangentGrid } = await import('../public/js/wcs.js');
+  const { magAB } = await import('../public/js/depth.js');
+  // 2.5 grid samples to a 6.15″ detector pixel, as the tool cuts its grid.
+  // And again at one sample an arcsecond, the 6′ field: the box and the ring
+  // are sized in detector pixels, so the star is the same star there.
+  for (const perPixel of [2.5, 6.15]) await sameStar(perPixel);
+
+  async function sameStar(perPixel) {
+  const size = perPixel > 3 ? 161 : 81;
+  const mid = (size - 1) / 2;
+  const grid = new TangentGrid(10, 0, (size * 6.15) / perPixel / 3600, size, size);
+  const total = 40; // MJy/sr · detector pixel
+  const star = (dx, dy) => {
+    const data = new Float32Array(size * size).fill(0.4);
+    // A detector-pixel-wide blur: sigma of 0.6 detector pixel.
+    const s = 0.6 * perPixel;
+    for (let j = 0; j < size; j++) {
+      for (let i = 0; i < size; i++) {
+        const r2 = (i - mid - dx) ** 2 + (j - mid - dy) ** 2;
+        data[j * size + i] += (total * perPixel ** 2 / (2 * Math.PI * s * s)) * Math.exp(-r2 / (2 * s * s));
+      }
+    }
+    // A little structure in the sky so the annulus has a spread to report.
+    for (let k = 0; k < data.length; k++) data[k] += ((k * 7919) % 13 - 6) * 1e-4;
+    return { stamp: { data, width: size, height: size, meta: { detectorSigma: 0.02 } }, frame: { mjd: 1, obsId: 'x' } };
+  };
+  const view = { grid };
+  const centred = SkyView.prototype.measure.call(view, star(0, 0), 10, 0);
+  const offset = SkyView.prototype.measure.call(view, star(0.48 * perPixel, 0.36 * perPixel), 10, 0);
+  assert.ok(centred && offset, 'both are detections');
+  // Three pixels square holds nearly all of a sigma-0.6-pixel star.
+  close(centred.flux, total, total * 0.06, 'the aperture sum is the star');
+  assert.ok(Math.abs(centred.mag - offset.mag) < 0.05, 'the same star, the same magnitude');
+  close(centred.mag, magAB(total), 0.07, 'on the AB scale of the depth limit');
+
+  // A masked core is a hole in the aperture: no brightness is quoted through it.
+  const holed = star(0, 0);
+  for (let j = -2; j <= 2; j++) for (let i = -2; i <= 2; i++) holed.stamp.data[(Math.round(mid) + 2 + j) * size + Math.round(mid) + 2 + i] = NaN;
+  const through = SkyView.prototype.measure.call(view, holed, 10, 0);
+  if (perPixel < 3) assert.equal(through?.mag ?? null, null, 'a quarter of the aperture masked: no magnitude');
+  }
 });

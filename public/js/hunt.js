@@ -28,11 +28,18 @@
  *
  * Three honesties are built in.
  *
- * The relation holds at opposition, where the motion is fastest; away from it
- * the same body appears slower, and slower reads as farther. So the distance
- * this gives is an *upper bound* and the interface says "no farther than".
- * (An earlier version had it the other way round and called (152) Atala, at
- * 3 AU, "no nearer than 7 AU".)
+ * The relation holds at opposition. For a distant body that is where the
+ * motion is fastest: anywhere else it appears slower, and slower reads as
+ * farther, so the distance is an *upper bound* and the interface says "no
+ * farther than". (An earlier version had it the other way round and called
+ * (152) Atala, at 3 AU, "no nearer than 7 AU".)
+ *
+ * SPHEREx does not observe at opposition, though. It looks about 90° from the
+ * Sun, where the Earth is moving along the line of sight and what is left is
+ * the body's own orbital motion, 2π / d^1.5 radians a year. Inside 2.62 AU
+ * that is the *faster* of the two, so the opposition formula alone put a body
+ * at 2.2 AU "no farther than 1.9". The ceiling is therefore the larger of the
+ * two distances the rate allows.
  *
  * A candidate a catalogue already knows is not a candidate — it is a known
  * asteroid, and the tool says which one.
@@ -52,9 +59,9 @@ const SWEEP_ARCSEC_PER_YEAR = 2 * Math.PI * 206265;
 const HOURS_PER_YEAR = 365.25 * 24;
 
 /**
- * The farthest an object could be and still move this fast: the distance at
- * which this rate would be the opposition rate. Anywhere else in its orbit the
- * same body shows less motion, so the true distance is no greater.
+ * The farthest an object could be and still move this fast: the larger of the
+ * distance at which this would be the opposition rate and the distance at
+ * which it would be the rate 90° from the Sun, where SPHEREx looks.
  *
  * Returns AU, or null for a rate too small to be meaningful — at some point the
  * measurement is consistent with "not moving at all", and inventing a distance
@@ -62,15 +69,22 @@ const HOURS_PER_YEAR = 365.25 * 24;
  */
 export function distanceCeilingAU(arcsecPerHour) {
   if (!(arcsecPerHour > 0)) return null;
-  // d + √d = s, solved for d.
   const s = SWEEP_ARCSEC_PER_YEAR / (arcsecPerHour * HOURS_PER_YEAR);
+  // At opposition: d + √d = s, solved for d.
   const root = (Math.sqrt(1 + 4 * s) - 1) / 2;
-  const au = root * root;
+  const atOpposition = root * root;
+  // At 90° from the Sun: d^1.5 = s.
+  const atQuadrature = s ** (2 / 3);
+  const au = Math.max(atOpposition, atQuadrature);
   return Number.isFinite(au) && au > 0 ? au : null;
 }
 
-/** The inverse, for stating what a given distance would look like. */
-export const rateAtAU = (au) => SWEEP_ARCSEC_PER_YEAR / ((au + Math.sqrt(au)) * HOURS_PER_YEAR);
+/**
+ * The inverse: the fastest a body at this distance moves in either geometry,
+ * for stating what a given distance would look like.
+ */
+export const rateAtAU = (au) => SWEEP_ARCSEC_PER_YEAR
+  / (Math.min(au + Math.sqrt(au), au ** 1.5) * HOURS_PER_YEAR);
 
 /**
  * Did this thing actually move, or is the fitted slope inside its own noise?

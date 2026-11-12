@@ -82,7 +82,9 @@ const main = async () => {
     const dec = Number(cols[3]);
     if (!Number.isFinite(ra) || !Number.isFinite(dec)) continue;
     seen.add(n);
-    const mag = Number(cols[5]);
+    // SIMBAD leaves the cell empty when it holds no V magnitude, and
+    // Number('') is 0: a missing value must not become a measured one.
+    const mag = cols[5]?.trim() ? Number(cols[5]) : NaN;
     objects.push({
       id: `M${n}`,
       n,

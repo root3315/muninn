@@ -150,10 +150,12 @@ export async function onRequestGet({ request, waitUntil }) {
     return json({ ok: false, error: problems.join('; ') }, 502);
   }
 
+  // A partial answer must not sit in the browser's cache either, or asking
+  // again reads the same short list back for twelve hours.
   const res = json({
     ok: true, cached: false, frames, truncated,
     warnings: problems, queried: { ra, dec, radius },
-  });
+  }, 200, problems.length ? { 'cache-control': 'no-store' } : {});
   // A partial answer is returned but not kept: a collection that timed out
   // once must not read as "no frames here" for everyone until the TTL runs out.
   if (!problems.length) waitUntil(cache.put(key, res.clone()));

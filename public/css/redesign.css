@@ -1,0 +1,952 @@
+/* Muninn: the look of the page.
+ *   Astronomical twilight, lit by the band you look through. SPHEREx splits the infrared into bands. Here each band has a hue on the
+ *   usual representative scale — short waves violet, long waves red — and the
+ *   whole interface takes the hue of the band in the beam. Switch from D1 to
+ *   D6 and the page walks the spectrum with you.
+ * ground oklch(21% 0.020 285) twilight indigo · ink oklch(96% 0.012 285)
+ * accent: per band, hue 285 → 25 · counter oklch(84% 0.110 75) amber (B)
+ * shapes, three tiers: panels 22px · anything inside a panel 14px · controls
+ *   a full pill
+ * type: Unbounded (display, restrained: mark, date, finding) · Onest (body)
+ *   · JetBrains Mono (measured values)
+ * signature: the band column is a scale — under each band a bar shows its
+ *   hue and its place in the 0.75–5.01 µm range — and the band in the beam
+ *   lights the chrome. The ground only leans toward it, never takes it.
+ * Loaded after app.css: tokens and composition; state logic stays in app.css.
+ */
+
+/* ============================================================= tokens */
+
+/* Registered, so a change of band walks the hue along the spectrum instead of
+   jumping: D1 to D6 passes through blue, green and yellow on the way. */
+@property --band-h { syntax: "<number>"; inherits: true; initial-value: 285; }
+@property --band-c { syntax: "<number>"; inherits: true; initial-value: 0.05; }
+@property --color-accent { syntax: "<color>"; inherits: true; initial-value: #9ab; }
+@property --color-accent-dim { syntax: "<color>"; inherits: true; initial-value: #789; }
+@property --color-accent-deep { syntax: "<color>"; inherits: true; initial-value: #567; }
+@property --color-accent-wash { syntax: "<color>"; inherits: true; initial-value: transparent; }
+@property --color-focus { syntax: "<color>"; inherits: true; initial-value: #bcd; }
+:root { transition: --band-h 700ms var(--ease-out), --band-c 700ms var(--ease-out); }
+@media (prefers-reduced-motion: reduce) { :root { transition: none; } }
+
+:root {
+  --font-display: "Unbounded", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Onest", ui-sans-serif, system-ui, sans-serif;
+  --font-record: "Onest", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --text-base: 0.9375rem;
+  --text-date: clamp(2rem, min(3.3vw, 6.2vh), 3.5rem);
+  --text-finding: clamp(1.25rem, 1.35vw, 1.6rem);
+  --text-word: clamp(2.25rem, 3.6vw, 3.5rem);
+
+  --radius-xs: 14px;
+  --radius-sm: 14px;
+  --radius-md: 14px;
+  --radius-lg: 22px;
+  --radius-round: 999px;
+
+  /* The six bands on the representative scale, short to long. */
+  --hue-d1: 285;
+  --hue-d2: 235;
+  --hue-d3: 160;
+  --hue-d4: 100;
+  --hue-d5: 60;
+  --hue-d6: 25;
+  --band-h: 285;
+  --band-c: 0.05;
+}
+:root, .gate {
+  /* The whole range at once, for "all bands". */
+  --spectrum: linear-gradient(to right,
+    oklch(var(--acc-l) var(--acc-c) var(--hue-d1)), oklch(var(--acc-l) var(--acc-c) var(--hue-d2)) 15%,
+    oklch(var(--acc-l) var(--acc-c) var(--hue-d3)) 30%, oklch(var(--acc-l) var(--acc-c) var(--hue-d4)) 56%,
+    oklch(var(--acc-l) var(--acc-c) var(--hue-d5)) 79%, oklch(var(--acc-l) var(--acc-c) var(--hue-d6)));
+}
+
+:root, .gate, .gate-card {
+  color-scheme: dark;
+
+  --acc-l: 80%;
+  --acc-c: 0.14;
+
+  --rec-ground: oklch(21% 0.020 var(--band-h));
+  --rec-mount: oklch(24.5% 0.022 var(--band-h));
+  --rec-panel: oklch(24.5% 0.022 var(--band-h));
+  --rec-tick: oklch(46% 0.045 285);
+
+  --color-paper: oklch(21% 0.020 var(--band-h));
+  --color-paper-2: oklch(28% 0.024 var(--band-h));
+  --color-paper-3: oklch(33% 0.026 var(--band-h));
+  --color-paper-4: oklch(38% 0.028 var(--band-h));
+  --color-rule-soft: oklch(29% 0.021 var(--band-h));
+  --color-rule: oklch(37% 0.025 var(--band-h));
+  --color-rule-strong: oklch(56% 0.045 285);
+  --color-neutral: oklch(72% 0.035 285);
+  --color-muted: oklch(85% 0.024 285);
+  --color-ink: oklch(96% 0.012 285);
+
+  --color-well: oklch(11% 0.022 285);
+  --color-scrim: oklch(11% 0.022 285 / 0.9);
+  --color-backdrop: oklch(9% 0.022 285 / 0.75);
+
+  --shade-text: 0 1px 2px oklch(8% 0.02 285 / 0.9), 0 0 16px oklch(8% 0.02 285 / 0.6);
+  --shade-raise: none;
+  --shade-sunk: none;
+  --plate-rim: none;
+  --shade-pop: 0 8px 24px oklch(8% 0.02 285 / 0.5);
+  --scan-fade: oklch(8% 0.02 285 / 0.78);
+
+  --color-accent: oklch(var(--acc-l) calc(var(--acc-c) * var(--band-c) / 0.14) var(--band-h));
+  --color-accent-dim: oklch(calc(var(--acc-l) - 18%) calc(var(--acc-c) * var(--band-c) / 0.14) var(--band-h));
+  --color-accent-deep: oklch(calc(var(--acc-l) - 30%) calc(var(--acc-c) * var(--band-c) / 0.14) var(--band-h));
+  --color-accent-ink: oklch(16% 0.03 285);
+  --color-accent-wash: oklch(var(--acc-l) calc(var(--acc-c) * var(--band-c) / 0.14) var(--band-h) / 0.14);
+  --color-focus: oklch(90% 0.050 var(--band-h));
+
+  --color-counter: oklch(84% 0.110 75);
+  --color-counter-dim: oklch(66% 0.110 70);
+
+  /* Over the sky map: the veil that carries the words, and its controls. */
+  --gate-veil: oklch(9% 0.022 285 / 0.5);
+  --gate-veil-deep: oklch(9% 0.022 285 / 0.88);
+  --gate-chip: oklch(28% 0.038 285 / 0.85);
+  --gate-chip-soft: oklch(28% 0.038 285 / 0.7);
+  --gate-chip-over: oklch(33% 0.042 285 / 0.9);
+
+  /* The plate in grey, faintly cold: the band colour belongs to the chrome,
+     not to the data, so the picture never changes brightness with the hue. */
+  --cmap-deep: oklch(11% 0.022 285), oklch(27% 0.025 285), oklch(51% 0.025 280),
+    oklch(77% 0.018 275), oklch(98% 0.008 270);
+  --cmap-ice: oklch(11% 0.022 285), oklch(24% 0.045 240), oklch(48% 0.075 230),
+    oklch(75% 0.060 220), oklch(97% 0.018 210);
+  --cmap-infrared: oklch(11% 0.022 285), oklch(26% 0.070 300), oklch(49% 0.120 345),
+    oklch(75% 0.120 55), oklch(97% 0.050 95);
+  /* B arm amber, A arm violet, matched lightness at each stop. */
+  --cmap-diff: oklch(82% 0.110 75), oklch(50% 0.100 70), oklch(16% 0.025 285),
+    oklch(50% 0.110 290), oklch(82% 0.090 290);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --acc-l: 47%;
+  --acc-c: 0.15;
+
+  --rec-ground: oklch(95% 0.012 var(--band-h));
+  --rec-mount: oklch(98.5% 0.006 285);
+  --rec-panel: oklch(98.5% 0.006 285);
+  --rec-tick: oklch(62% 0.030 285);
+
+  --color-paper: oklch(95% 0.012 var(--band-h));
+  --color-paper-2: oklch(91% 0.016 var(--band-h));
+  --color-paper-3: oklch(87% 0.020 var(--band-h));
+  --color-paper-4: oklch(83% 0.022 var(--band-h));
+  --color-rule-soft: oklch(90% 0.014 285);
+  --color-rule: oklch(81% 0.020 285);
+  --color-rule-strong: oklch(56% 0.030 285);
+  --color-neutral: oklch(46% 0.030 285);
+  --color-muted: oklch(33% 0.030 285);
+  --color-ink: oklch(19% 0.035 285);
+
+  --color-well: oklch(98% 0.006 285);
+  --color-scrim: oklch(98% 0.006 285 / 0.9);
+  --color-backdrop: oklch(19% 0.035 285 / 0.4);
+
+  --shade-text: 0 1px 2px oklch(99% 0.004 285 / 0.9);
+  --scan-fade: oklch(99% 0.004 285 / 0.9);
+
+  --shade-raise: none;
+  --shade-sunk: none;
+  --plate-rim: none;
+  --shade-pop: 0 6px 18px oklch(19% 0.035 285 / 0.14);
+
+  --color-accent: oklch(var(--acc-l) calc(var(--acc-c) * var(--band-c) / 0.14) var(--band-h));
+  --color-accent-dim: oklch(calc(var(--acc-l) + 14%) calc(var(--acc-c) * var(--band-c) / 0.14) var(--band-h));
+  --color-accent-deep: oklch(calc(var(--acc-l) - 8%) calc(var(--acc-c) * var(--band-c) / 0.14) var(--band-h));
+  --color-accent-wash: oklch(var(--acc-l) calc(var(--acc-c) * var(--band-c) / 0.14) var(--band-h) / 0.12);
+  --color-accent-ink: oklch(99% 0.004 285);
+  --color-focus: oklch(45% 0.16 var(--band-h));
+
+  --color-counter: oklch(56% 0.140 60);
+  --color-counter-dim: oklch(66% 0.110 65);
+
+  --cmap-deep: oklch(98% 0.006 285), oklch(79% 0.016 285), oklch(55% 0.025 285),
+    oklch(32% 0.030 285), oklch(13% 0.030 285);
+  --cmap-ice: oklch(98% 0.006 285), oklch(82% 0.035 225), oklch(58% 0.070 230),
+    oklch(36% 0.070 240), oklch(16% 0.040 250);
+  --cmap-infrared: oklch(98% 0.006 285), oklch(84% 0.070 75), oklch(64% 0.130 40),
+    oklch(44% 0.130 340), oklch(20% 0.070 290);
+  --cmap-diff: oklch(46% 0.130 65), oklch(72% 0.100 70), oklch(97% 0.006 285),
+    oklch(72% 0.080 290), oklch(46% 0.120 290);
+}
+
+/* The band in the beam lights the chrome (app.js sets html[data-band]). The
+   ground leans toward the band's hue too, faintly, so D2 and D5 are felt in
+   the room and not only in the buttons. "All bands" stays near-neutral. */
+:root[data-band="D1"] { --band-h: var(--hue-d1); --band-c: 0.14; }
+:root[data-band="D2"] { --band-h: var(--hue-d2); --band-c: 0.14; }
+:root[data-band="D3"] { --band-h: var(--hue-d3); --band-c: 0.14; }
+:root[data-band="D4"] { --band-h: var(--hue-d4); --band-c: 0.14; }
+:root[data-band="D5"] { --band-h: var(--hue-d5); --band-c: 0.14; }
+:root[data-band="D6"] { --band-h: var(--hue-d6); --band-c: 0.14; }
+
+/* =============================================================== base */
+
+body { font-size: var(--text-base); line-height: 1.5; }
+::selection { background: var(--color-accent); color: var(--color-accent-ink); }
+
+/* ============================================================== shell */
+
+/* Panels float on the twilight ground with room between them; nothing is
+   divided by a ruled line. */
+.shell {
+  background: var(--rec-ground);
+  gap: var(--space-xs);
+  padding: var(--space-xs);
+}
+.mast, .stage, .run { background: none; border: 0; }
+.side--right { background: var(--rec-panel); border-radius: var(--radius-lg); }
+.run { background: var(--rec-panel); border-radius: var(--radius-lg); }
+.stage { background: var(--rec-panel); border-radius: var(--radius-lg); }
+
+/* ============================================================ masthead */
+
+.mast {
+  padding: var(--space-2xs) var(--space-xs);
+  padding-block-start: calc(var(--space-2xs) + env(safe-area-inset-top, 0px));
+  gap: var(--space-xs) var(--space-xl);
+}
+.brand__glyph, .gate__glyph { display: none; }
+.brand__text { display: flex; align-items: baseline; gap: var(--space-sm); }
+.brand strong {
+  font-family: var(--font-display); font-weight: 600;
+  font-size: 1.125rem; letter-spacing: 0; line-height: 1;
+}
+.brand__tag { font-size: var(--text-xs); color: var(--color-neutral); line-height: 1; }
+
+.find {
+  border: 0; background: var(--color-paper-2);
+  border-radius: var(--radius-round);
+  padding-inline: var(--space-md) var(--space-2xs);
+  max-inline-size: 24rem;
+}
+.find:focus-within { background: var(--color-paper-3); box-shadow: 0 0 0 1px var(--color-accent); }
+.find__input { font-size: var(--text-sm); padding-block: var(--space-xs); }
+.find__input::placeholder { color: var(--color-neutral); }
+.find:focus-within .find__go, .find__go:hover { color: var(--color-accent); }
+
+.mast__acts { gap: var(--space-2xs); }
+.mast .link { font-size: var(--text-sm); }
+/* A link is words. Under the hand it gains a soft pill that fades in; no
+   ruled line appears beneath it. */
+.link {
+  --link-rule: transparent;
+  --link-over: var(--color-paper-2);
+  background-image: none; color: var(--color-muted);
+  padding-inline: var(--space-sm); border-radius: var(--radius-round);
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-short) var(--ease-out);
+}
+.link:hover { color: var(--color-ink); background-color: var(--link-over); }
+.link:active { color: var(--color-ink); background-color: var(--color-paper-3); }
+.link:disabled { background-color: transparent; }
+.gate .link { --link-over: var(--gate-chip); }
+/* Inside a sentence or a table row the pill hugs the words. */
+.facts__go, .sheet .link { padding-inline: var(--space-xs); color: var(--color-accent); }
+/* At rest the pill is invisible, so the words keep the edge of their column. */
+.part > .link, .cand__go, .tools__acts > .link:first-child { margin-inline-start: calc(-1 * var(--space-sm)); }
+.sheet__fine > .link { margin-inline-start: calc(-1 * var(--space-xs)); }
+/* On a surface that is already paper-2 the pill is one step lighter. */
+.tools .link, .cand .link { --link-over: var(--color-paper-3); }
+.link[data-state] { color: var(--color-accent); }
+.mark__csv { justify-self: start; margin-inline-start: calc(-1 * var(--space-xs)); padding-inline: var(--space-xs); color: var(--color-accent); font-size: var(--text-xs); }
+.mast__sep { display: none; }
+/* A link inside a sentence cannot be told by colour alone. */
+.mark__who-name {
+  color: var(--color-accent); text-decoration: underline; text-underline-offset: 3px;
+  text-decoration-color: color-mix(in oklch, currentColor 45%, transparent);
+  transition: color var(--dur-short) var(--ease-out);
+}
+.mark__who-name:hover { color: var(--color-ink); }
+
+/* Every control answers the hand at one pace. */
+.find, .gate__find, .find__go, .gate__go, .key, .btn, .pill, .again, .restore, .gate__jump-go {
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-short) var(--ease-out),
+              transform var(--dur-short) var(--ease-out);
+}
+
+/* Save, share, adjust: one quiet group, apart from where you can go. */
+.mast__group {
+  display: flex; align-items: center; padding: var(--space-3xs);
+  background: var(--color-paper-2); border-radius: var(--radius-round);
+  margin-inline-end: var(--space-xs);
+}
+.mast__group .link { --link-over: var(--color-paper-4); min-block-size: 28px; font-size: var(--text-xs); color: var(--color-muted); }
+.mast__group .link[aria-expanded="true"] { color: var(--color-ink); }
+
+.link--lang, .theme-key {
+  inline-size: auto; min-inline-size: 36px; block-size: 32px; min-block-size: 32px;
+  padding: 0 var(--space-sm);
+  border: 0; background: var(--color-paper-2);
+  border-radius: var(--radius-round);
+  font-size: var(--text-xs); letter-spacing: 0.04em; font-weight: 600;
+  color: var(--color-muted);
+}
+.link--lang:hover, .theme-key:hover:not(:disabled) {
+  color: var(--color-accent-ink); background: var(--color-accent); transform: none;
+}
+.theme-key svg { inline-size: 15px; block-size: 15px; }
+.theme-key:disabled { color: var(--color-accent); background: var(--color-paper-2); }
+.link--lang:active, .theme-key:not(:disabled):active { transform: scale(0.96); }
+
+/* ========================================================= the plate label */
+
+/* The night the exposure was taken, one word a line, large; the hour, the
+   band and the visit under it. It changes on every step, so it blinks with
+   the frames. */
+.when__date {
+  display: grid; gap: var(--space-3xs);
+  font-family: var(--font-display); font-weight: 500;
+  font-size: var(--text-date); line-height: 1; letter-spacing: -0.02em;
+  color: var(--color-ink);
+}
+.when__my { font-size: var(--text-md); line-height: 1.2; letter-spacing: 0; color: var(--color-muted); }
+.when__date[data-range="true"] { font-size: var(--text-md); line-height: 1.25; letter-spacing: 0; white-space: normal; }
+.when__time { font-size: var(--text-xs); color: var(--color-neutral); padding-block-start: var(--space-xs); }
+.when__band { padding-block-start: var(--space-sm); font-size: var(--text-xs); color: var(--color-accent); }
+/* Words, so in the reading face; the figures in them stay aligned. */
+.when__of { font-family: var(--font-body); font-variant-numeric: tabular-nums; font-size: var(--text-xs); color: var(--color-muted); }
+.under__pos { font-size: var(--text-xs); color: var(--color-neutral); line-height: 1.6; }
+
+/* ================================================================ steps */
+
+.step {
+  border-radius: var(--radius-round); color: var(--color-ink);
+  background: var(--color-paper-2);
+  transition: background-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
+}
+.step__key { border: 0; background: none; color: inherit; transition: transform var(--dur-short) var(--ease-out); }
+.step svg { inline-size: 16px; block-size: 16px; stroke-width: 1.8; }
+.step__d { font-size: var(--text-xs); color: var(--color-muted); }
+@media (hover: hover) {
+  .step:hover:not(:disabled) { background: var(--color-accent); color: var(--color-accent-ink); }
+  .step:hover:not(:disabled) .step__d { color: inherit; }
+}
+.step:hover:not(:disabled) .step__key { background: none; color: inherit; }
+.step:not(:disabled):active { background: var(--color-paper-4); }
+.step:disabled .step__d { display: none; }
+.step:disabled { background: var(--color-rule-soft); color: var(--color-rule-strong); }
+.step:disabled .step__key { background: none; color: inherit; }
+.step:focus-visible .step__key { outline: none; }
+.step:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+
+/* ======================================================= the spectrum */
+
+/* Every band is the same quiet chip. Its hue and its place in the instrument's
+   range, 0.75 to 5.01 micrometres, are drawn as a bar along its foot, so the
+   column reads as a staircase across the spectrum. */
+.lambda__chip {
+  --chip-h: var(--band-h);
+  --chip-ink: oklch(var(--acc-l) var(--acc-c) var(--chip-h));
+  --chip-bar: var(--chip-ink);
+  --chip-track: var(--color-rule);
+  --from: 0%; --to: 100%;
+  position: relative; border: 0; border-radius: var(--radius-sm);
+  padding: var(--space-2xs) var(--space-sm) calc(var(--space-2xs) + 6px);
+  color: var(--color-muted); background: var(--color-paper-2);
+  align-content: center;
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-micro) var(--ease-out);
+}
+.lambda__chip::after {
+  content: ""; position: absolute;
+  inset-inline: var(--space-sm); inset-block-end: 5px; block-size: 3px;
+  border-radius: var(--radius-round);
+  background:
+    linear-gradient(to right, transparent var(--from), var(--chip-bar) var(--from),
+      var(--chip-bar) var(--to), transparent var(--to)),
+    var(--chip-track);
+}
+.lambda__chip[data-band="D1"] { --chip-h: var(--hue-d1); --from: 0%; --to: 8.7%; }
+.lambda__chip[data-band="D2"] { --chip-h: var(--hue-d2); --from: 8.2%; --to: 21.1%; }
+.lambda__chip[data-band="D3"] { --chip-h: var(--hue-d3); --from: 20.7%; --to: 39.4%; }
+.lambda__chip[data-band="D4"] { --chip-h: var(--hue-d4); --from: 38.7%; --to: 72.8%; }
+.lambda__chip[data-band="D5"] { --chip-h: var(--hue-d5); --from: 71.8%; --to: 86.4%; }
+.lambda__chip[data-band="D6"] { --chip-h: var(--hue-d6); --from: 85.9%; --to: 100%; }
+.lambda__chip[data-band="all"]::after { background: var(--spectrum); }
+/* Its bar already spans the whole range. */
+.lambda__chip[data-band="all"] .lambda__um { display: none; }
+.lambda__name { font-family: var(--font-body); font-weight: 600; font-size: var(--text-sm); color: var(--color-ink); }
+.lambda__um { font-size: var(--text-2xs); color: var(--color-neutral); }
+.lambda__chip:hover { background: var(--color-paper-3); color: var(--color-ink); }
+.lambda__chip:active { transform: scale(0.98); }
+.lambda__chip[aria-pressed="true"] {
+  --chip-bar: var(--color-accent-ink);
+  --chip-track: color-mix(in oklch, var(--color-accent-ink) 22%, transparent);
+  background: var(--chip-ink); color: var(--color-accent-ink);
+}
+.lambda__chip[data-band="all"][aria-pressed="true"] { background: var(--color-ink); color: var(--color-paper); }
+.lambda__chip[aria-pressed="true"] .lambda__name,
+.lambda__chip[aria-pressed="true"] .lambda__um { color: inherit; }
+
+/* ============================================================ the plate */
+
+/* No registration ticks: the panel's own edge frames the board. */
+.mount::before, .mount::after { display: none; }
+
+.plate { border-radius: var(--radius-md); }
+.tip { background: var(--color-paper-3); border: 0; border-radius: var(--radius-sm); box-shadow: var(--shade-pop); }
+.tip__title { font-family: var(--font-body); font-weight: 600; }
+
+/* The key to the Gaia and WISE marks. It stands in the plate's label, beside
+   the picture: nothing is written over the pixels it explains. Each line opens
+   with the mark it explains. */
+.survey {
+  display: grid; gap: var(--space-2xs); justify-items: start;
+  padding-block-start: var(--space-xs);
+}
+.survey[hidden] { display: none; }
+.survey__line {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2xs) var(--space-xs);
+  min-inline-size: 0; max-inline-size: 100%;
+  font-size: var(--text-xs); line-height: 1.4; color: var(--color-muted);
+}
+.survey__line > span:not(.survey__key) { flex: 0 1 auto; min-inline-size: 0; }
+.survey__key {
+  flex: none; inline-size: 9px; block-size: 9px;
+  border: 1px solid var(--color-counter); border-radius: 50%;
+}
+.survey__line[data-kind="wise"] .survey__key { border-color: var(--color-ink); border-radius: 0; transform: rotate(45deg) scale(0.8); }
+.survey__retry {
+  pointer-events: auto; flex: none; cursor: pointer;
+  min-block-size: 26px; padding: 0 var(--space-sm);
+  font: inherit; color: var(--color-ink);
+  background: var(--color-paper-3); border: 0; border-radius: var(--radius-round);
+  transition: background-color var(--dur-short) var(--ease-out);
+}
+.survey__retry:hover { background: var(--color-paper-4); }
+.survey__retry:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.survey__retry:disabled { color: var(--color-rule-strong); cursor: not-allowed; }
+@media (pointer: coarse) { .survey__retry { min-block-size: 40px; } }
+.plate__state-line { font-family: var(--font-body); font-weight: 500; font-size: var(--text-md); line-height: 1.3; color: var(--color-ink); }
+.plate__log-band { opacity: 1; }
+.plate__log-row { border-radius: var(--radius-xs); }
+.plate__log-row[data-status="reading"] { background: var(--color-accent-wash); color: var(--color-ink); }
+.meter { block-size: 4px; border-radius: var(--radius-round); background: var(--color-paper-3); }
+.meter__fill { background: var(--color-accent); }
+
+/* ============================================================= findings */
+
+.side { padding-inline: var(--space-lg); }
+
+.verdict { padding-block: var(--space-lg); gap: var(--space-md); }
+.verdict__line {
+  font-family: var(--font-display); font-weight: 500;
+  font-size: var(--text-finding); line-height: 1.22; letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+.verdict__line[data-state="reading"] { font-family: var(--font-body); font-weight: 500; font-size: 1.0625rem; color: var(--color-muted); }
+.verdict__line[data-found="true"] { color: var(--color-counter); }
+
+/* The figures, one a line: what it is on the left, the value on the right. */
+.facts { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2xs); }
+.facts > div { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-sm); min-inline-size: 0; }
+.facts dt { flex: 1 0 auto; font-size: var(--text-sm); color: var(--color-neutral); white-space: nowrap; }
+.facts dd { flex: 0 1 auto; min-inline-size: 0; text-align: end; font-family: var(--font-mono); font-size: 0.8125rem; color: var(--color-ink); }
+/* A measured value stays ink in every band: in the long bands the accent is
+   red, and a red figure reads as a failed one. */
+.facts dd[data-tone="accent"] { color: var(--color-ink); font-weight: 500; }
+
+/* Parts are separated by space, not rules. */
+.part { padding-block: var(--space-md) var(--space-lg); gap: var(--space-sm); border-block-start: 0; }
+.part__k { font-family: var(--font-body); font-weight: 600; font-size: var(--text-md); letter-spacing: 0; }
+.part__count {
+  font-family: var(--font-body); font-variant-numeric: tabular-nums; font-size: var(--text-xs); color: var(--color-muted);
+  padding: 2px var(--space-xs); border-radius: var(--radius-round); background: var(--color-paper-2);
+}
+.part__count[data-tone="accent"] { color: var(--color-accent-ink); background: var(--color-accent); }
+.part__count[data-tone="counter"] { color: var(--color-accent-ink); background: var(--color-counter); }
+
+.depth__mag { font-family: var(--font-display); font-weight: 500; font-size: 2.75rem; letter-spacing: -0.02em; }
+.depth__unit { font-family: var(--font-mono); }
+.depth__track { fill: var(--color-paper-3); }
+
+.cand {
+  border-inline-start: 0; border-radius: var(--radius-md);
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--color-paper-2);
+}
+.cand:has(.cand__where[data-known="false"]) { background: var(--color-accent-wash); }
+.cand__where, .mark__call { font-family: var(--font-body); font-weight: 600; }
+.cands__head { font-family: var(--font-body); font-weight: 600; }
+.mark { border-block-end: 0; }
+.mark__n { border: 0; background: var(--color-paper-3); color: var(--color-ink); }
+
+/* A mark's spectrum: six bands, one point each. It takes the mark's full
+   width, under the number and the close key, because a chart and four columns
+   of figures do not fit beside them in a 16rem column. */
+.spectrum { grid-column: 1 / -1; min-inline-size: 0; display: grid; gap: var(--space-xs); justify-items: start; }
+.spectrum__body { inline-size: 100%; min-inline-size: 0; display: grid; gap: var(--space-xs); }
+.spectrum__read { --spectrum-key: var(--color-paper-3); background: var(--spectrum-key); color: var(--color-ink); }
+.spectrum__read:hover:not([aria-disabled="true"]) { --spectrum-key: var(--color-paper-4); border-block-end-color: transparent; }
+.spectrum__read:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.spectrum__read[aria-disabled="true"] { color: var(--color-neutral); cursor: progress; }
+.spectrum__read[aria-disabled="true"]:hover { background: var(--spectrum-key); color: var(--color-neutral); border-block-end-color: transparent; }
+
+.spectrum__chart { display: block; inline-size: 100%; max-inline-size: 15rem; block-size: auto; overflow: visible; }
+.spectrum__axis { stroke: var(--color-rule-strong); stroke-width: 1; }
+.spectrum__tick, .spectrum__unit { font-family: var(--font-mono); font-size: 10px; fill: var(--color-neutral); }
+.spectrum__unit { fill: var(--color-muted); }
+
+/* One hue per band, the same six the filter wheel uses. */
+.spectrum [data-band] { --pt: oklch(var(--acc-l) var(--acc-c) var(--pt-h)); }
+.spectrum [data-band="D1"] { --pt-h: var(--hue-d1); }
+.spectrum [data-band="D2"] { --pt-h: var(--hue-d2); }
+.spectrum [data-band="D3"] { --pt-h: var(--hue-d3); }
+.spectrum [data-band="D4"] { --pt-h: var(--hue-d4); }
+.spectrum [data-band="D5"] { --pt-h: var(--hue-d5); }
+.spectrum [data-band="D6"] { --pt-h: var(--hue-d6); }
+.spectrum__band { stroke: var(--pt); stroke-width: 3; }
+.spectrum__pt { stroke: var(--pt); fill: var(--pt); stroke-width: 1.5; }
+.spectrum__pt circle { stroke: var(--color-paper); stroke-width: 1; }
+.spectrum__pt circle[data-measured="false"] { fill: var(--color-paper); stroke: var(--pt); stroke-width: 1.5; }
+
+.spectrum__table {
+  inline-size: 100%; border-collapse: collapse;
+  font-family: var(--font-mono); font-size: var(--text-2xs); line-height: 1.5;
+  color: var(--color-muted); font-variant-numeric: tabular-nums;
+}
+.spectrum__table th, .spectrum__table td { padding: 0 var(--space-xs) 0 0; text-align: start; vertical-align: baseline; font-weight: 400; }
+.spectrum__table th:last-child, .spectrum__table td:last-child { padding-inline-end: 0; text-align: end; }
+.spectrum__table thead th { font-family: var(--font-body); color: var(--color-neutral); }
+.spectrum__table td { white-space: nowrap; }
+.spectrum__name { white-space: nowrap; color: var(--color-ink); }
+.spectrum__name::before {
+  content: ""; display: inline-block; inline-size: 0.5em; block-size: 0.5em;
+  margin-inline-end: var(--space-2xs); border-radius: var(--radius-round); background: var(--pt);
+}
+.spectrum__table td.spectrum__state { font-family: var(--font-body); color: var(--color-neutral); white-space: normal; text-align: start; }
+.spectrum__table tr[data-state="failed"] .spectrum__state { color: var(--color-counter); }
+.spectrum__table tr[data-state="reading"] .spectrum__state { color: var(--color-accent); animation: spectrum-wait 1.2s var(--ease-out) infinite alternate; }
+@keyframes spectrum-wait { to { opacity: 0.45; } }
+
+.spectrum__note { font-family: var(--font-body); font-size: var(--text-xs); line-height: 1.45; color: var(--color-neutral); }
+/* Days between the points is the caveat that changes what the chart means. */
+.spectrum__note[data-warn="true"] { color: var(--color-counter); }
+
+@media (prefers-reduced-motion: reduce) {
+  .spectrum__table tr[data-state="reading"] .spectrum__state, .spectrum__read[data-busy="true"]::before { animation: none; }
+}
+
+.again { padding: var(--space-2xs) var(--space-sm); background: var(--color-paper-2); border: 0; border-radius: var(--radius-round); }
+.again:hover:not(:disabled) { background: var(--color-paper-3); }
+.credit { border-block-start: 0; color: var(--color-neutral); }
+
+/* ================================================================== run */
+
+.run { padding: var(--space-sm) var(--space-lg) var(--space-sm); }
+.run__k { font-family: var(--font-body); font-weight: 600; font-size: var(--text-md); }
+.run__found { color: var(--color-muted); }
+
+/* The modes, a pill track with the live one filled. */
+.segments { gap: var(--space-3xs); background: none; }
+.segment {
+  padding: 0 var(--space-sm); min-block-size: 32px;
+  border: 0; border-radius: var(--radius-round);
+  font-size: var(--text-sm); color: var(--color-neutral);
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-short) var(--ease-out);
+}
+.segment:hover { color: var(--color-ink); background-color: var(--color-paper-2); }
+.segment:has(input:checked) { color: var(--color-ink); background-color: var(--color-paper-4); }
+.tools .segment:hover { background-color: var(--color-paper-3); }
+.segment:has(input:disabled), .segment:has(input:disabled):hover { background-color: transparent; }
+.segment:has(input:focus-visible) { outline-color: var(--color-focus); }
+.segments--tiny .segment { min-block-size: 26px; padding-inline: var(--space-sm); font-size: var(--text-xs); }
+
+.key {
+  inline-size: 36px; block-size: 36px; border: 0;
+  background: var(--color-paper-2); color: var(--color-ink);
+}
+.key:hover { background: var(--color-paper-4); }
+.key--play { background: var(--color-paper-3); color: var(--color-accent); }
+.key--play:hover { background: var(--color-accent); color: var(--color-accent-ink); }
+.key:active { transform: scale(0.95); }
+
+.compare { background: var(--color-paper-2); border: 0; border-radius: var(--radius-md); }
+.matrix__ramp { block-size: 4px; background: linear-gradient(to right, var(--color-paper-3), var(--color-accent)); }
+
+/* ============================================================= controls */
+
+.tools { border: 0; background: var(--color-paper-2); border-radius: var(--radius-md); }
+.tools__acts { border-block-start: 0; }
+.field { background: var(--color-paper); border-color: var(--color-rule); border-radius: var(--radius-round); padding-inline: var(--space-sm); }
+.field:focus { border-color: var(--color-accent); }
+.pill { border: 0; background: var(--color-paper-3); }
+.pill:has(input:checked) { background: var(--color-accent-wash); color: var(--color-ink); }
+.range::-webkit-slider-runnable-track { background: var(--color-paper-4); }
+.range::-moz-range-track { background: var(--color-paper-4); }
+
+.btn--primary { background: var(--color-accent); color: var(--color-accent-ink); border-radius: var(--radius-round); }
+.btn--primary:hover { background: var(--color-focus); }
+.btn--quiet { background: var(--color-paper-3); border: 0; color: var(--color-ink); border-radius: var(--radius-round); }
+.btn--quiet:hover { background: var(--color-paper-4); }
+
+.restore { background: var(--color-paper-2); border: 0; color: var(--color-ink); }
+
+/* ================================================================ sheet */
+
+.sheet { background: var(--rec-panel); border: 0; border-radius: var(--radius-lg); }
+.sheet__body { padding: var(--space-xl); }
+.sheet__title { font-family: var(--font-display); font-weight: 500; font-size: 1.875rem; line-height: 1.15; }
+.sheet__rule { display: none; }
+.sheet__rule + .sheet__fine { margin-block-start: var(--space-md); }
+.sheet__body p { line-height: 1.6; }
+
+/* ================================================================= gate */
+
+.gate { --band-h: var(--hue-d1); --band-c: 0.14; }
+.gate__vignette {
+  background:
+    radial-gradient(120% 90% at 60% 40%, transparent 50%, var(--gate-veil) 100%),
+    linear-gradient(to top, var(--gate-veil-deep) 0%, transparent 46%);
+}
+.gate__acts {
+  position: absolute; z-index: 3;
+  inset-block-start: calc(var(--gutter) + env(safe-area-inset-top, 0px));
+  inset-inline-end: var(--gutter);
+  display: flex; align-items: center; gap: var(--space-2xs);
+}
+.gate__acts .link { font-size: var(--text-sm); text-shadow: var(--shade-text); }
+
+.gate__poster {
+  --poster-m: clamp(1rem, 2.5vw, 2.25rem);
+  inline-size: min(34rem, calc(100% - 2 * var(--poster-m)));
+  gap: var(--space-xs);
+  margin: var(--poster-m);
+  margin-block-end: calc(var(--poster-m) + env(safe-area-inset-bottom, 0px));
+}
+.gate__word {
+  font-family: var(--font-display); font-weight: 500;
+  font-size: var(--text-word); line-height: 1; letter-spacing: -0.02em;
+}
+.gate__tag {
+  font-size: var(--text-base); color: var(--color-muted); line-height: 1.4;
+  padding-block: 0 var(--space-2xs);
+  border: 0;
+}
+.gate__src { margin: 0; max-inline-size: 46ch; font-size: var(--text-xs); line-height: 1.45; color: var(--color-neutral); text-shadow: var(--shade-text); }
+.gate__find {
+  border: 0; margin-block-start: var(--space-2xs);
+  background: var(--gate-chip);
+  border-radius: var(--radius-round);
+  padding-inline: var(--space-md) var(--space-2xs);
+}
+.gate__find:focus-within { box-shadow: 0 0 0 1px var(--color-accent); }
+.gate__input { font-size: var(--text-base); }
+
+.gate__jump { font-size: var(--text-sm); }
+.gate__jump-k { flex: 1 1 100%; font-size: var(--text-xs); font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--color-neutral); }
+.gate__jump-go {
+  color: var(--color-ink); text-decoration: none;
+  padding: 1px var(--space-xs); border-radius: var(--radius-round);
+  background: var(--gate-chip-soft);
+}
+.gate__jump-go:hover, .gate__jump-go:focus-visible { background: var(--color-accent); color: var(--color-accent-ink); transform: translateY(-1px); }
+.gate__jump-go:active { transform: scale(0.97); }
+.gate__find:hover { background: var(--gate-chip-over); }
+.gate__jump-line { gap: var(--space-2xs) var(--space-2xs); }
+.gate__pin-name { font-family: var(--font-body); font-weight: 600; letter-spacing: 0; }
+.gate__pin, .gate__pin[data-flip="true"] { border: 0; }
+.gate__pin-sub { font-variant-numeric: tabular-nums; }
+
+/* ------------------------------------------------------ the card on the sky */
+
+.gate-card {
+  position: absolute; z-index: 4;
+  inset-block-end: calc(var(--gutter) + env(safe-area-inset-bottom, 0px)); inset-inline-end: var(--gutter);
+  display: grid; gap: var(--space-md); inline-size: min(19rem, calc(100% - 2 * var(--gutter)));
+  padding: var(--space-sm);
+  background: var(--rec-panel); border-radius: var(--radius-lg); box-shadow: var(--shade-pop);
+  opacity: 0; translate: 0 14px;
+  transition: opacity var(--dur-long) var(--ease-out), translate var(--dur-long) var(--ease-out);
+}
+/* The card is lit by the band its frame was taken in, as the field will be. */
+.gate-card[data-band="D1"] { --band-h: var(--hue-d1); }
+.gate-card[data-band="D2"] { --band-h: var(--hue-d2); }
+.gate-card[data-band="D3"] { --band-h: var(--hue-d3); }
+.gate-card[data-band="D4"] { --band-h: var(--hue-d4); }
+.gate-card[data-band="D5"] { --band-h: var(--hue-d5); }
+.gate-card[data-band="D6"] { --band-h: var(--hue-d6); }
+.gate-card[hidden] { display: none; }
+.gate-card[data-on="true"] { opacity: 1; translate: 0 0; }
+.gate-card[data-frame="true"] { grid-template-columns: 13.75rem minmax(0, 1fr); inline-size: min(34rem, calc(100% - 2 * var(--gutter))); }
+
+/* The frame develops from the top, the way a frame arrives in the run. */
+.gate-card__frame {
+  position: relative; margin: 0; aspect-ratio: 1; overflow: hidden;
+  background: var(--color-well); border-radius: var(--radius-md);
+}
+.gate-card__frame[hidden] { display: none; }
+.gate-card__frame img {
+  display: block; inline-size: 100%; block-size: 100%; object-fit: cover;
+  clip-path: inset(0 0 100% 0);
+  transition: clip-path 620ms var(--ease-out);
+}
+.gate-card__frame[data-ready="true"] img { clip-path: inset(0 0 0 0); }
+.gate-card__frame canvas { display: block; inline-size: 100%; block-size: 100%; }
+.gate-card__frame img[hidden], .gate-card__frame canvas[hidden] { display: none; }
+/* Read on the spot: while the archive is asked and the rows come in, the read
+   line travels down the empty frame, as it does in the run. */
+.gate-card__frame[data-live="asking"]::before, .gate-card__frame[data-live="reading"]::before {
+  content: ""; position: absolute; inset-inline: 0; inset-block-start: 0; block-size: 2px;
+  background: var(--color-accent); opacity: 0.85;
+  animation: card-read 1.6s var(--ease-in-out) infinite;
+}
+.gate-card__frame[data-live="asking"]::before { opacity: 0.4; animation-duration: 2.6s; }
+@keyframes card-read { from { translate: 0 0; } to { translate: 0 13.6rem; } }
+@media (prefers-reduced-motion: reduce) { .gate-card__frame::before { animation: none; } }
+/* The field is centred on its object: the ring marks that place, visit after visit. */
+.gate-card__frame::after {
+  content: ""; position: absolute; inset-block-start: 50%; inset-inline-start: 50%;
+  inline-size: 5rem; block-size: 5rem; translate: -50% -50%;
+  border: 2px solid var(--color-accent); border-radius: var(--radius-round);
+  opacity: 0; transition: opacity var(--dur-long) var(--ease-out) 500ms;
+}
+.gate-card__frame[data-ready="true"][data-ring="true"]::after { opacity: 1; }
+.gate-card__tag {
+  position: absolute; inset-block-end: var(--space-xs); inset-inline-start: var(--space-xs);
+  padding: var(--space-3xs) var(--space-xs); border-radius: var(--radius-round);
+  background: var(--color-scrim); color: var(--color-muted); font-size: var(--text-2xs);
+}
+
+.gate-card__body { display: grid; gap: var(--space-sm); align-content: space-between; min-inline-size: 0; padding: var(--space-2xs) var(--space-xs); }
+.gate-card[data-frame="true"] .gate-card__body { padding-inline-start: 0; }
+.gate-card__head { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--space-xs); align-items: start; }
+.gate-card__name {
+  margin: 0; font-family: var(--font-display); font-weight: 500;
+  font-size: var(--text-lg); line-height: 1.15; letter-spacing: -0.01em; overflow-wrap: anywhere;
+}
+.gate-card__kind { grid-column: 1 / -1; margin: 0; padding-block-start: var(--space-2xs); font-size: var(--text-sm); line-height: 1.4; color: var(--color-neutral); }
+.gate-card__close {
+  appearance: none; cursor: pointer; display: grid; place-items: center;
+  inline-size: 32px; block-size: 32px; padding: 0; border: 0; border-radius: var(--radius-round);
+  color: var(--color-neutral); background: transparent;
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-short) var(--ease-out);
+}
+.gate-card__close svg, .gate-card__go svg { inline-size: 16px; block-size: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.gate-card__close:hover { color: var(--color-ink); background: var(--color-paper-3); }
+.gate-card__close:active { background: var(--color-paper-4); }
+
+/* Every visit SPHEREx has made to the field, on its own span of time. */
+.gate-card__visits { display: grid; gap: var(--space-2xs); }
+.gate-card__visits[hidden] { display: none; }
+.gate-card__line { position: relative; block-size: 14px; margin: 0; padding: 0; list-style: none; }
+.gate-card__line::before {
+  content: ""; position: absolute; inset-inline: 0; inset-block-start: 6px; block-size: 2px;
+  border-radius: var(--radius-round); background: var(--color-rule);
+}
+.gate-card__line li {
+  position: absolute; inset-block-start: 2px; inset-inline-start: calc(var(--at) * (100% - 4px));
+  inline-size: 4px; block-size: 10px; border-radius: var(--radius-round); background: var(--color-neutral);
+  animation: card-tick var(--dur-long) var(--ease-out) calc(var(--i) * 30ms) backwards;
+}
+.gate-card__line li[data-shown] { background: var(--color-accent); inset-block-start: 0; block-size: 14px; z-index: 1; }
+@keyframes card-tick { from { scale: 1 0; } }
+.gate-card__ends { display: flex; justify-content: space-between; margin: 0; font-size: var(--text-2xs); color: var(--color-neutral); }
+
+.gate-card__facts { display: grid; gap: var(--space-2xs); margin: 0; }
+.gate-card__facts div { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-md); }
+.gate-card__facts dt { font-size: var(--text-sm); color: var(--color-neutral); }
+.gate-card__facts dd { margin: 0; font-size: var(--text-xs); color: var(--color-ink); white-space: nowrap; }
+
+.gate-card__go {
+  appearance: none; cursor: pointer; border: 0;
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-xs);
+  min-block-size: 40px; padding-inline: var(--space-lg); border-radius: var(--radius-round);
+  font: inherit; font-size: var(--text-sm); font-weight: 600; white-space: nowrap;
+  color: var(--color-accent-ink); background: var(--color-accent);
+  transition: background-color var(--dur-short) var(--ease-out), transform var(--dur-short) var(--ease-out);
+}
+.gate-card__go svg { transition: transform var(--dur-short) var(--ease-out); }
+.gate-card__go:hover { background: var(--color-focus); }
+.gate-card__go:hover svg { transform: translateX(3px); }
+.gate-card__go:active { transform: scale(0.97); }
+.gate-card__go:focus-visible, .gate-card__close:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.gate[data-entering="true"] .gate-card { display: none; }
+
+@media (max-width: 48rem) {
+  /* On a phone the card takes the foot of the screen, the frame on top. */
+  .gate-card, .gate-card[data-frame="true"] {
+    grid-template-columns: minmax(0, 1fr); inline-size: auto;
+    inset-inline: var(--space-xs); inset-block-end: calc(var(--space-xs) + env(safe-area-inset-bottom, 0px));
+  }
+  .gate-card__frame { aspect-ratio: 2 / 1; }
+  .gate-card[data-frame="true"] .gate-card__body { padding-inline-start: var(--space-xs); }
+  .gate-card__close { inline-size: 40px; block-size: 40px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gate-card, .gate-card__frame img { transition-duration: 1ms; translate: 0 0; }
+  .gate-card__line li { animation: none; }
+}
+
+/* ======================================================== composition */
+
+@media (min-width: 68.0625rem) and (min-height: 34.0625rem) {
+  :root { --side: clamp(16rem, 19vw, 21rem); }
+
+  /*
+   * The board: the plate's label, the plate, the spectrum. The two steps sit
+   * at the foot of the label column, side by side.
+   * Widths must add up for roomAspect(), which measures mount minus cell.
+   */
+  .mount {
+    --pad: var(--space-sm);
+    --gap: var(--space-md);
+    --cap: 11.5rem;
+    --bandw: 9.5rem;
+    --fixed: calc(var(--cap) + var(--bandw) + 2 * var(--gap) + 2 * var(--pad));
+    background: none;
+    grid-template-columns:
+      calc((var(--cap) - var(--gap)) / 2) calc((var(--cap) - var(--gap)) / 2)
+      var(--plate-w) var(--bandw);
+    /* The label reads down in one run: the night, the two steps that change
+       it, then what the exposure is. Nothing is pinned to the foot, so no
+       hole opens between the words and the buttons. */
+    grid-template-rows: repeat(5, auto) auto auto;
+    grid-template-areas: none;
+    row-gap: 0;
+    /* The label stands at the middle of the plate's height, as the scale on the
+       other side does: the three read as one line across the board. */
+    align-content: center;
+    block-size: calc(var(--plate-h) + 2 * var(--pad));
+  }
+
+  /* The label's lines sit on the board's own grid, so the steps can stand
+     between the date and the rest. */
+  .caption { display: contents; }
+  .caption > * { grid-column: 1 / 3; min-inline-size: 0; }
+  .when { grid-row: 1; }
+  .when__band { grid-row: 3; padding-block-start: 0; }
+  #when-of { grid-row: 4; padding-block-start: var(--space-3xs); }
+  #when-flags { grid-row: 5; padding-block-start: var(--space-3xs); }
+  #survey-note { grid-row: 6; align-self: start; }
+  /* With the legend open on a low screen the flag count gives up its line. */
+  @container (max-height: 24rem) { .mount:has(#survey-note:not([hidden])) #when-flags { display: none; } }
+  .under__pos { grid-row: 7; padding-block-start: var(--space-sm); }
+  .stage__cell { grid-area: auto; grid-column: 3; grid-row: 1 / -1; }
+  .bands { grid-area: auto; grid-column: 4; grid-row: 1 / -1; }
+  .step {
+    display: flex; align-items: center; justify-content: center; gap: var(--space-2xs);
+    grid-area: auto; grid-row: 2; block-size: 36px; padding-inline: var(--space-xs);
+    margin-block: var(--space-md);
+  }
+  .step--prev { grid-column: 1; }
+  .step--next { grid-column: 2; }
+  .step--next { flex-direction: row-reverse; }
+  .step__key { inline-size: auto; block-size: auto; }
+  .step__d { min-block-size: 0; line-height: 1; }
+
+  /* The settings stand beside the plate, over the findings, for as long as
+     they are open: the picture keeps its size while it is being adjusted. */
+  .tools {
+    position: fixed; z-index: 6;
+    inset-inline-start: var(--at-x, auto); inset-block-start: var(--at-y, auto);
+    inline-size: var(--at-w, 20rem); block-size: var(--at-h, auto);
+    max-block-size: none; margin: 0;
+    /* Rows keep their own height and the panel scrolls: a row squeezed to fit
+       ran into the one under it. */
+    grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; align-content: start; gap: var(--space-sm);
+    padding: var(--space-lg);
+    background: var(--rec-panel); border-radius: var(--radius-lg);
+    overflow-y: auto; overscroll-behavior: contain;
+  }
+  /* One column: each setting is its name, then its control on a line of its
+     own, so a long name never runs into the next setting. */
+  .tools .row { flex-wrap: wrap; row-gap: var(--space-2xs); }
+  .tools .row > .field--compact { flex: 1 1 100%; max-inline-size: none; }
+
+  /* The scale beside the plate: seven equal steps. */
+  .bands { align-self: stretch; display: flex; }
+  .bands .lambda { flex: 1 1 auto; display: flex; flex-direction: column; flex-wrap: nowrap; justify-content: center; gap: 3px; }
+  .bands .lambda__chip {
+    flex: 1 1 0; min-block-size: 1.875rem; max-block-size: 3rem; overflow: hidden;
+    grid-template-columns: auto minmax(0, 1fr); align-items: baseline;
+    column-gap: var(--space-xs);
+  }
+  .bands .lambda__um { display: block; text-align: end; white-space: nowrap; overflow: hidden; }
+  @container (max-height: 24rem) {
+    .bands .lambda__chip { min-block-size: 1.5rem; }
+    .under__pos { display: none; }
+  }
+  @container (max-height: 19rem) {
+    #when-flags { display: none; }
+    .step { margin-block: var(--space-xs); }
+  }
+}
+
+/* ============================================================ responsive */
+
+@media (min-width: 68.0625rem) and (min-height: 34.0625rem) {
+  /* A short room: the scale folds into two columns, as app.css does. */
+  @container (max-height: 18.5rem) {
+    .bands .lambda { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
+    .bands .lambda__um { display: none; }
+    .bands .lambda__chip[data-band="all"] { grid-column: 1 / -1; margin: 0; }
+  }
+  /* Sky only: one row as tall as the plate, steps either side of it. */
+  body[data-bare="true"] .mount { grid-template-rows: var(--plate-h); align-content: normal; }
+  body[data-bare="true"] .step { grid-row: 1; align-self: center; margin-block: 0; }
+  /* The column beside the bare plate is as wide as the arrow alone. */
+  body[data-bare="true"] .step__d { display: none; }
+  body[data-bare="true"] .step--prev { grid-area: prev; }
+  body[data-bare="true"] .step--next { grid-area: next; }
+  body[data-bare="true"] .stage__cell { grid-area: cell; }
+}
+
+@media (pointer: coarse) {
+  .segment, .segments--tiny .segment { min-block-size: 40px; }
+  .lambda__chip { min-block-size: 40px; }
+  .gate__jump-go { min-block-size: 40px; display: inline-flex; align-items: center; }
+  .link, .find__go, .again, .mark__kill, .field--compact { min-block-size: 40px; }
+  .link--lang, .theme-key { block-size: 40px; min-inline-size: 40px; }
+  .find__go, .mark__kill { min-inline-size: 40px; }
+  .key { min-inline-size: 44px; min-block-size: 44px; }
+}
+
+@media (max-width: 68rem), (max-height: 34rem) {
+  .shell { gap: var(--space-xs); padding: var(--space-xs); }
+  .side > * { border-radius: var(--radius-lg); }
+  .brand__text { flex-direction: column; align-items: flex-start; gap: 2px; }
+  .when__date { grid-auto-flow: column; justify-content: start; align-items: baseline; gap: var(--space-xs); font-size: 1.75rem; }
+  .find { flex-basis: 100%; max-inline-size: none; }
+  /* Beside the plate a step is a round key, not a column-tall capsule. */
+  .step { align-self: center; block-size: 44px; }
+}
+
+@media (max-width: 48rem) {
+  .gate__word { font-size: clamp(2rem, 9vw, 3rem); }
+  .gate__input { font-size: 16px; }
+  .gate__acts { gap: 0; }
+  .gate__acts .link { font-size: var(--text-xs); padding-inline: var(--space-xs); }
+  .gate__jump-go { padding-block: var(--space-xs); }
+  /* The Milky Way is often behind the words on a narrow screen. */
+  .gate__vignette { background: linear-gradient(to top, var(--gate-veil-deep) 0%, var(--gate-veil) 40%, transparent 64%); }
+}
+
+@media (max-width: 40rem) {
+  .mast { gap: var(--space-2xs) var(--space-sm); }
+  .mast__acts { gap: var(--space-2xs) 0; }
+  .mast .link:not(.link--lang) { padding-inline: var(--space-2xs); }
+  /* The phone masthead lays its links out itself; the group steps aside. */
+  .mast__group { display: contents; }
+  .mast__group > .link { order: 3; font-size: var(--text-xs); color: var(--color-muted); min-block-size: 40px; min-inline-size: 40px; }
+  #copy-link { margin-inline-start: calc(-1 * var(--space-2xs)); }
+  /* Under the plate each step carries its date: room either side of it. */
+  .step { block-size: auto; padding-inline: var(--space-2xs) var(--space-sm); }
+  .step--next { padding-inline: var(--space-sm) var(--space-2xs); }
+  .step:disabled { padding-inline: var(--space-2xs); }
+  .segments { inline-size: 100%; gap: 0; }
+  .segment { flex: 1 1 auto; padding-inline: var(--space-xs); font-size: var(--text-xs); }
+  /* Beside the play key the five modes share one line. */
+  .deck .segments { flex: 1 1 0; inline-size: auto; flex-wrap: nowrap; gap: 0; }
+  .deck .segment { flex: 0 1 auto; padding-inline: var(--space-2xs); font-size: var(--text-2xs); white-space: nowrap; }
+}

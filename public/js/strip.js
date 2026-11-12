@@ -298,6 +298,14 @@ export function drawStrip(canvas, {
       ctx.globalAlpha = reading ? 0.55 : 0.7;
       ctx.lineWidth = 1;
       ctx.strokeRect(x + 0.5, thumbY + 0.5, thumbW - 1, thumbH - 1);
+      if (!reading && motion) {
+        // Waiting its turn: the empty place breathes, each on its own phase,
+        // so a row of queued frames reads as waiting rather than as broken.
+        const beat = 0.5 + 0.5 * Math.sin(((now + i * 260) / 1900) * Math.PI * 2);
+        ctx.fillStyle = P.rule;
+        ctx.globalAlpha = 0.1 + 0.16 * beat;
+        ctx.fillRect(x + 1, thumbY + 1, thumbW - 2, thumbH - 2);
+      }
       if (reading) {
         // Each frame on its own phase, so the row does not move in lockstep.
         const t = motion ? ((now + i * 173) % SWEEP_MS) / SWEEP_MS : 0.5;
@@ -352,6 +360,9 @@ export function drawStrip(canvas, {
   const every = thumbW < 46 ? 2 : 1;
   for (let i = 0; i < n && !skeleton; i++) {
     if (i % every && i !== liveSlot) continue;
+    // The date of the frame on screen is always written; where only every
+    // other date fits, the one beside it gives way rather than run into it.
+    if (every > 1 && i !== liveSlot && Math.abs(i - liveSlot) === 1) continue;
     // From the MJD, which is UTC by definition; the ISO string carries no zone
     // and would be read as local time.
     const d = toDate(slots[i].frame.mjd);

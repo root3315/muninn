@@ -17,12 +17,28 @@
  * blinking stays smooth while the sliders are being dragged.
  */
 
+import { DETECTOR_ARCSEC, magAB } from './depth.js';
 import { limitsFromSorted, sortedFinite, paint, paintDifference, rampFromToken, resolveColor } from './render.js';
 import { SECTOR_COLS, SECTOR_ROWS, sectorBounds } from './sectors.js';
 import { deltaRA } from './wcs.js';
 import { coadd } from './stack.js';
+import { epochOfMjd, propagate, markRadius } from './overlay.js';
 
 const RAMP_TOKENS = { deep: '--cmap-deep', ice: '--cmap-ice', infrared: '--cmap-infrared' };
+
+/** The two survey marks, added to the path being built. */
+function ring(ctx, x, y, r) {
+  ctx.moveTo(x + r, y);
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+}
+function diamond(ctx, x, y, r) {
+  const h = r + 1.5;
+  ctx.moveTo(x, y - h);
+  ctx.lineTo(x + h, y);
+  ctx.lineTo(x, y + h);
+  ctx.lineTo(x - h, y);
+  ctx.closePath();
+}
 
 /** Angular steps a grid line is allowed to land on, in degrees. */
 const GRID_STEPS = [1 / 240, 1 / 120, 1 / 60, 1 / 30, 1 / 12, 1 / 6, 0.5, 1];
@@ -50,7 +66,11 @@ export class SkyView {
     this.mode = 'blink';
     this.wipe = 0.5;
     this.render = { stretch: 'asinh', clip: 99.5, palette: 'deep', shared: false };
-    this.overlays = { grid: true, compass: true, catalog: true, skybot: true, marks: true, sectors: false };
+    this.overlays = { grid: true, compass: true, catalog: true, skybot: true, marks: true, sectors: false, gaia: false, wise: false };
+    /* Other missions' catalogues for this field, by survey: { rows, limit }. */
+    this.surveys = {};
+    /* How many of each landed on the plate in the last frame drawn. */
+    this.surveyShown = {};
     /* Which sector the matrix is pointing at, if any. */
     this.sector = null;
     /* Label boxes already drawn this frame, which later labels avoid. */
@@ -279,6 +299,7 @@ export class SkyView {
 
   setKnownObjects(obsId, objects) { this.knownObjects.set(obsId, objects); this.draw(); }
   setCatalog(list) { this.catalog = list ?? []; this.draw(); }
+  setSurvey(kind, data) { this.surveys[kind] = data; this.draw(); }
 
   /* ------------------------------------------------------------- rendering */
 
@@ -415,6 +436,7 @@ export class SkyView {
       // sum they would pin a body to a place it held for one of the visits.
       if (this.overlays.skybot && this.mode !== 'stack') this.drawKnownObjects(ctx);
       if (this.overlays.catalog) this.drawCatalog(ctx);
+      this.drawSurveys(ctx);
       if (this.overlays.sectors || this.sector) this.drawSectors(ctx);
       if (this.overlays.marks) this.drawMarks(ctx);
       if (this.overlays.compass) this.drawCompass(ctx);
@@ -597,6 +619,50 @@ export class SkyView {
       this.label(ctx, text, right ? x + 9 : x - 9, y, this.colors.muted);
     });
     ctx.restore();
+  }
+
+  /**
+   * Other missions' catalogues: Gaia DR3 as open circles, AllWISE as open
+   * diamonds, each sized by brightness. Told apart by shape first, since the
+   * accent the SkyBoT rings use turns with the band and can land on any hue;
+   * and small and unlabelled, so they read as a layer under the rings, the
+   * squares and the user's crosses rather than as more of them.
+   *
+   * A Gaia position is carried to the date of the visit on screen (see
+   * overlay.js), so the circle stays on a fast star from visit to visit.
+   * AllWISE has no proper motions worth using and is drawn where it stands.
+   */
+  drawSurveys(ctx) {
+    this.surveyShown = {};
+    const v = this.current;
+    if (!v) return;
+    const epoch = epochOfMjd(v.frame.mjd);
+    ctx.save();
+    ctx.lineWidth = 1;
+    if (this.overlays.wise) this.drawSurvey(ctx, 'wise', this.colors.ink, 0.7, (o) => o, diamond);
+    if (this.overlays.gaia) this.drawSurvey(ctx, 'gaia', this.colors.counter, 0.9, (o) => propagate(o, epoch), ring);
+    ctx.restore();
+  }
+
+  drawSurvey(ctx, kind, color, alpha, where, shape) {
+    const survey = this.surveys[kind];
+    if (!survey?.rows.length) return;
+    let shown = 0;
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    for (const o of survey.rows) {
+      const at = where(o);
+      const g = this.grid.worldToIndex(at.ra, at.dec);
+      if (!g) continue;
+      const [x, y] = this.toCanvas(g[0], g[1]);
+      if (x < 0 || y < 0 || x > this.cssW || y > this.cssH) continue;
+      shape(ctx, x, y, markRadius(o.mag, survey.limit));
+      this.hits.push({ kind, x, y, item: o, at });
+      shown += 1;
+    }
+    ctx.stroke();
+    this.surveyShown[kind] = shown;
   }
 
   /**
@@ -858,7 +924,7 @@ export class SkyView {
    * tie, since it is the thing the user put there; then a SkyBoT body.
    */
   itemAt(x, y, reach = 13) {
-    const rank = { mark: 0, skybot: 1, catalog: 2 };
+    const rank = { mark: 0, skybot: 1, catalog: 2, gaia: 3, wise: 4 };
     let best = null;
     let bestD = reach;
     for (const h of this.hits) {
@@ -891,7 +957,7 @@ export class SkyView {
    * flux-weighted centre. Used to turn a click into a measured position in every
    * visit, which is what makes a drift number honest rather than eyeballed.
    */
-  measure(visit, ra, dec, { boxPx = 5, minSnr = 5 } = {}) {
+  measure(visit, ra, dec, { boxPixels = 2, minSnr = 5, orLimit = false } = {}) {
     const g = this.grid.worldToIndex(ra, dec);
     if (!g) return null;
     const W = visit.stamp.width;
@@ -899,15 +965,22 @@ export class SkyView {
     const data = visit.stamp.data;
     const ci = Math.round(g[0]);
     const cj = Math.round(g[1]);
-    const r = boxPx;
-    if (ci - r - 3 < 0 || cj - r - 3 < 0 || ci + r + 3 >= W || cj + r + 3 >= H) return null;
+    // Every size here is in detector pixels and turned into grid samples: a
+    // narrow field is cut finer, and a box fixed in samples shrank inside the
+    // star's own light there, so the ring read the star as background.
+    const perPixel = DETECTOR_ARCSEC / (this.grid.scale * 3600);
+    const r = Math.max(2, Math.round(boxPixels * perPixel));
+    const gap = Math.max(1, Math.round(perPixel));
+    const band = Math.max(3, Math.round(1.5 * perPixel));
+    const out = r + gap + band;
+    if (ci - out < 0 || cj - out < 0 || ci + out >= W || cj + out >= H) return null;
 
-    // Background and noise from an annulus just outside the search box.
+    // Background and noise from an annulus a pixel clear of the search box.
     const ring = [];
-    for (let j = cj - r - 3; j <= cj + r + 3; j++) {
-      for (let i = ci - r - 3; i <= ci + r + 3; i++) {
+    for (let j = cj - out; j <= cj + out; j++) {
+      for (let i = ci - out; i <= ci + out; i++) {
         const d = Math.max(Math.abs(i - ci), Math.abs(j - cj));
-        if (d <= r || d > r + 3) continue;
+        if (d <= r + gap || d > out) continue;
         const v = data[j * W + i];
         if (v === v) ring.push(v);
       }
@@ -915,8 +988,13 @@ export class SkyView {
     if (ring.length < 12) return null;
     ring.sort((a, b) => a - b);
     const bg = ring[Math.floor(ring.length / 2)];
-    const mad = ring[Math.floor(ring.length * 0.84)] - bg;
-    const noise = Math.max(mad, 1e-6);
+    const spread = ring[Math.floor(ring.length * 0.84)] - bg;
+    // The ring is on the resampled grid, and bilinear resampling smooths it:
+    // its spread reads about 0.64 of the detector's own noise. Against that
+    // alone, "5σ" let roughly one blank position in eight through as a source
+    // over ten visits. The floor is the noise of the detector pixels this
+    // visit was cut from.
+    const noise = Math.max(spread, visit.stamp.meta?.detectorSigma ?? 0, 1e-6);
 
     let peak = -Infinity;
     let pi = ci;
@@ -927,7 +1005,10 @@ export class SkyView {
         if (v === v && v > peak) { peak = v; pi = i; pj = j; }
       }
     }
-    if (!(peak > bg + minSnr * noise)) return null;
+    if (!(peak > bg + minSnr * noise)) {
+      // A spectrum needs to know how deep the look was where nothing was seen.
+      return orLimit ? { limit: true, noise, mjd: visit.frame.mjd, obsId: visit.frame.obsId } : null;
+    }
 
     let sum = 0;
     let sx = 0;
@@ -940,8 +1021,38 @@ export class SkyView {
       }
     }
     if (sum <= 0) return null;
-    const [mra, mdec] = this.grid.indexToWorld(sx / sum, sy / sum);
-    return { ra: mra, dec: mdec, peak: peak - bg, snr: (peak - bg) / noise, mjd: visit.frame.mjd, obsId: visit.frame.obsId };
+    const cx = sx / sum;
+    const cy = sy / sum;
+    const [mra, mdec] = this.grid.indexToWorld(cx, cy);
+
+    // Brightness: the background-subtracted sum over three detector pixels
+    // square about the centroid — the aperture the depth limit is stated for.
+    // The grid is cut finer than the detector, so the sum of its samples is
+    // divided by how many of them one detector pixel holds. A peak pixel moved
+    // by up to a factor of two with where a steady star fell on the detector;
+    // an aperture holds the light wherever it falls.
+    const half = Math.max(1, Math.round(1.5 * perPixel));
+    let flux = 0;
+    let lost = 0;
+    for (let j = Math.round(cy) - half; j <= Math.round(cy) + half; j++) {
+      for (let i = Math.round(cx) - half; i <= Math.round(cx) + half; i++) {
+        const v = i < 0 || j < 0 || i >= W || j >= H ? NaN : data[j * W + i] - bg;
+        if (v === v) flux += v;
+        else lost += 1;
+      }
+    }
+    // An aperture with a hole in it is not the star's light. Past a tenth
+    // masked or off the frame, no brightness is quoted for this visit.
+    const whole = lost <= 0.1 * (2 * half + 1) ** 2;
+    flux = whole ? flux / (perPixel * perPixel) : null;
+
+    return {
+      ra: mra, dec: mdec, peak: peak - bg, flux, mag: whole ? magAB(flux) : null,
+      snr: (peak - bg) / noise, noise, mjd: visit.frame.mjd, obsId: visit.frame.obsId,
+      // The area actually summed, in detector pixels: the box is a whole number
+      // of grid samples, so it is a little more than the nominal 3 × 3.
+      aperturePx: (2 * half + 1) ** 2 / (perPixel * perPixel),
+    };
   }
 
   /**
@@ -962,14 +1073,17 @@ export class SkyView {
 
     const total = this.visits.length;
     const seen = track.length;
-    const pixelArcsec = this.grid.scale * 3600;
+    // The detector's pixel, not the grid's: the grid is cut finer than the
+    // detector, and resampling finely does not make the astrometry finer.
+    const pixelArcsec = DETECTOR_ARCSEC;
     const result = { track, seen, total, kind: 'none', pixelArcsec };
     if (!seen) return result;
 
-    const peaks = track.map((p) => p.peak);
+    // Magnitudes run backwards: the smaller number is the brighter visit.
+    const mags = track.map((p) => p.mag).filter((m) => m != null);
     const sameBand = new Set(track.map((p) => p.band)).size === 1;
-    result.brightness = sameBand
-      ? { min: Math.min(...peaks), max: Math.max(...peaks), band: track[0].band }
+    result.brightness = sameBand && mags.length
+      ? { brightest: Math.min(...mags), faintest: Math.max(...mags), band: track[0].band }
       : null;
 
     if (seen === 1) {
@@ -1004,7 +1118,12 @@ export class SkyView {
       sq += (raArc[i] - (fRa.intercept + fRa.slope * dt)) ** 2
         + (decArc[i] - (fDec.intercept + fDec.slope * dt)) ** 2;
     });
-    const rms = Math.sqrt(sq / track.length);
+    // Two positions fit a line exactly and leave no scatter to quote; how far
+    // apart they are is the only spread there is. From three, the line has
+    // taken two degrees of freedom.
+    const rms = seen > 2
+      ? Math.sqrt(sq / (seen - 2))
+      : Math.hypot(raArc[1] - raArc[0], decArc[1] - decArc[0]);
     const spanDays = track[track.length - 1].mjd - t0;
     const ratePerDay = Math.hypot(fRa.slope, fDec.slope);
 

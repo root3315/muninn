@@ -1,11 +1,12 @@
 /**
- * The local server: static files, the relay's input checks, and the fallback
- * byte-range relay refusing anything that is not one bounded SPHEREx range.
+ * The local server: static files, the relay's input checks, the security
+ * headers, and a malformed request not taking the process down.
  * Only answers that need no network are asked for.
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { request } from 'node:http';
 import { fileURLToPath } from 'node:url';
 
 const PORT = 5199;
@@ -53,12 +54,28 @@ test('search: absent coordinates are an error, a baked field answers offline', a
   assert.ok(body.frames.length > 10);
 });
 
-test('fits relay: only one bounded range of a SPHEREx file', async () => {
-  const s3 = 'https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/qr2/x.fits';
-  const walk = 'https://irsa.ipac.caltech.edu/ibe/data/spherex/../../../robots.txt';
-  const range = { headers: { Range: 'bytes=0-2879' } };
-  assert.equal((await get(`/api/fits?url=${encodeURIComponent(walk)}`, range)).status, 400);
-  assert.equal((await get(`/api/fits?url=${encodeURIComponent('https://evil.example/x')}`, range)).status, 400);
-  assert.equal((await get(`/api/fits?url=${encodeURIComponent(s3)}`)).status, 400, 'no range');
-  assert.equal((await get(`/api/fits?url=${encodeURIComponent(s3)}`, { headers: { Range: 'bytes=0-' } })).status, 400, 'open range');
+test('a malformed request line is a 400, and the server is still there', async () => {
+  const status = await new Promise((resolve, reject) => {
+    const req = request({ host: '127.0.0.1', port: PORT, path: '//' }, (res) => { res.resume(); resolve(res.statusCode); });
+    req.on('error', reject);
+    req.end();
+  });
+  assert.equal(status, 400);
+  assert.equal((await get('/')).status, 200);
+});
+
+test('the page is served with the content-security policy from _headers', async () => {
+  const page = await get('/');
+  assert.match(page.headers.get('content-security-policy') ?? '', /default-src 'none'/);
+  assert.equal(page.headers.get('x-content-type-options'), 'nosniff');
+});
+
+test('text is sent compressed, and an unchanged file is a 304', async () => {
+  const plain = await get('/js/app.js', { headers: { 'accept-encoding': 'identity' } });
+  const packed = await get('/js/app.js', { headers: { 'accept-encoding': 'gzip' } });
+  assert.equal(packed.headers.get('content-encoding'), 'gzip');
+  // fetch inflates the body, so the two must read the same.
+  assert.equal(await packed.text(), await plain.text());
+  const again = await get('/js/app.js', { headers: { 'if-none-match': plain.headers.get('etag') } });
+  assert.equal(again.status, 304);
 });

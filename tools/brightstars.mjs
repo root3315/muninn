@@ -27,11 +27,33 @@ const OUT = join(ROOT, 'public', 'data', 'sky', 'stars.json');
 
 const LIMIT_VMAG = 6.0;
 const SOURCE = 'V/50/catalog';
-const URL = `https://vizier.cds.unistra.fr/viz-bin/asu-tsv?-source=${SOURCE}`
+const URL = `/viz-bin/asu-tsv?-source=${SOURCE}`
   + '&-out=RAJ2000,DEJ2000,Vmag,B-V,Name'
   + '&-out.max=9000'
   + `&Vmag=%3C${LIMIT_VMAG}`
   + '&-sort=Vmag';
+
+const FAINT_VMAG = 7.0;
+const FAINT_SOURCE = 'I/239/hip_main';
+const FAINT_URL = `/viz-bin/asu-tsv?-source=${FAINT_SOURCE}`
+  + '&-out=_RAJ2000,_DEJ2000,Vmag,B-V&-oc.form=dec&-out.max=20000'
+  + `&Vmag=${LIMIT_VMAG}..${FAINT_VMAG}&-sort=Vmag`;
+
+/** VizieR at CDS, then its mirror at CfA: the same catalogues, either will do. */
+const HOSTS = ['https://vizier.cds.unistra.fr', 'https://vizier.cfa.harvard.edu'];
+async function askVizier(path) {
+  let last;
+  for (const host of HOSTS) {
+    try {
+      const res = await fetch(host + path, { headers: { accept: 'text/tab-separated-values' } });
+      if (res.ok) return res.text();
+      last = new Error(`${host} answered ${res.status}`);
+    } catch (err) {
+      last = err;
+    }
+  }
+  throw last;
+}
 
 /** Bayer letters as the catalogue abbreviates them. */
 const GREEK = {
@@ -126,9 +148,7 @@ const superscript = (d) => SUP[d] ?? d;
 
 const main = async () => {
   process.stdout.write(`Asking VizieR for ${SOURCE} down to V ${LIMIT_VMAG}…\n`);
-  const res = await fetch(URL, { headers: { accept: 'text/tab-separated-values' } });
-  if (!res.ok) throw new Error(`VizieR answered ${res.status}`);
-  const text = await res.text();
+  const text = await askVizier(URL);
 
   const ra = [];
   const dec = [];
@@ -163,11 +183,26 @@ const main = async () => {
     }
   }
 
+  // Below the naked-eye limit the sky goes on. One more magnitude from the
+  // Hipparcos catalogue (ESA 1997, VizieR I/239) triples the stars and is what
+  // gives the Milky Way's edges and the faint constellations their texture.
+  // The two lists do not overlap: one stops where the other starts.
+  process.stdout.write(`Asking VizieR for ${FAINT_SOURCE}, V ${LIMIT_VMAG} to ${FAINT_VMAG}…\n`);
+  for (const line of (await askVizier(FAINT_URL)).split('\n')) {
+    if (!line || line.startsWith('#') || line.startsWith('-')) continue;
+    const [r, d, v, colour] = line.split('\t').map((c) => (c.trim() === '' ? NaN : Number(c)));
+    if (![r, d, v].every(Number.isFinite)) continue;
+    ra.push(Number(r.toFixed(2)));
+    dec.push(Number(d.toFixed(2)));
+    mag.push(Number(v.toFixed(2)));
+    bv.push(Number.isFinite(colour) ? Number(colour.toFixed(2)) : 0);
+  }
+
   await mkdir(dirname(OUT), { recursive: true });
   const body = {
-    source: 'Bright Star Catalogue, 5th Revised Ed. (Hoffleit & Warren 1991) — VizieR V/50',
+    source: 'Bright Star Catalogue, 5th Revised Ed. (Hoffleit & Warren 1991, VizieR V/50); fainter than V 6: Hipparcos (ESA 1997, VizieR I/239)',
     fetched: new Date().toISOString().slice(0, 10),
-    limitVmag: LIMIT_VMAG,
+    limitVmag: FAINT_VMAG,
     epoch: 'J2000',
     count: ra.length,
     ra, dec, mag, bv, named,
@@ -176,7 +211,7 @@ const main = async () => {
 
   const withName = named.filter((n) => n.name).length;
   process.stdout.write(
-    `${ra.length} stars to V ${LIMIT_VMAG}; ${named.length} labelled, `
+    `${ra.length} stars to V ${FAINT_VMAG}; ${named.length} labelled, `
     + `${withName} with a proper name; ${skipped} rows unusable.\n`
     + `brightest ${mag[0]}, faintest ${Math.max(...mag)}\n`
     + `→ ${OUT}\n`,

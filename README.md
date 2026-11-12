@@ -4,6 +4,25 @@
 
 NASA Space Apps Challenge 2026 — *Planet X and SPHEREx* · team **Yggdrasil**
 
+**Live: <https://muninn.mydevbox.xyz>** · open *(152) Atala* under the search and press Space.
+**The talk, seven slides: <https://muninn.mydevbox.xyz/talk.html>** — its first slide reads real frames
+from the archive as you watch.
+
+Three things it shows on real data:
+
+- **It finds and names a mover.** On 25 Dec 2025 one dot appears in the Atala field at SNR 534 and in
+  no other visit. SkyBoT names it at that exposure's own timestamp: asteroid (152) Atala.
+- **It refuses a false discovery.** A second "flash" on 6 Jul 2025 (SNR 206) was a single pixel the
+  SPHEREx pipeline had already flagged as a cosmic ray. Muninn reads the `FLAGS` plane and masks it.
+- **It measures how far SPHEREx is from Planet Nine.** 17.60 AB per visit, from delivered detector
+  pixels; the prediction is V 22–25. That is 1.5–4.5 mag short even with 200 visits added, and the
+  page says so.
+
+Against the challenge: all five named test targets open in one press · WISE and Gaia identify a
+marked source by catalogue, and their catalogue positions can be overlaid on the plate, Gaia's
+moved to the date of each visit (no image panel yet) · a marked source gets a spectrum on demand, one
+point per band at the wavelength the file gives for its detector pixel.
+
 ---
 
 Odin's two ravens flew out over all the worlds each day and came back at evening to
@@ -15,7 +34,7 @@ SPHEREx photographs the entire sky in 102 near-infrared bands roughly twice a ye
 positions have therefore been photographed on several separate dates. Stars stay put.
 Asteroids, comets and anything else bound to the Sun do not. Blink two visits against
 each other and the movers stop hiding — the same trick Clyde Tombaugh used to find Pluto
-in 1930, on a survey a billion times larger.
+in 1930, here on an all-sky survey in 102 infrared bands.
 
 ---
 
@@ -31,7 +50,7 @@ The server does two things: it serves the page, and it relays one call to IRSA t
 browser is not allowed to make itself. Image data never passes through it.
 
 ```bash
-npm test                # 20 offline tests: a synthetic FITS through the whole pipeline, and more
+npm test                # 53 offline tests: a synthetic FITS through the whole pipeline, and more
 npm run bake            # refresh the pre-resolved opening fields (optional)
 npm run probe           # check the WCS round-trip against a live SPHEREx header
 node tools/verify-mover.mjs 13.4194 3.8459 0.15   # the photometry check below
@@ -62,25 +81,28 @@ npm run deploy                  # wrangler pages deploy
 ```
 
 `wrangler.toml` points Pages at `public/`, and `functions/api/search.js` is the
-same IRSA relay `server.js` runs locally, ported to the Workers runtime — both
-import the same VOTable parser, so there is one implementation of the format.
+IRSA relay ported to the Workers runtime. Both import the same VOTable parser, but
+the port runs under tighter limits (a 20 s wait on IRSA against 150 s, 400 rows per
+collection against 500), so a position IRSA has not seen before can time out there.
+The live site runs `server.js`.
 Pixels are not involved either way: the browser reads them straight from the S3
 mirror.
 
-The five verified fields never reach that function at all, because their frame
+The ten ready fields never reach that function at all, because their frame
 indexes ship with the page and are checked first. So the deployment degrades
 well: if the edge function is throttled or IRSA is down, the presets still open
 and only arbitrary coordinates stop resolving.
 
 `public/_headers` names every origin the page is allowed to reach — the S3
-mirror, IRSA, SIMBAD, SkyBoT — and nothing else.
+mirror, IRSA, CDS (Sesame, SIMBAD, VizieR), SkyBoT — and nothing else. `server.js`
+reads the same file and sends the same policy, so the rule is written once.
 
 ---
 
 ## What you can do with it
 
 - **Open a field** by object name (`M51`, `Vega`, `Betelgeuse` — resolved through SIMBAD),
-  by coordinates in decimal or sexagesimal, by one of the five verified presets, or at
+  by coordinates in decimal or sexagesimal, by one of the ten ready fields, or at
   random.
 - **Blink** every visit in sequence, **wipe** two of them against each other with a
   draggable divider, or take their **difference** — cyan where A is brighter, amber where B
@@ -89,9 +111,12 @@ mirror, IRSA, SIMBAD, SkyBoT — and nothing else.
   or two, then nothing for half a year. The stack adds one season's visits in one band
   (each pixel takes the middle of three values, or drops the brightest of four or more,
   which takes out a missed cosmic ray or an asteroid passing once) and says how deep that
-  gets; ← → steps from season to season.
+  gets; ← → steps from season to season. Each visit is first put on the same sky level:
+  the zodiacal background changes between visits by more than the noise, and left in,
+  "drop the brightest" dropped the visit with the brightest sky instead of the cosmic ray.
 - **Mark a spot** by clicking it. Muninn re-measures that exact sky position in every
-  loaded visit, classifies what it finds (fixed · intermittent · moving · present once),
+  loaded visit — position, AB magnitude, a bar per visit — classifies what it finds
+  (fixed · intermittent · moving · present once),
   and checks it against the IMCCE catalogue of known solar-system objects at the exact
   moment of each exposure.
 - **Adjust the stretch** — asinh, log, square root, linear — and the white point, because
@@ -117,13 +142,21 @@ page, like the original five.
 | --- | --- | --- | --- |
 | Barnard's Star | fastest proper motion in the sky, 10.3″/yr | blink; mark the star and read the verdict | 10 D2 visits over 212 days |
 | ε Indi B | a pair of brown dwarfs beside their star, ε Indi A | blink in D2, then D6 | 22 D2 visits over 371 days |
-| WISE 0855−0714 | the coldest known brown dwarf, 8.1″/yr | opens in D6, the only band it is bright in; try Stack | 17 D6 visits over 370 days |
-| RW Aurigae | a young, irregular variable star | switch to shared scaling, which shows brightness change | 10 D2 visits over 182 days |
+| WISE 0855−0714 | the coldest known brown dwarf, 8.1″/yr | opens in D6, the only band it is bright in. At W2 ≈ 13.9 (about 17.2 AB) it sits below the one-visit limit in D6 (16.7 AB): a test of the Stack, not of a single frame | 17 D6 visits over 370 days |
+| RW Aurigae | a young, irregular variable star | switch to shared scaling and blink | 10 D2 visits over 182 days |
 | R Draconis | a Mira variable near the north ecliptic pole | shared scaling; step season to season | 63 D3 visits over 392 days |
+
+For the two variables, a mark reports an AB magnitude per visit, summed over a 3×3-pixel
+aperture (a steady 12th-magnitude star in the Atala field holds within 0.3 mag over ten
+visits). What it cannot do is hold the wavelength still: each visit puts the source at a
+different wavelength inside the band. A Mira's swing of several magnitudes shows through
+that; a few tenths do not, and the mark says so.
 
 What the motion test can and cannot show is stated in *What this can and cannot find*
 below: over a baseline of about a year, a star has to move more than one 6.15″ detector
-pixel to be seen to move, and Barnard's Star and WISE 0855 only just do.
+pixel to be seen to move. Over the 212 days of its baked D2 visits Barnard's Star covers
+6.0″, a hair under one pixel, so a mark on it reads *fixed*: an honest answer, and the
+reason the threshold is stated. It crosses the pixel once the baseline passes 218 days.
 
 ### NASA data and services used
 
@@ -131,9 +164,9 @@ pixel to be seen to move, and Barnard's Star and WISE 0855 only just do.
 | --- | --- | --- |
 | SPHEREx Level-2 spectral images (Quick Release 2) | NASA/JPL-Caltech · IPAC/IRSA, via the AWS Open Data mirror `nasa-irsa-spherex` | every pixel on screen, read by HTTP range request |
 | SPHEREx frame index | IRSA Simple Image Access v2, collections `spherex_qr2` and `spherex_qr2_deep` | which frames cover a position, when, and in which band |
-| SPHEREx `FLAGS` plane | the same files | masking cosmic-ray hits and bad pixels before anything is measured |
-| AllWISE W1/W2 | NASA WISE, through CDS VizieR | identifying a marked source at 3.4 and 4.6 µm |
-| Gaia DR3 | ESA Gaia, through CDS VizieR | identifying a faint marked star, and whether Gaia saw it vary |
+| SPHEREx `FLAGS` plane | the same files | masking cosmic-ray hits and bad pixels before anything is measured; the caption of every frame says how many pixels that was |
+| AllWISE W1/W2 | NASA WISE, through CDS VizieR | identifying a marked source at 3.4 and 4.6 µm; an overlay of AllWISE positions on the plate (epoch about 2010.5, not moved) |
+| Gaia DR3 | ESA Gaia, through CDS VizieR | identifying a faint marked star, and whether Gaia saw it vary; an overlay of Gaia positions on the plate, carried by proper motion from J2016.0 to the date of the visit |
 | Known solar-system objects | SkyBoT, IMCCE | naming asteroids at the moment of each exposure |
 
 ### When a new SPHEREx release lands
@@ -265,11 +298,17 @@ That inverts to a distance, and sorts the solar system by depth:
 | Sedna near aphelion, ~940 AU | ~0.15″ |
 | Planet X, 400–800 AU | 0.18–0.35″ |
 
-Opposition is where the motion is fastest. Anywhere else in its orbit the same
-body shows less, and less reads as farther — so a distance from a measured rate
-is an upper bound, and the interface says "no farther than". An earlier version
-used 2π · 206265 / d and called the bound a floor; (152) Atala, at 3 AU, came
-out as "no nearer than 7 AU".
+For a distant body opposition is where the motion is fastest. Anywhere else the
+same body shows less, and less reads as farther — so a distance from a measured
+rate is an upper bound, and the interface says "no farther than". An earlier
+version used 2π · 206265 / d and called the bound a floor; (152) Atala, at 3 AU,
+came out as "no nearer than 7 AU".
+
+SPHEREx does not look at opposition, though: it looks about 90° from the Sun.
+There the Earth moves along the line of sight and what is left is the body's own
+orbital motion, 2π / d^1.5 radians a year — which inside 2.62 AU is the *faster*
+of the two. So the bound is the larger of the two distances a rate allows
+(`distanceCeilingAU`), or a body at 2.2 AU would read "no farther than 1.9".
 
 So an asteroid streaks and anything out where the predictions live barely
 crawls. Once the last visit is in, Hunter X takes the places the matrix flagged —
@@ -289,8 +328,9 @@ because the first version tripped over them:
 - **The floor under the astrometry is the detector's own pixel.** Resampling
   finely does not create information: a body that crossed less than one 6.15″
   pixel across the whole baseline has not been seen to move, whatever slope the
-  fit returns. That rejected a second false candidate that had crept in at
-  17.7″ of total motion.
+  fit returns. A mark needs one pixel of motion to be called moving; Hunter X
+  ranks a candidate only past three (18.45″). That rejected a second false
+  candidate that had crept in at 17.7″ of total motion.
 
 What survives is worth stating precisely. Over a 369-day baseline the astrometry
 reaches 0.002″ per hour, and Planet X needs 0.18–0.35″, so precision is not the
@@ -335,11 +375,14 @@ drift apart.
 What is left is a real search rather than a consolation prize:
 
 - **Slow movers brighter than ~17.6 AB per visit.** SPHEREx has only just begun
-  delivering and nobody has mined it for moving objects. That discovery space is
-  open and unexamined.
+  delivering, and we know of no published moving-object search of the Quick
+  Release data.
 - **Season stacks, and the jump between them.** SPHEREx looks about 90° from the Sun,
   where the Earth's own motion is mostly along the line of sight, so a distant body
-  barely moves inside a season. Measured for the Atala field's eleven-day December
+  near the ecliptic barely moves inside a season. (Away from it the reflex motion grows
+  with the sine of the ecliptic latitude: at 20° a body at 500 AU crosses about four
+  pixels in eleven days, at the poles about thirteen, and a plain stack smears it.)
+  Measured for the Atala field's eleven-day December
   season: at 500 AU the parallax and the body's own orbit move it at most ~1.7 detector
   pixels (at 300 AU, about three). Adding the season's visits therefore keeps a Planet X
   -distance body sharp and gains √n in depth — four visits, about 0.6 mag — and between
@@ -355,8 +398,10 @@ What is left is a real search rather than a consolation prize:
   Checking the real observing schedule of one field: on 25 Dec 2025 SPHEREx took
   it in D2, D3, D5 and D6 — four bands the same day — and the best three-day
   window covers all six, 0.75–5.01 µm. D4 (2.40–3.85 µm) and D5 (3.81–4.43 µm)
-  straddle the 3 µm water-ice band. The viewer does not extract spectra yet; the
-  schedule says the data to do it are already there.
+  straddle the 3 µm water-ice band. A mark now reads one exposure per band and
+  plots flux density against the wavelength each exposure saw the source at
+  (the file's `WCS-WAVE` table at its detector pixel): six points, not the full
+  102-channel spectrum, which needs every exposure of a visit rather than one.
 
 And what it will not find: **brown dwarfs and nearby stars by their motion**, with a few
 exceptions. A star has to cross a 6.15″ pixel over the ~1.2-year baseline to be seen to
@@ -402,9 +447,12 @@ from the lower half of the distribution, which stars cannot contaminate.
 
 ### Saying only what the pixels support
 
-Clicking a spot measures it in every visit: local background from an annulus, noise from
-the same annulus, peak-finding inside the box, then a flux-weighted centroid. A detection
-needs 5σ.
+Clicking a spot measures it in every visit: local background from an annulus, peak-finding
+inside the box, then a flux-weighted centroid. A detection needs 5σ, and σ is the larger of
+the annulus's spread and the noise of the detector pixels that visit was cut from. The
+annulus alone sits on the resampled grid, which bilinear interpolation smooths to about 0.64
+of the detector's noise: against that, "5σ" let roughly one blank position in eight through
+as a source over ten visits.
 
 What comes back is a classification, not a fabricated trend:
 
@@ -415,12 +463,20 @@ What comes back is a classification, not a fabricated trend:
 | *in N of M visits — \<dates\>* | two or three detections, not in every visit; the dates are listed, because two points always fit a line perfectly and quoting a scatter would be a number with no information in it |
 | *in N of M visits, steady to X″* | four or more, not in every visit, no measurable motion |
 | *steady to X″* | in every visit, no measurable motion |
-| *moving X″/h* | three or more, and the straight-line motion across the baseline beats both a detector pixel and twice the fit's own residual. Hunter X is stricter and ranks a mover only from four detections |
+| *moving X″/h* | three or more, and the straight-line motion across the baseline beats both a 6.15″ detector pixel and twice the fit's own residual. Hunter X is stricter and ranks a mover only from four detections |
 
 Brightness ranges are only reported when every detection came from the same band —
 position compares across bands, brightness does not.
 
 ---
+
+## Taking a measurement out
+
+A marked point can be saved as a table: "Save measurements (CSV)" in the mark's panel
+writes one row a visit, with the date, the exposure id, the band, the position found, the
+flux in mJy in a 3×3-pixel aperture (no aperture correction), the AB magnitude and the
+peak signal-to-noise. The field itself is in the page's address, so a link reproduces the
+view, and the plate can be saved as a PNG or the blink recorded as WebM.
 
 ## Does it actually work? The Atala field
 
@@ -481,11 +537,23 @@ of the image and read the verdict: one visit, named by SkyBoT as the asteroid.
 - **Brightness across bands is not comparable.** SPHEREx is a spectral survey with a linear
   variable filter; the wavelength at a given pixel depends on where it falls on the
   detector. The band filter and the per-band wavelength labels exist for this reason.
+- **The spectrum of a mark is six points from six exposures.** Each sits at the wavelength
+  read from that file's `WCS-WAVE` table, in a 3×3-pixel aperture with no aperture
+  correction, so part of a source's light is left out of every point. The detectors do not look
+  at the same sky at once: the exposures can be days apart, the block says how far, and a
+  mover absent from a band's nearest exposure is drawn as a 5σ upper limit.
 - **Known-object marks are geocentric.** SPHEREx is in low-Earth orbit, about 7 000 km from
   the Earth's centre, which shifts a main-belt asteroid by 3–7″ — up to about one pixel,
   inside the two-pixel radius a SkyBoT match allows, but it would matter for anything closer.
-- **The centroid is simple.** Background annulus, peak, flux-weighted centre. It is honest
-  about failing (it reports "nothing above the noise") but it is not PSF photometry.
+- **The photometry is simple.** Background annulus, peak, flux-weighted centre, then a sum
+  over a 3×3-pixel aperture on the resampled grid, in AB magnitudes. It is honest about failing
+  (it reports "nothing above the noise") but it is not PSF photometry, it is not corrected for
+  the light outside the aperture, and it does not match wavelengths between visits.
+- **The distance bound assumes a circular orbit in the ecliptic.** It is a ceiling from a rate,
+  not an orbit fit.
+- **The relay is not hardened for abuse.** It caps six lookups in flight, but has no per-client
+  limit and never prunes its disk cache.
+- **No video yet.** The submission's 30-second recording is not made; the seven slides are.
 - **Cosmic rays look like transients.** They are single-frame, sharp, and common. The ones
   the pipeline caught are masked through `FLAGS`; the ones it missed are not. Anything
   seen exactly once still deserves that explanation first.
@@ -500,15 +568,21 @@ of the image and read the verdict: one visit, named by SkyBoT as the asteroid.
 | Frame index | IRSA Simple Image Access v2 (`irsa.ipac.caltech.edu/SIA`) |
 | Known solar-system objects | SkyBoT, IMCCE / Observatoire de Paris |
 | Object names | SIMBAD / Sesame, CDS Strasbourg |
+| What a marked source is, and the Gaia / WISE overlay | AllWISE, Gaia DR3, 2MASS and VSX through VizieR TAP, CDS Strasbourg |
 
 Muninn is not affiliated with NASA, and it adds nothing to the data it shows.
 
 ---
 
+## Licence
+
+The code is under the MIT licence, see `LICENSE`. The data it displays belongs to its
+sources, listed under "Data and services" above.
+
 ## Layout
 
 ```
-server.js                 static host + the one IRSA relay + disk cache
+server.js                 static host (compressed, with the security headers) + the one IRSA relay + disk cache
 public/
   index.html
   css/tokens.css          the design system: colour, type, space, motion
@@ -523,10 +597,12 @@ public/
   js/hunt.js              rate to distance, and the guards on it
   js/sectors.js           the 5 × 4 sector scores
   js/release.js           which SPHEREx release (IRSA collections) is read
+  js/net.js               a deadline for every request the page makes
   js/catalog.js           SIA, SkyBoT, SIMBAD, coordinate parsing
   js/votable.js           just enough IVOA VOTable for both services
   js/i18n.js              English and Russian
   js/app.js               state, wiring, the loading choreography
+  js/talk.js              the seven slides at talk.html; slide 1 reads frames live
   data/targets.json       the ten opening fields, with counts from the archive
   data/fields/*.json      their frame indexes, pre-resolved so they open in ~80 ms
 tools/                    the scripts that verified all of the above
@@ -539,7 +615,7 @@ No build step. No dependencies. No framework.
 ### Static hosting
 
 `public/` is a complete static site. The pre-resolved field indexes ship inside it,
-and the pixels come straight from the CORS-enabled AWS mirror, so the five verified
+and the pixels come straight from the CORS-enabled AWS mirror, so the ten ready
 fields work on any static host — GitHub Pages, Netlify, Cloudflare Pages — with no
 server at all. Searching an arbitrary position is the one thing that needs
 `server.js`, because IRSA's index sends no CORS headers; without the relay the page

@@ -8,9 +8,12 @@
  *                  marked spot. Called straight from the browser.
  *   · SkyBoT     — which solar-system objects were standing in the field at the
  *                  moment of a given exposure. Also called straight from the browser.
- *   · Gaia DR3   — through VizieR, for a marked source SIMBAD has no name for.
+ *   · Gaia DR3   — through VizieR, for a marked source SIMBAD has no name for,
+ *                  and with AllWISE for the catalogue overlay on the plate.
  */
 
+import { deadline, CATALOG_DEADLINE_MS, SEARCH_DEADLINE_MS } from './net.js';
+import { gaiaQuery, wiseQuery, parseGaiaRow, parseWiseRow, cutToCap } from './overlay.js';
 import { parseVOTable } from './votable.js';
 import { deltaRA } from './wcs.js';
 
@@ -67,7 +70,7 @@ export function formatDec(deg) {
 /** SIMBAD name resolution through the CDS Sesame service. */
 export async function resolveName(name, { signal } = {}) {
   const url = `https://cds.unistra.fr/cgi-bin/nph-sesame/-oI/SNV?${encodeURIComponent(name)}`;
-  const res = await fetch(url, { signal });
+  const res = await fetch(url, { signal: deadline(signal, CATALOG_DEADLINE_MS) });
   if (!res.ok) throw new Error(`Sesame ${res.status}`);
   const body = await res.text();
   const m = /^%J\s+([\d.+-]+)\s+([\d.+-]+)/m.exec(body);
@@ -79,8 +82,6 @@ export async function resolveName(name, { signal } = {}) {
 }
 
 /* -------------------------------------------------------------- SPHEREx index */
-
-const BAND_LABEL = { 1: 'D1', 2: 'D2', 3: 'D3', 4: 'D4', 5: 'D5', 6: 'D6' };
 
 /** Thrown when there is no relay to reach IRSA through — a static host. */
 /**
@@ -102,10 +103,12 @@ let bakedIndex = null;
 async function loadBakedIndex(signal) {
   if (bakedIndex) return bakedIndex;
   try {
-    const res = await fetch('data/fields/index.json', { signal });
+    const res = await fetch('data/fields/index.json', { signal: deadline(signal, CATALOG_DEADLINE_MS) });
     bakedIndex = res.ok ? await res.json() : [];
   } catch {
-    bakedIndex = [];
+    // Not remembered: one dropped request must not send every preset to the
+    // relay until the page is reloaded.
+    return [];
   }
   return bakedIndex;
 }
@@ -128,7 +131,7 @@ export async function searchFrames({ ra, dec, radius = 0.006 }, { signal } = {})
   const cos = Math.cos((dec * Math.PI) / 180);
   const hit = index.find((f) => Math.hypot(deltaRA(f.ra, ra) * cos, f.dec - dec) < 0.01);
   if (hit) {
-    const res = await fetch(`data/fields/${hit.key}.json`, { signal });
+    const res = await fetch(`data/fields/${hit.key}.json`, { signal: deadline(signal, CATALOG_DEADLINE_MS) });
     if (res.ok) {
       const field = await res.json();
       return { frames: field.frames, truncated: Boolean(field.truncated), source: 'bundled' };
@@ -137,7 +140,7 @@ export async function searchFrames({ ra, dec, radius = 0.006 }, { signal } = {})
 
   let res;
   try {
-    res = await fetch(`api/search?ra=${ra.toFixed(6)}&dec=${dec.toFixed(6)}&radius=${radius}`, { signal });
+    res = await fetch(`api/search?ra=${ra.toFixed(6)}&dec=${dec.toFixed(6)}&radius=${radius}`, { signal: deadline(signal, SEARCH_DEADLINE_MS) });
   } catch (err) {
     if (signal?.aborted) throw err;
     throw new NoRelayError(err);
@@ -153,7 +156,12 @@ export async function searchFrames({ ra, dec, radius = 0.006 }, { signal } = {})
 
   const body = await res.json();
   if (!body.ok) throw new UpstreamError(body.error ?? 'search failed');
-  return { frames: body.frames, truncated: Boolean(body.truncated), source: 'live' };
+  // `partial`: one of the archive's collections did not answer, so the list
+  // is shorter than the sky's. The page says so beside the count.
+  return {
+    frames: body.frames, truncated: Boolean(body.truncated),
+    partial: Array.isArray(body.warnings) && body.warnings.length > 0, source: 'live',
+  };
 }
 
 /** Shape a raw SIA row into the fields the app actually uses. */
@@ -210,21 +218,19 @@ export const bandRange = (frames, band) => {
   return [Math.min(...set.map((f) => f.emMin)), Math.max(...set.map((f) => f.emMax))];
 };
 
-export { BAND_LABEL };
-
 /* ---------------------------------------------------------------- solar system */
 
 /**
  * Known solar-system objects standing in the field at a given instant.
- * Geocentric, which is close enough: SPHEREx is in low-Earth orbit and the
- * parallax against a main-belt asteroid is far below one pixel.
+ * Geocentric: SPHEREx is in low-Earth orbit, which shifts a main-belt asteroid
+ * by 3–7″, up to about one pixel and inside the two-pixel match radius.
  */
 export async function skybotCone({ ra, dec, radiusDeg, iso }, { signal, magLimit = 20, limit = 40 } = {}) {
   const epoch = iso.slice(0, 19);
   const url = 'https://ssp.imcce.fr/webservices/skybot/api/conesearch.php'
     + `?RA=${ra.toFixed(6)}&DEC=${dec.toFixed(6)}&SR=${Math.min(10, radiusDeg).toFixed(4)}`
     + `&EPOCH=${encodeURIComponent(epoch)}&mime=text&output=basic&loc=500&filter=0`;
-  const res = await fetch(url, { signal });
+  const res = await fetch(url, { signal: deadline(signal, CATALOG_DEADLINE_MS) });
   if (!res.ok) throw new Error(`SkyBoT ${res.status}`);
   const { status, rows } = parseVOTable(await res.text());
   if (status !== 'OK') return [];
@@ -255,7 +261,7 @@ const VIZIER_TAP = 'https://tapvizier.cds.unistra.fr/TAPVizieR/tap/sync';
 
 async function tap(base, query, format, signal) {
   const url = `${base}?request=doQuery&lang=adql&format=${format}&query=${encodeURIComponent(query)}`;
-  const res = await fetch(url, { signal });
+  const res = await fetch(url, { signal: deadline(signal, CATALOG_DEADLINE_MS) });
   if (!res.ok) throw new Error(`TAP ${res.status}`);
   return format === 'json' ? res.json() : res.text();
 }
@@ -395,6 +401,23 @@ export async function identifySource({ ra, dec }, { signal } = {}) {
   if (out.failed.length === keys.length) throw new Error('No catalogue answered');
   out.any = keys.some((k) => out[k]);
   return out;
+}
+
+const SURVEYS = {
+  gaia: { query: gaiaQuery, parse: parseGaiaRow },
+  wise: { query: wiseQuery, parse: parseWiseRow },
+};
+
+/**
+ * Every source one survey (`gaia` or `wise`) has in a circle, down to `limit`
+ * magnitudes, for laying over the plate. Asked once for a field: the answer
+ * holds for every visit, since it is the page that carries Gaia's positions
+ * to each visit's date. Returns `{ rows, cut, reached }` (see cutToCap).
+ */
+export async function surveySources(kind, { ra, dec, radiusDeg, limit }, { signal } = {}) {
+  const { query, parse } = SURVEYS[kind];
+  const text = await tap(VIZIER_TAP, query({ ra, dec, radiusDeg, limit }), 'csv', signal);
+  return cutToCap(parseCsv(text).map(parse).filter(Boolean), limit);
 }
 
 /**

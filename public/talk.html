@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en" data-band="D2">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Muninn — the talk</title>
+<meta name="description" content="Muninn in seven slides: what it does, the evidence from real SPHEREx frames, and what it cannot find.">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#171721">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23171721'/%3E%3Ccircle cx='11' cy='13' r='2.5' fill='%23e6f0f7'/%3E%3Ccircle cx='21' cy='19' r='2.5' fill='%2356c1f5'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600&family=Onest:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/redesign.css">
+<link rel="stylesheet" href="css/talk.css">
+</head>
+<body>
+
+<header class="bar">
+  <a class="bar__brand" href="./">
+    <strong>Muninn</strong>
+  </a>
+  <p class="bar__event" data-t="event"></p>
+  <nav class="bar__acts">
+    <a class="bar__link" href="./" data-t="openTool"></a>
+    <button type="button" class="bar__lang" id="lang"></button>
+  </nav>
+</header>
+
+<main class="deck" id="deck">
+
+  <!-- 1 · what it is, with the frames themselves on the slide -->
+  <section class="slide slide--live" data-slide>
+    <div class="slide__text">
+      <h1 class="slide__claim" data-t="s1.claim"></h1>
+      <p class="slide__say" data-t="s1.say"></p>
+      <p class="slide__src" data-t="s1.src"></p>
+    </div>
+    <figure class="exhibit exhibit--plate">
+      <div class="plate">
+        <canvas id="blink" width="264" height="264" role="img" data-t-label="s1.alt"></canvas>
+        <!-- The ring the tool itself draws: a catalogued body, at the place and
+             the moment SkyBoT gives for this exposure. Shown on that visit only. -->
+        <p class="plate__ring num" id="blink-ring" hidden>(152) Atala</p>
+        <p class="plate__wait" id="blink-wait" data-t="s1.wait"></p>
+      </div>
+      <figcaption class="plate__cap">
+        <span class="plate__date num" id="blink-date">—</span>
+        <span class="plate__band num">D2 · 1.10–1.65 µm · 9′ × 9′</span>
+        <ol class="reads num" id="reads"></ol>
+        <!-- The blink in the hand: step a visit back or on, hold it, let it run. -->
+        <div class="plate__keys">
+          <button type="button" class="plate__key" id="blink-prev" data-t-label="s1.prevVisit">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
+          </button>
+          <button type="button" class="plate__key plate__key--play" id="blink-play" aria-pressed="true" data-t-label="s1.play">
+            <svg class="plate__pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6v12M15 6v12"/></svg>
+            <svg class="plate__go" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>
+          </button>
+          <button type="button" class="plate__key" id="blink-next" data-t-label="s1.nextVisit">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 5.5 16 12l-6.5 6.5"/></svg>
+          </button>
+        </div>
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- 2 · how little of the archive that took -->
+  <section class="slide slide--bytes" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="s2.claim"></h2>
+      <p class="slide__say" data-t="s2.say"></p>
+      <p class="slide__src" data-t="s2.src"></p>
+    </div>
+    <figure class="exhibit">
+      <!-- The whole file, edge to edge, and the part of it that was read. -->
+      <p class="share"><span class="share__n num" id="bytes-pct">—</span><span class="share__unit">%</span>
+        <span class="share__what" data-t="s2.share"></span></p>
+      <div class="filebar" aria-hidden="true"><span id="filebar-read"></span></div>
+      <p class="exhibit__k" data-t="s2.head"></p>
+      <ol class="bytes" id="bytes"></ol>
+      <p class="exhibit__sum" id="bytes-sum"></p>
+      <ol class="steps">
+        <li><span class="num" data-t="s2.size1"></span><span data-t="s2.step1"></span></li>
+        <li><span class="num" data-t="s2.size2"></span><span data-t="s2.step2"></span></li>
+        <li><span class="num" data-t="s2.size2"></span><span data-t="s2.step3"></span></li>
+      </ol>
+    </figure>
+  </section>
+
+  <!-- 3 · a mover found, and named -->
+  <section class="slide slide--run" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="s3.claim"></h2>
+      <p class="slide__say" data-t="s3.say"></p>
+      <p class="slide__src" data-t="s3.src"></p>
+    </div>
+    <figure class="exhibit">
+      <p class="exhibit__k" data-t="s3.head"></p>
+      <ol class="snr num" id="snr"></ol>
+    </figure>
+  </section>
+
+  <!-- 4 · a discovery refused -->
+  <section class="slide slide--duel" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="s4.claim"></h2>
+      <p class="slide__say" data-t="s4.say"></p>
+      <p class="slide__src" data-t="s4.src"></p>
+    </div>
+    <figure class="exhibit">
+      <p class="exhibit__k" data-t="s4.head"></p>
+      <div class="verdicts">
+        <div class="verdicts__one">
+          <p class="verdicts__k" data-t="s4.before"></p>
+          <p class="verdicts__v verdicts__v--alarm num" data-n="206" data-digits="0"></p>
+          <p class="verdicts__say" data-t="s4.beforeSay"></p>
+        </div>
+        <div class="verdicts__one">
+          <p class="verdicts__k" data-t="s4.after"></p>
+          <p class="verdicts__v num" data-n="1.4" data-digits="1"></p>
+          <p class="verdicts__say" data-t="s4.afterSay"></p>
+        </div>
+      </div>
+      <dl class="flags num">
+        <div><dt>FLAGS</dt><dd>0x80005</dd></div>
+        <div><dt>bit 0</dt><dd>TRANSIENT</dd></div>
+        <div><dt>bit 2</dt><dd>SUR_ERROR</dd></div>
+        <div><dt>bit 19</dt><dd>OUTLIER</dd></div>
+      </dl>
+      <p class="exhibit__note" data-t="s4.note"></p>
+    </figure>
+  </section>
+
+  <!-- 5 · the challenge's own targets -->
+  <section class="slide slide--targets" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="s5.claim"></h2>
+      <p class="slide__say" data-t="s5.say"></p>
+      <p class="slide__src" data-t="s5.src"></p>
+    </div>
+    <figure class="exhibit">
+      <p class="exhibit__k" data-t="s5.head"></p>
+      <ol class="targets" id="targets"></ol>
+    </figure>
+  </section>
+
+  <!-- 6 · how far SPHEREx is from Planet Nine -->
+  <section class="slide slide--reach" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="s6.claim"></h2>
+      <p class="slide__say" data-t="s6.say"></p>
+      <p class="slide__src" data-t="s6.src"></p>
+    </div>
+    <figure class="exhibit">
+      <p class="exhibit__k" data-t="s6.head"></p>
+      <svg class="reach" id="reach" role="img" data-t-label="s6.alt"></svg>
+      <dl class="reach__rows num" id="reach-rows"></dl>
+    </figure>
+  </section>
+
+  <!-- 7 · what is left, said plainly -->
+  <section class="slide slide--ledger" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="s7.claim"></h2>
+      <p class="slide__say" data-t="s7.say"></p>
+      <p class="slide__src"><a href="./" data-t="s7.link"></a></p>
+    </div>
+    <figure class="exhibit">
+      <div class="ledger">
+        <div>
+          <p class="exhibit__k" data-t="s7.does"></p>
+          <ul>
+            <li data-t="s7.does1"></li>
+            <li data-t="s7.does2"></li>
+            <li data-t="s7.does3"></li>
+            <li data-t="s7.does4"></li>
+            <li data-t="s7.does5"></li>
+          </ul>
+        </div>
+        <div>
+          <p class="exhibit__k" data-t="s7.not"></p>
+          <ul>
+            <li data-t="s7.not1"></li>
+            <li data-t="s7.not2"></li>
+            <li data-t="s7.not3"></li>
+          </ul>
+        </div>
+      </div>
+      <p class="exhibit__note" data-t="s7.credit"></p>
+    </figure>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <button type="button" class="foot__key" id="prev" data-t-label="prev">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14.5 5.5 8 12l6.5 6.5"/></svg>
+  </button>
+  <ol class="foot__scale" id="scale"></ol>
+  <p class="foot__at num" id="at"></p>
+  <button type="button" class="foot__key" id="next" data-t-label="next">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 5.5 16 12l-6.5 6.5"/></svg>
+  </button>
+</footer>
+
+<script type="module" src="js/talk.js"></script>
+</body>
+</html>

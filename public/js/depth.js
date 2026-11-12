@@ -67,6 +67,16 @@ export function skySigma(data) {
   return sigma > 0 ? sigma : null;
 }
 
+/**
+ * A flux summed over detector pixels, in MJy/sr · pixel, as an AB magnitude.
+ * The same conversion the depth limit goes through, so a measured source and
+ * the limit it is compared with are on one scale.
+ */
+export function magAB(sumMJySrPixels) {
+  if (!(sumMJySrPixels > 0)) return null;
+  return -2.5 * Math.log10((sumMJySrPixels * 1e6 * PIXEL_SR) / AB_ZERO_JY);
+}
+
 /** The 5σ point-source limit for one frame of that noise, as an AB magnitude. */
 export function limitAB(sigmaMJySr, { sigma = 5, aperturePx = APERTURE_PX } = {}) {
   if (!(sigmaMJySr > 0)) return null;
