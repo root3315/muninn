@@ -3,5 +3,3 @@ node_modules/
 .probe/
 *.log
 .wrangler/
-.impeccable/
-.hallmark/

@@ -17,12 +17,17 @@
 import { scanHDUs, decodePixels, readHeader, dataLength, padded } from './fits.js';
 import { WCS } from './wcs.js';
 import { skySigma } from './depth.js';
+import { deadline, FRAME_DEADLINE_MS } from './net.js';
+import { parseWaveTable, wavelengthAt } from './spectrum.js';
 
 const HEADER_PROBE = 65536;
 const MAX_HEADER = 1 << 20;
 
 async function fetchRange(url, start, end, signal) {
-  const res = await fetch(url, { headers: { Range: `bytes=${start}-${end}` }, signal });
+  const res = await fetch(url, {
+    headers: { Range: `bytes=${start}-${end}` },
+    signal: deadline(signal, FRAME_DEADLINE_MS),
+  });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} on ${url}`);
   if (res.status === 206) return res.arrayBuffer();
   // A server that ignores Range answers 200 with the whole file. From byte 0
@@ -67,11 +72,13 @@ const FLAG_MASK = Object.values(MASK_BITS).reduce((m, bit) => m | (1 << bit), 0)
 const FLAGS_HEADER_PROBE = 5 * 2880 * 4;
 
 /**
- * Blank the flagged pixels of the rows already read, in place.
- * Returns the bytes it cost, or null when the file has no FLAGS extension
- * right after the image (then nothing is masked and nothing is claimed).
+ * Read the FLAGS plane for the same detector rows as the image.
+ * Returns the raw rows and the bytes they cost, or null when the file has no
+ * FLAGS extension right after the image (then nothing is masked and nothing
+ * is claimed). It touches no pixels, so it runs beside the image read rather
+ * than after it: two of a frame's four round trips at the same time.
  */
-async function maskFlagged(url, img, rowFrom, rowTo, nx, plane, signal) {
+async function readFlags(url, img, rowFrom, rowTo, nx, signal) {
   const at = img.dataStart + padded(img.dataBytes ?? dataLength(img.cards));
   let head = await fetchRange(url, at, at + FLAGS_HEADER_PROBE - 1, signal);
   let hdr = readHeader(head, 0);
@@ -84,13 +91,18 @@ async function maskFlagged(url, img, rowFrom, rowTo, nx, plane, signal) {
 
   const start = at + hdr.headerBytes + (rowFrom - 1) * nx * 4;
   const raw = await fetchRange(url, start, at + hdr.headerBytes + rowTo * nx * 4 - 1, signal);
-  const flags = new DataView(raw);
-  const n = Math.min(plane.length, raw.byteLength / 4);
+  return { raw, bytes: head.byteLength + raw.byteLength };
+}
+
+/** Blank, in place, every pixel of the rows read that the pipeline flagged. */
+function maskFlagged(plane, read) {
+  const flags = new DataView(read.raw);
+  const n = Math.min(plane.length, read.raw.byteLength / 4);
   let masked = 0;
   for (let k = 0; k < n; k++) {
     if (flags.getInt32(k * 4, false) & FLAG_MASK) { plane[k] = NaN; masked += 1; }
   }
-  return { bytes: head.byteLength + raw.byteLength, masked };
+  return { bytes: read.bytes, masked };
 }
 
 /**
@@ -145,21 +157,26 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15 } = {}) 
   const rows = rowTo - rowFrom + 1;
   const byteStart = hdu.dataStart + (rowFrom - 1) * nx * bytesPerPixel;
   const byteEnd = hdu.dataStart + rowTo * nx * bytesPerPixel - 1;
+  // The same rows of the FLAGS plane, asked for at the same moment. A frame
+  // whose flags cannot be read is still shown, and says so through
+  // `flagged: null`; only a cancelled read stops the frame.
+  const flagsRead = readFlags(url, hdu, rowFrom, rowTo, nx, signal).catch((err) => {
+    if (err?.name === 'AbortError') throw err;
+    return null;
+  });
+  // If the image read fails first, the flags promise must not be left to
+  // reject with nobody listening.
+  flagsRead.catch(() => {});
   const raw = await fetchRange(url, byteStart, byteEnd, signal);
   const plane = decodePixels(raw, 0, rows * nx, bitpix, {
     bzero: cards.get('BZERO') ?? 0,
     bscale: cards.get('BSCALE') ?? 1,
   });
-  // The same rows of the FLAGS plane, so a pixel the pipeline has already
-  // called bad is a hole here too — filled from its good neighbours below —
-  // instead of a bright point waiting to be "found". A frame whose flags
-  // cannot be read is still shown, and says so through `flagged: null`.
-  let flagged = null;
-  try {
-    flagged = await maskFlagged(url, hdu, rowFrom, rowTo, nx, plane, signal);
-  } catch (err) {
-    if (err?.name === 'AbortError') throw err;
-  }
+  // A pixel the pipeline has already called bad is a hole here too — filled
+  // from its good neighbours below — instead of a bright point waiting to be
+  // "found".
+  const read = await flagsRead;
+  const flagged = read ? maskFlagged(plane, read) : null;
 
   // The sky noise of the detector's own pixels, over the columns the field
   // covers. The depth is a statement about detector pixels (6.15″, the pixel
@@ -238,4 +255,36 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15 } = {}) 
       detectorSigma,
     },
   };
+}
+
+/**
+ * The WCS-WAVE table is the last extension of a Level-2 file: one header block
+ * and one block of data, whatever the band. Asking for the file's last two
+ * blocks reads it without knowing how long the file is.
+ */
+const WAVE_TAIL_BYTES = 2 * 2880;
+
+async function fetchTail(url, bytes, signal) {
+  const res = await fetch(url, {
+    headers: { Range: `bytes=-${bytes}` },
+    signal: deadline(signal, FRAME_DEADLINE_MS),
+  });
+  // Anything but a partial answer would be the whole 70 MB file.
+  if (res.status !== 206) throw new Error(`Range not honoured (HTTP ${res.status}) on ${url}`);
+  return res.arrayBuffer();
+}
+
+/**
+ * The wavelength one exposure saw a sky position at: the detector pixel the
+ * position falls on, looked up in the file's own WCS-WAVE table. About 70 KB
+ * of the file. Returns null when the file has no such table at its end or the
+ * position is off the detector — never a guess.
+ */
+export async function loadWavelength(url, ra, dec, { signal } = {}) {
+  const [hdu, tail] = await Promise.all([
+    readImageHDU(url, signal),
+    fetchTail(url, WAVE_TAIL_BYTES, signal),
+  ]);
+  const pix = new WCS(hdu.cards).worldToPix(ra, dec);
+  return pix ? wavelengthAt(parseWaveTable(tail), pix[0], pix[1]) : null;
 }

@@ -99,7 +99,7 @@ export function direction(raDeg, decDeg) {
 
 /** The catalogue, fetched once. */
 export async function loadStars(url = 'data/sky/stars.json') {
-  const res = await fetch(url, { cache: 'force-cache' });
+  const res = await fetch(url, { cache: 'force-cache', signal: AbortSignal.timeout(30_000) });
   if (!res.ok) throw new Error(`stars ${res.status}`);
   return res.json();
 }
@@ -114,9 +114,9 @@ export async function loadStars(url = 'data/sky/stars.json') {
  *   spikeTo  the faintest that gets diffraction spikes
  */
 const TIERS = [
-  { dpr: 2, haze: 9000, band: 8, glowTo: 4.4, spikeTo: 2.1 },
-  { dpr: 1.6, haze: 6000, band: 10, glowTo: 3.8, spikeTo: 1.9 },
-  { dpr: 1.3, haze: 3600, band: 13, glowTo: 3.2, spikeTo: 1.6 },
+  { dpr: 2, haze: 9000, band: 8, glowTo: 5.0, spikeTo: 2.7 },
+  { dpr: 1.6, haze: 6000, band: 10, glowTo: 4.4, spikeTo: 2.4 },
+  { dpr: 1.3, haze: 3600, band: 13, glowTo: 3.6, spikeTo: 2.0 },
   { dpr: 1.0, haze: 2200, band: 18, glowTo: 2.6, spikeTo: 1.2 },
 ];
 
@@ -202,8 +202,10 @@ export class Gate {
       this.rgb[i] = `${sat(r0)},${sat(g0)},${sat(b0)}`;
 
       const m = stars.mag[i];
-      this.size[i] = Math.max(0.6, 2.4 - 0.33 * m);
-      this.alpha[i] = Math.max(0.4, Math.min(1, 1.3 - 0.11 * m));
+      // Steep on purpose: the bright stars carry the constellations, the
+      // faint ones are the texture behind them.
+      this.size[i] = Math.max(0.45, 3.0 - 0.42 * m);
+      this.alpha[i] = Math.max(0.3, Math.min(1, 1.4 - 0.15 * m));
 
       const [x, y, z] = direction(stars.ra[i], stars.dec[i]);
       this.sv[i * 3] = x;
@@ -756,10 +758,10 @@ export class Gate {
         const x = this.px;
         const y = this.py;
         if (x < -90 || x > width + 90 || y < -90 || y > height + 90) continue;
-        const r = Math.max(3, 17 - 2.7 * mag[i]) * dpr * zoom;
+        const r = Math.max(3, 20 - 3.1 * mag[i]) * dpr * zoom;
         // The catalogue comes sorted by magnitude, so this only ever steps
         // down: about twenty changes for five thousand stars.
-        const a = Math.round(Math.max(0.05, Math.min(0.9, 0.52 - 0.09 * mag[i])) * 40) / 40;
+        const a = Math.round(Math.max(0.05, Math.min(0.9, 0.62 - 0.1 * mag[i])) * 40) / 40;
         if (a !== lastAlpha) { ctx.globalAlpha = a; lastAlpha = a; }
         ctx.drawImage(this.glows[this.glowBin(bv[i])], x - r, y - r, r * 2, r * 2);
       }
@@ -898,7 +900,11 @@ export class Gate {
       const r = (tgt.kind === 'deep' ? 4 : 7) * dpr;
       this.glyph(ctx, tgt, x, y, r);
 
-      if (tgt.kind !== 'deep' || near) {
+      // Under a cursor the pin names the marker, in the same place; drawing
+      // the name here too set one over the other. A touch has no pin beside
+      // the marker, so there the name stays.
+      const pinned = near && !this.coarse;
+      if ((tgt.kind !== 'deep' || near) && !pinned) {
         ctx.globalAlpha = near ? 1 : 0.8;
         ctx.fillStyle = near ? ink : colour;
         ctx.fillText(tgt.label, x + r + 7 * dpr, y);
@@ -1066,7 +1072,7 @@ export class Gate {
         const dy = p[1] - this.drag.at[1];
         this.drag.moved = Math.max(this.drag.moved, Math.hypot(dx, dy));
         this.cam.ra = ((this.drag.ra + dx * perPx) % 360 + 360) % 360;
-        this.cam.dec = Math.max(-88, Math.min(88, this.drag.dec - dy * perPx));
+        this.cam.dec = Math.max(-88, Math.min(88, this.drag.dec + dy * perPx));
         if (this.hit) { this.hit = null; this.onName?.(null); }
         this.draw();
         return;
@@ -1143,6 +1149,7 @@ export class Gate {
             label: entry.name || entry.bayer,
             sub: entry.name ? entry.bayer : '',
             mag: this.stars.mag[i],
+            bv: this.stars.bv[i],
           };
         }
       }
@@ -1187,6 +1194,7 @@ export class Gate {
 
     this.measure(DIVE_DPR);
     return new Promise((resolve) => {
+      this.flightDone = resolve;
       const t0 = performance.now();
       // Where the camera is, and how wide, at a given point in the run.
       const state = (t) => {
@@ -1217,6 +1225,7 @@ export class Gate {
         this.cam.fov = out ? FOV_WIDE : FOV_DIVE;
         this.measure();
         this.draw();
+        this.flightDone = null;
         resolve();
       };
       this.flightRaf = requestAnimationFrame(step);
@@ -1276,6 +1285,12 @@ export class Gate {
     this.running = false;
     if (this.raf) cancelAnimationFrame(this.raf);
     if (this.flightRaf) cancelAnimationFrame(this.flightRaf);
+    // A flight cut short still ends: whoever awaits it is holding visits back.
+    if (this.flightDone) {
+      this.flight = null;
+      this.flightDone();
+      this.flightDone = null;
+    }
   }
 
   resize() {

@@ -21,14 +21,21 @@ import { drawStrip } from './strip.js';
 import { themeTransition } from './twilight.js';
 import { planetsNow } from './ephemeris.js';
 import { rankCandidates } from './hunt.js';
+import { FRAME_FILE_MB } from './release.js';
+import { deadline, CATALOG_DEADLINE_MS } from './net.js';
+import { paint, rampFromToken, sortedFinite, limitsFromSorted } from './render.js';
 import { seasonChunks, chunkAt, forStack, averaged } from './stack.js';
 import { TangentGrid, separation, deltaRA } from './wcs.js';
-import { loadStamp } from './stamp.js';
+import { loadStamp, loadWavelength } from './stamp.js';
+import { nearestExposures, fluxPoint, placeInBand } from './spectrum.js';
+import { spectrumBlock } from './spectrum-view.js';
+import { trackCSV } from './export.js';
 import { SkyView, shortName } from './sky.js';
 import {
   searchFrames, NoRelayError, UpstreamError, groupVisits, bandsPresent, bandRange, parseCoordinates,
-  resolveName, formatRA, formatDec, skybotCone, identifySource, fieldObjects, toS3,
+  resolveName, formatRA, formatDec, skybotCone, identifySource, fieldObjects, toS3, surveySources,
 } from './catalog.js';
+import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP } from './overlay.js';
 
 /* The reprojected grid is shaped like the viewport so the sky can fill it. 640
    across is already four times finer than SPHEREx's 6.15" pixel, so the canvas
@@ -60,10 +67,11 @@ const mjdToDate = (mjd) => new Date((mjd - 40587) * 86400000);
 
 const state = {
   ra: null, dec: null, fov: 0.3, band: 'all', label: '',
-  frames: [], visits: [], truncated: false,
+  frames: [], visits: [], truncated: false, partial: false,
   playing: false, rate: 2, timer: null, abort: null, presets: [], bytes: 0, bare: false,
   depth: null, examined: [], sectors: null, candidates: null, hunting: false, loading: false, failed: false, view: 'sky',
   facts: null, bodies: 0,
+  survey: 'off',
   skyCredit: '',
 };
 
@@ -175,6 +183,7 @@ function writeHash() {
     fov: String(state.fov), band: state.band, lang: getLanguage(),
   });
   if (state.label) p.set('name', state.label);
+  if (state.survey !== 'off') p.set('cat', state.survey);
   history.replaceState(null, '', `#${p}`);
 }
 
@@ -189,6 +198,7 @@ function readHash() {
     band: p.get('band') ?? 'all',
     fov: FOV_CHOICES.includes(Number(p.get('fov'))) ? Number(p.get('fov')) : null,
     name: p.get('name') ?? '',
+    survey: SURVEY_CHOICES.includes(p.get('cat')) ? p.get('cat') : 'off',
     position: Number.isFinite(ra) && Number.isFinite(dec) && ra >= 0 && ra < 360 && Math.abs(dec) <= 90
       ? { ra, dec } : null,
   };
@@ -293,7 +303,7 @@ function updateIdentity() {
     // being read, which reads as a page that has hung — and on a field with
     // forty-seven visits it says it for a minute.
     const total = state.visits.length;
-    const settled = state.visits.filter((v) => v.status === 'ready' || v.status === 'dropped').length;
+    const settled = state.visits.filter((v) => v.status === 'ready' || isGone(v)).length;
     cue.hidden = false;
     if (!total) {
       cue.textContent = state.ra == null ? t('app.lede')
@@ -301,7 +311,7 @@ function updateIdentity() {
         : state.frames.length ? t('epochs.none') : t('epochs.searching');
     } else {
       cue.textContent = settled >= total
-        ? t('epochs.none')
+        ? t(state.visits.some((v) => v.status === 'failed') ? 'epochs.unread' : 'epochs.none')
         : t('epochs.loading', { done: settled, total });
     }
     state.facts = null;
@@ -344,6 +354,25 @@ function renderFacts() {
     rows.push([t('facts.standout'), String(standouts(state.sectors, { limit: Infinity }).length)]);
   }
   if (state.depth) rows.push([t('facts.depth'), `${fmt(state.depth.single, 1)} AB`, 'accent']);
+  // The archive caps a long list. Said here, or the count above reads as all
+  // there is.
+  if (state.truncated) rows.push([t('facts.list'), t('facts.listCapped')]);
+  // One collection of the archive did not answer: the run is short, and
+  // "nothing moved" would be said about visits nobody was shown.
+  if (state.partial && !state.loading) {
+    rows.push([t('facts.list'), t('facts.listPartial'), null, {
+      label: t('epochs.retry'),
+      run: () => openField({ ra: state.ra, dec: state.dec, label: state.label }),
+    }]);
+  }
+  const unread = state.visits.filter((v) => v.status === 'failed').length;
+  // A visit that was not read can be asked for again, here, where it is said.
+  if (unread && !state.loading) {
+    rows.push([t('facts.unread'), String(unread), null, {
+      label: t('epochs.retry'),
+      run: () => openField({ ra: state.ra, dec: state.dec, label: state.label }),
+    }]);
+  }
   // The count grows as SkyBoT answers visit by visit; while it is still
   // answering, the row says how far it has got, so "caught 3" at fifteen
   // seconds and "caught 11" at forty-five do not read as two different fields.
@@ -355,13 +384,21 @@ function renderFacts() {
       ? t('facts.bodiesAsking', { n: state.bodies ?? 0, done: answered, total: visits })
       : String(state.bodies)]);
   }
-  for (const [name, value, tone] of rows) {
+  for (const [name, value, tone, action] of rows) {
     const row = document.createElement('div');
     const dt = document.createElement('dt');
     const dd = document.createElement('dd');
     dt.textContent = name;
     dd.textContent = value;
     if (tone) dd.dataset.tone = tone;
+    if (action) {
+      const go = document.createElement('button');
+      go.type = 'button';
+      go.className = 'link facts__go';
+      go.textContent = action.label;
+      go.addEventListener('click', action.run);
+      dd.append(' · ', go);
+    }
     row.append(dt, dd);
     box.append(row);
   }
@@ -372,7 +409,7 @@ function renderFacts() {
 async function loadPresets() {
   for (const url of ['data/targets.json', 'api/targets']) {
     try {
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: deadline(null, CATALOG_DEADLINE_MS) });
       if (!res.ok) continue;
       const body = await res.json();
       if (Array.isArray(body.targets) && body.targets.length) { state.presets = body.targets; break; }
@@ -383,9 +420,18 @@ async function loadPresets() {
   renderPresets();
 }
 
-/** The presets live on the sky now; this keeps the sky's own list current. */
+/**
+ * The presets live on the sky now; this keeps the sky's own list current. The
+ * markers carry translated names (planets, kinds of object), so they are
+ * rebuilt with it.
+ */
 function renderPresets() {
   renderGateJump();
+  if (gate && gateDeep !== undefined) {
+    gate.setTargets(gateTargets(gateDeep));
+    // Before the first resize there is no canvas box to draw into yet.
+    if (gate.box) gate.draw();
+  }
 }
 
 
@@ -779,9 +825,6 @@ function showFlash(c) {
 
 /* ----------------------------------------------------------------- matrix */
 
-/** The score at which a cell is drawn as fully lit. Above this it saturates. */
-const MATRIX_TOP = 12;
-
 /**
  * Sector against visit, lit where a sector stopped looking like itself.
  *
@@ -821,7 +864,7 @@ function renderMatrix() {
     : t('matrix.calm');
   // Scored from the visits in hand; the norm each sector is judged against can
   // still move when the rest arrive, so the line says it is provisional.
-  const total = state.visits.filter((v) => v.status !== 'dropped').length;
+  const total = state.visits.filter((v) => !isGone(v)).length;
   // The sentence's own full stop comes off before the qualifier, or it reads
   // "sector 14. · so far".
   $('matrix-found').textContent = state.loading
@@ -1059,7 +1102,7 @@ function drawAxis() {
   // and the frames fill their places as they land, instead of the row
   // reshuffling each time one arrives.
   let slots = state.visits
-    .filter((e) => e.status !== 'dropped')
+    .filter((e) => !isGone(e))
     .map((e) => {
       const at = visits.findIndex((v) => v.frame === e.frame);
       return { frame: e.frame, visit: visits[at] ?? null, at, status: e.status, landedAt: e.landedAt };
@@ -1128,11 +1171,6 @@ function runHitAt(ev) {
   return runHits.find((h) => h.sector && inside(h))
     ?? runHits.find((h) => !h.sector && inside(h))
     ?? null;
-}
-
-/** Which frame of the run a point lands on, or -1. */
-function runAt(ev) {
-  return runHitAt(ev)?.i ?? -1;
 }
 
 
@@ -1265,6 +1303,7 @@ function renderWhen() {
     $('when-time').textContent = y0 === y1 ? y0 : `${y0} – ${y1}`;
     $('when-band').textContent = `${frame.band} · ${fmt(frame.emMin, 2)}–${fmt(frame.emMax, 2)} µm`;
     $('when-of').textContent = t('frame.stack', { n: season.length });
+    $('when-flags').textContent = '';
     for (const [id, dir] of [['prev', -1], ['next', 1]]) {
       const k = stackStep(dir);
       $(id).disabled = k === i;
@@ -1273,18 +1312,24 @@ function renderWhen() {
     return;
   }
 
-  $('when-date').textContent = frame ? fmtDate(frame.iso).replace(/\s*г\.?$/, '') : '—';
+  writeNight(frame ? fmtDate(frame.iso).replace(/\s*г\.?$/, '') : '—');
   $('when-date').dataset.range = 'false';
   $('when-time').textContent = frame ? fmtTime(frame.iso) : '';
   $('when-band').textContent = frame ? `${frame.band} · ${fmt(frame.emMin, 2)}–${fmt(frame.emMax, 2)} µm` : '';
   $('when-of').textContent = i >= 0 && list.length
     ? t('frame.visit', { i: i + 1, n: list.length })
     : '';
+  // What the pipeline's own flags took out of this frame before anything was
+  // measured: applied silently, a mask is a claim nobody can check.
+  const masked = shown?.stamp?.meta?.flaggedPixels;
+  $('when-flags').textContent = masked == null ? (shown ? t('frame.noFlags') : '')
+    : t('frame.flagged', { n: masked });
 
   for (const [id, at] of [['prev', i - 1], ['next', i + 1]]) {
     $(id).disabled = !list[at];
     $(`${id}-date`).textContent = list[at] ? fmtDay(list[at].frame.iso) : '';
   }
+  renderSurveyNote();
 }
 
 /* ------------------------------------------------------------------- readout */
@@ -1681,6 +1726,137 @@ async function loadFieldCatalog(signal) {
   }
 }
 
+/* ------------------------------------------ other missions' catalogues */
+
+const SURVEY_CHOICES = ['off', 'gaia', 'wise', 'both'];
+const SURVEY_KINDS = ['gaia', 'wise'];
+const SURVEY_NAMES = { gaia: 'Gaia DR3', wise: 'AllWISE' };
+const SURVEY_BAND = { gaia: 'G', wise: 'W1' };
+const surveyOn = (kind) => state.survey === kind || state.survey === 'both';
+
+/** Where each survey's answer for the open field stands: asking, ok or failed. */
+let surveyStatus = {};
+
+/** A new field: the last one's sources and answers go with it. */
+function resetSurveys() {
+  surveyStatus = {};
+  for (const kind of SURVEY_KINDS) sky.setSurvey(kind, null);
+  renderSurveyNote();
+}
+
+/** One survey's sources for the open field. Asked once; every visit draws from it. */
+async function loadSurvey(kind, signal) {
+  if (!sky.grid || state.ra == null) return;
+  surveyStatus[kind] = 'asking';
+  renderSurveyNote();
+  const limit = kind === 'gaia' ? magLimit(state.fov) : wiseLimit(state.fov);
+  const radiusDeg = searchRadius(sky.grid.fovDeg, sky.grid.fovHeightDeg);
+  try {
+    const found = await surveySources(kind, { ra: state.ra, dec: state.dec, radiusDeg, limit }, { signal });
+    if (signal?.aborted) return;
+    sky.setSurvey(kind, { ...found, limit });
+    surveyStatus[kind] = 'ok';
+  } catch {
+    // A field opened since has its own answers; this one has nothing to report.
+    if (signal?.aborted) return;
+    surveyStatus[kind] = 'failed';
+  }
+  renderSurveyNote();
+}
+
+/** Show what the switch asks for, and ask for whatever has not been asked yet. */
+function applySurvey() {
+  for (const kind of SURVEY_KINDS) {
+    sky.setOverlays({ [kind]: surveyOn(kind) });
+    if (surveyOn(kind) && !surveyStatus[kind] && sky.visits.length) loadSurvey(kind, state.abort?.signal);
+  }
+  renderSurveyNote();
+}
+
+function chooseSurvey(choice) {
+  state.survey = choice;
+  for (const radio of document.querySelectorAll('input[name="survey"]')) radio.checked = radio.value === choice;
+  writeHash();
+  applySurvey();
+}
+
+/** What one survey's line at the head of the plate says, or null for no line. */
+function surveyLineText(kind) {
+  const name = SURVEY_NAMES[kind];
+  const status = surveyStatus[kind];
+  if (status === 'asking') return t('survey.asking', { name });
+  if (status === 'failed') return t('survey.failed', { name });
+  const found = sky.surveys[kind];
+  if (status !== 'ok' || !found || !sky.current) return null;
+  const line = t(`survey.${kind}Line`, {
+    name, n: sky.surveyShown[kind] ?? 0, band: SURVEY_BAND[kind], lim: fmt(found.reached, 1),
+  });
+  return found.cut ? `${line} · ${t('survey.cut', { cap: ROW_CAP })}` : line;
+}
+
+function surveyLine(kind, text) {
+  const p = document.createElement('p');
+  p.className = 'survey__line';
+  p.dataset.kind = kind;
+  const key = document.createElement('span');
+  key.className = 'survey__key';
+  key.setAttribute('aria-hidden', 'true');
+  const words = document.createElement('span');
+  words.textContent = text;
+  p.append(key, words);
+  if (surveyStatus[kind] === 'failed') {
+    const again = document.createElement('button');
+    again.type = 'button';
+    again.className = 'survey__retry';
+    again.textContent = t('survey.retry');
+    again.addEventListener('click', () => loadSurvey(kind, state.abort?.signal));
+    p.append(again);
+  }
+  return p;
+}
+
+/**
+ * The legend for the survey marks: which catalogue, how many are on the plate,
+ * how faint they go, and whether the list was cut. Rebuilt only when what it
+ * says has changed, since it is asked for at every step of a blink.
+ */
+function renderSurveyNote() {
+  const note = $('survey-note');
+  if (!note || !sky) return;
+  const lines = SURVEY_KINDS.filter(surveyOn)
+    .map((kind) => [kind, surveyLineText(kind)])
+    .filter(([, text]) => text);
+  const said = JSON.stringify([lines, getLanguage()]);
+  if (note.dataset.said === said) return;
+  note.dataset.said = said;
+  note.replaceChildren(...lines.map(([kind, text]) => surveyLine(kind, text)));
+  note.hidden = !lines.length;
+}
+
+/** What a survey mark is: how bright, and for Gaia how it moves and how far it is. */
+function surveyTipRows(hit) {
+  const o = hit.item;
+  if (hit.kind === 'wise') {
+    return [
+      [`W1 ${fmt(o.mag, 1)}ᵐ`, o.w2 == null ? '' : `W2 ${fmt(o.w2, 1)}ᵐ`].filter(Boolean).join(' · '),
+      t('tip.wise'),
+    ];
+  }
+  const pm = properMotion(o);
+  const measured = o.plx > 0 && o.plxErr > 0 && o.plx / o.plxErr >= 5;
+  const pc = 1000 / o.plx;
+  return [
+    [
+      `G ${fmt(o.mag, 1)}ᵐ`,
+      pm == null ? '' : pm >= 0.1 ? t('tip.pm', { pm: fmt(pm, 2) }) : t('tip.pmMas', { pm: fmt(pm * 1000, 1) }),
+    ].filter(Boolean).join(' · '),
+    o.plx == null ? ''
+      : measured ? t('tip.plxPc', { plx: fmt(o.plx, 2), pc: fmt(pc, pc < 100 ? 1 : 0) })
+        : t('tip.plx', { plx: fmt(o.plx, 2) }),
+    t(hit.at.moved ? 'tip.gaiaMoved' : 'tip.gaiaFixed'),
+  ];
+}
+
 const SSO_KINDS = {
   'Mars-Crosser': 'sso.marsCrosser', Hungaria: 'sso.hungaria', Trojan: 'sso.trojan', Centaur: 'sso.centaur',
   KBO: 'sso.tno', TNO: 'sso.tno', Comet: 'sso.comet', Planet: 'sso.planet', Satellite: 'sso.moon', NEA: 'sso.nea',
@@ -1724,6 +1900,9 @@ function showTip(hit, x = 0, y = 0) {
     rows.push(o.family ? t(`kind.${o.family}`) : t('kind.other', { code: o.otype }));
     if (Number.isFinite(o.mag)) rows.push(`${o.magBand} ${fmt(o.mag, 1)}ᵐ`);
     rows.push(t('tip.simbad'));
+  } else if (hit.kind === 'gaia' || hit.kind === 'wise') {
+    title.textContent = `${SURVEY_NAMES[hit.kind]} ${o.id}`;
+    rows.push(...surveyTipRows(hit));
   } else {
     const m = o;
     title.textContent = `${t('tip.mark', { n: hit.n })} · ${callOf(m.analysis)}`;
@@ -1791,8 +1970,8 @@ function markCurve(analysis) {
   const W = 208;
   const H = 46;
   const base = H - 13;
-  const peakOf = new Map(analysis.track.map((d) => [d.obsId, d.peak]));
-  const max = Math.max(...analysis.track.map((d) => d.peak), 1e-6);
+  const peakOf = new Map(analysis.track.map((d) => [d.obsId, Math.max(d.flux ?? 0, 0)]));
+  const max = Math.max(...peakOf.values(), 1e-6);
 
   const mjds = visits.map((v) => v.frame.mjd);
   const lo = Math.min(...mjds);
@@ -1828,6 +2007,8 @@ function markCurve(analysis) {
 
 function renderMarks() {
   const ul = $('marks');
+  // A spectrum's button outlives the rebuild; so must the focus resting on it.
+  const held = ul.contains(document.activeElement) ? document.activeElement : null;
   ul.replaceChildren();
   // The explanation and the invitation are an empty state: once there is a mark
   // to read, the card's room belongs to the mark.
@@ -1910,8 +2091,8 @@ function renderMarks() {
       const b = document.createElement('p');
       b.className = 'mark__detail';
       b.textContent = t('mark.brightness', {
-        min: fmt(m.analysis.brightness.min, 2),
-        max: fmt(m.analysis.brightness.max, 2),
+        bright: fmt(m.analysis.brightness.brightest, 1),
+        faint: fmt(m.analysis.brightness.faintest, 1),
         band: m.analysis.brightness.band,
       });
       body.append(b);
@@ -1927,8 +2108,101 @@ function renderMarks() {
     kill.addEventListener('click', () => { sky.marks.splice(i, 1); sky.draw(); renderMarks(); });
 
     li.append(n, body, kill);
+    // The numbers behind the verdict, to check or to take elsewhere.
+    if (m.track?.length) {
+      const csv = document.createElement('button');
+      csv.type = 'button';
+      csv.className = 'link mark__csv';
+      csv.textContent = t('mark.csv');
+      csv.title = t('mark.csvWhat');
+      csv.addEventListener('click', () => saveTrack(m, i + 1));
+      body.append(csv);
+    }
+    if (sky.visits.length) li.append(spectrumBlock(m, () => readSpectrum(m)));
     ul.append(li);
   });
+  if (held?.isConnected) held.focus({ preventScroll: true });
+}
+
+/* ---------------------------------------------------------------- spectrum */
+
+/** An exposure's pixels on the field's grid: the visit already loaded, or read now. */
+function stampFor(frame, signal) {
+  const loaded = sky.visits.find((v) => v.frame.url === frame.url);
+  return loaded ? Promise.resolve(loaded.stamp) : readStamp(toS3(frame.url), sky.grid, { signal });
+}
+
+/**
+ * One band's point: the nearest exposure that has pixels at the position,
+ * measured the way a mark is, with the wavelength that exposure saw it at.
+ * Null when none of the exposures tried covers the position.
+ */
+async function readBand(row, at, signal) {
+  for (const frame of row.frames) {
+    // A wavelength that cannot be read does not cost the point its flux: it
+    // is then drawn across the whole band and the caption says so.
+    const wave = loadWavelength(toS3(frame.url), at.ra, at.dec, { signal }).catch(() => null);
+    const stamp = await stampFor(frame, signal);
+    const point = stamp ? fluxPoint(sky.measure({ frame, stamp }, at.ra, at.dec, { orLimit: true })) : null;
+    if (point) return { frame, point, place: placeInBand(frame, await wave) };
+  }
+  return null;
+}
+
+/**
+ * A fresh spectrum for a mark: one row per band, each with the exposures
+ * nearest in time to the visit on the plate. A source that moves is looked
+ * for where it was measured in that visit, not where the click landed.
+ */
+function planSpectrum(mark, ref) {
+  const seen = mark.track.find((p) => p.obsId === ref.obsId) ?? mark;
+  return {
+    ref,
+    at: { ra: seen.ra, dec: seen.dec },
+    busy: false,
+    rows: nearestExposures(state.frames, ref.mjd).map(({ band, frames }) => ({
+      band, frames, range: bandRange(state.frames, band), status: frames.length ? 'waiting' : 'absent',
+    })),
+  };
+}
+
+/**
+ * Read a mark's spectrum, or only the bands that failed last time. The frames
+ * come through the same workers and the same abort as the field's own visits,
+ * so opening another field stops them.
+ */
+async function readSpectrum(mark) {
+  if (mark.spectrum?.busy) return;
+  const failed = mark.spectrum?.rows.filter((r) => r.status === 'failed') ?? [];
+  if (failed.length) {
+    for (const row of failed) row.status = 'waiting';
+  } else {
+    const ref = sky.current?.frame;
+    if (!ref) return;
+    mark.spectrum = planSpectrum(mark, ref);
+  }
+  const spectrum = mark.spectrum;
+  const signal = state.abort?.signal;
+  const redraw = () => { if (mark.spectrum === spectrum) spectrumBlock(mark); };
+
+  spectrum.busy = true;
+  redraw();
+  await pool(spectrum.rows.filter((r) => r.status === 'waiting'), 2, async (row) => {
+    // A band cut short by a new field is a band not read, never one left "reading".
+    if (signal?.aborted) { row.status = 'failed'; return; }
+    row.status = 'reading';
+    redraw();
+    try {
+      const got = await readBand(row, spectrum.at, signal);
+      if (got) Object.assign(row, got, { status: 'done' });
+      else row.status = 'none';
+    } catch {
+      row.status = 'failed';
+    }
+    redraw();
+  });
+  spectrum.busy = false;
+  redraw();
 }
 
 /* ------------------------------------------------------------- opening a field */
@@ -1995,6 +2269,7 @@ async function openField({ ra, dec, label = '', band = null }) {
   if (band) state.band = band;
   state.visits = [];
   state.truncated = false;
+  state.partial = false;
   // What the last field measured goes with it: the reading is now built up as
   // this field's visits land, and must not start from someone else's numbers.
   state.loading = true;
@@ -2014,6 +2289,7 @@ async function openField({ ra, dec, label = '', band = null }) {
   // go on naming the last field's.
   renderWhen();
   sky.setCatalog([]);
+  resetSurveys();
   showTip(null);
   skybot = { asking: new Set(), failed: new Set() };
   stackPlanned = [];
@@ -2035,8 +2311,9 @@ async function openField({ ra, dec, label = '', band = null }) {
 
   let frames;
   let truncated = false;
+  let partial = false;
   try {
-    ({ frames, truncated } = await searchFrames({ ra, dec }, { signal: ctrl.signal }));
+    ({ frames, truncated, partial = false } = await searchFrames({ ra, dec }, { signal: ctrl.signal }));
   } catch (err) {
     if (ctrl.signal.aborted) return;
     state.loading = false;
@@ -2054,6 +2331,7 @@ async function openField({ ra, dec, label = '', band = null }) {
 
   state.frames = frames;
   state.truncated = truncated;
+  state.partial = partial;
   populateBands();
 
   const chosen = spread(groupVisits(frames, { ra, dec, band: state.band }), MAX_VISITS);
@@ -2103,7 +2381,8 @@ async function openField({ ra, dec, label = '', band = null }) {
         measureDepth({ final: false });
       }
     } catch {
-      if (!ctrl.signal.aborted) entry.status = 'dropped';
+      // Not the same as a frame that misses the field: this one was never read.
+      if (!ctrl.signal.aborted) entry.status = 'failed';
     }
     done++;
     if (ctrl.signal.aborted) return;
@@ -2117,7 +2396,15 @@ async function openField({ ra, dec, label = '', band = null }) {
   });
 
   if (ctrl.signal.aborted) return;
-  if (!sky.visits.length) { state.loading = false; renderVerdict(); setPlateState(t('epochs.none')); return; }
+  if (!sky.visits.length) {
+    state.loading = false;
+    renderVerdict();
+    // "SPHEREx has not been here" is a statement about the sky. It is only
+    // made when every frame was read and none covered the field.
+    const unread = state.visits.some((v) => v.status === 'failed');
+    setPlateState(t(unread ? 'epochs.unread' : 'epochs.none'), { retry: unread });
+    return;
+  }
 
   setPlateState('', { hidden: true });
   sky.setAB(0, Math.max(0, sky.visits.length - 1));
@@ -2128,6 +2415,7 @@ async function openField({ ra, dec, label = '', band = null }) {
   refreshKnownObjects();
   prefetchKnownObjects(ctrl.signal);
   loadFieldCatalog(ctrl.signal);
+  applySurvey();
 
   // The headline number of this whole approach: how little of the archive we touched.
   state.bytes = bytes;
@@ -2144,7 +2432,7 @@ async function openField({ ra, dec, label = '', band = null }) {
 function renderBytes() {
   $('bytes-note').textContent = state.bytes
     ? t('status.read', {
-      mb: fmt(state.bytes / 1048576, 1), total: fmt(state.visits.length * 68.3, 0),
+      mb: fmt(state.bytes / 1048576, 1), total: fmt(state.visits.length * FRAME_FILE_MB, 0),
     })
     : '';
 }
@@ -2189,6 +2477,7 @@ function renderLambda(present) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'lambda__chip';
+    b.dataset.band = value;
     const name = document.createElement('span');
     name.className = 'lambda__name';
     name.textContent = label;
@@ -2221,13 +2510,17 @@ function renderLambda(present) {
 
 /* -------------------------------------------------------------------- search */
 
-async function submitTarget(raw) {
-  const note = $('find-note');
+/**
+ * Open what was typed. `note` is where a problem is said, and `onFound` runs
+ * once there is a place to go: the gate passes its own note and closes itself
+ * there, so a mistyped name is answered beside the box it was typed in.
+ */
+async function submitTarget(raw, { note = $('find-note'), onFound } = {}) {
   const text = raw.trim();
   if (!text) return;
 
   const coords = parseCoordinates(text);
-  if (coords) { note.textContent = ''; openField({ ...coords, label: '' }); return; }
+  if (coords) { note.textContent = ''; onFound?.(); openField({ ...coords, label: '' }); return; }
   if (/^[\d\s.+-]+$/.test(text)) { note.textContent = t('target.badCoords'); return; }
 
   note.textContent = t('target.resolving');
@@ -2244,6 +2537,7 @@ async function submitTarget(raw) {
     if (movedOn()) { note.textContent = ''; return; }
     if (!hit) { note.textContent = t('target.notFound'); return; }
     note.textContent = '';
+    onFound?.();
     openField({ ra: hit.ra, dec: hit.dec, label: hit.name });
   } catch {
     if (ticket !== askSeq) return;
@@ -2252,6 +2546,43 @@ async function submitTarget(raw) {
 }
 
 /* -------------------------------------------------------------------- export */
+
+/**
+ * Bring the newest mark's panel into view. On a wide screen that scrolls the
+ * findings column; on a phone the page is the scroller and the plate would be
+ * carried away from under the finger, so there it is left where it is.
+ */
+function showLatestMark() {
+  if (!matchMedia('(min-width: 68.0625rem)').matches) return;
+  // The list is rebuilt as the mark is measured and named, and the column's
+  // height changes with it: a smooth scroll started now is cut short. So the
+  // section is put at the top at once, and again when the answers are in.
+  const section = $('marks').closest('section') ?? $('marks');
+  const column = section.closest('.side');
+  // The catalogue answers keep arriving for a few seconds and each moves the
+  // section; it is put back until they stop, unless the reader has taken the
+  // scroll into their own hands.
+  let theirs = false;
+  const taken = () => { theirs = true; };
+  column?.addEventListener('wheel', taken, { once: true, passive: true });
+  column?.addEventListener('touchstart', taken, { once: true, passive: true });
+  // The column's own scroll is set, by the distance the section stands from
+  // the column's top: scrollIntoView stopped one column-height short here.
+  const show = () => {
+    if (theirs || !column) return;
+    column.scrollTop += section.getBoundingClientRect().top - column.getBoundingClientRect().top;
+  };
+  requestAnimationFrame(show);
+  for (const ms of [400, 1200, 2500]) setTimeout(show, ms);
+}
+
+/** Save one mark's per-visit measurements as a CSV file. */
+function saveTrack(mark, n) {
+  const link = document.createElement('a');
+  link.download = `muninn_${state.ra.toFixed(4)}_${state.dec.toFixed(4)}_mark${n}.csv`;
+  link.href = `data:text/csv;charset=utf-8,${encodeURIComponent(trackCSV(mark.track))}`;
+  link.click();
+}
 
 function savePNG() {
   const link = document.createElement('a');
@@ -2318,7 +2649,7 @@ function renderVerdict() {
 
   line.dataset.state = '';
   if (state.loading) {
-    const total = state.visits.filter((v) => v.status !== 'dropped').length;
+    const total = state.visits.filter((v) => !isGone(v)).length;
     line.textContent = t('verdict.reading', { done: ready.length, total });
     line.dataset.found = 'false';
     line.dataset.state = 'reading';
@@ -2373,6 +2704,26 @@ const DEEP_SHAPE = {
   nebula: 'nebula', planetary: 'nebula', remnant: 'nebula',
 };
 
+/**
+ * The night of the exposure: the day leads, the month and year sit under it.
+ * Between two visits of one field it is the day that changes.
+ */
+function writeNight(text) {
+  const box = $('when-date');
+  const parts = /^(\d{1,2}(?:–\d{1,2})?)\s+(.+)$/.exec(text);
+  if (!parts) { box.textContent = text; return; }
+  const day = document.createElement('span');
+  day.className = 'when__day';
+  day.textContent = parts[1];
+  const rest = document.createElement('span');
+  rest.className = 'when__my';
+  rest.textContent = parts[2];
+  box.replaceChildren(day, rest);
+}
+
+/** The deep-sky list the gate was built from; undefined until it has loaded. */
+let gateDeep;
+
 /** Everything the gate offers, newest positions first. */
 function gateTargets(deep) {
   const out = [];
@@ -2383,6 +2734,7 @@ function gateTargets(deep) {
       kind: 'planet', key: p.key, ra: p.ra, dec: p.dec,
       label: t(`planet.${p.key}`),
       sub: t('gate.au', { au: fmt(p.distanceAU, 2) }),
+      au: p.distanceAU,
       fov: 0.3, band: 'all',
     });
   }
@@ -2392,7 +2744,8 @@ function gateTargets(deep) {
     if (!Number.isFinite(f.ra)) continue;
     out.push({
       kind: 'field', key: f.key, ra: f.ra, dec: f.dec,
-      label: f.name, sub: t('stats.visits') + ` ${f.visits ?? '—'}`,
+      // The name in the reader's language, as the list under the search has it.
+      label: f.key ? t(`preset.${f.key}`) : f.name, sub: t('stats.visits') + ` ${f.visits ?? '—'}`,
       fov: f.fov, band: f.band ?? 'all', ready: true,
     });
   }
@@ -2403,6 +2756,7 @@ function gateTargets(deep) {
       key: o.id, ra: o.ra, dec: o.dec,
       label: o.name ? `${o.id} · ${o.name}` : o.id,
       sub: `${t(`deep.${o.kind}`)}${o.mag != null ? ` · ${fmt(o.mag, 1)} mag` : ''}`,
+      what: t(`deep.${o.kind}`), mag: o.mag,
       fov: 0.3, band: 'all',
     });
   }
@@ -2420,13 +2774,269 @@ function nameOnSky(hit) {
   // of whatever it would point at — so the stylesheet parks it above the
   // poster and there is nothing to place here.
   if (gate.coarse) { pin.style.left = ''; pin.style.top = ''; return; }
-  const p = gate.pointer;
+  // A marker holds its label where its own name was drawn; a bare star has no
+  // drawn name, so its label stands off the pointer instead.
+  const anchor = hit.item ? gate.projectV(hit.item.v) : null;
+  const p = anchor ?? gate.pointer;
   if (!p) return;
   const dpr = gate.box.dpr;
+  pin.dataset.anchored = String(Boolean(anchor));
   pin.style.left = `${p[0] / dpr}px`;
   pin.style.top = `${p[1] / dpr}px`;
   // Flip to the other side near the right edge so the label stays on screen.
   pin.dataset.flip = String(p[0] / dpr > gate.box.cssW - 260);
+}
+
+/* ------------------------------------------------- the card on the sky */
+
+/** One stored frame per ready field: which exposure each picture is. */
+let cardThumbs = null;
+/** The frame lists of ready fields, asked for once each. */
+const cardFields = new Map();
+/** What the card is showing, so only its own answers are written into it. */
+let cardHit = null;
+/** The timer that blinks a card's two visits. */
+let cardBlink = 0;
+const BLINK_CARD_MS = 900;
+
+function fieldIndex(key) {
+  if (!cardFields.has(key)) {
+    cardFields.set(key, fetch(`data/fields/${key}.json`, { signal: deadline(null, CATALOG_DEADLINE_MS) })
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null));
+  }
+  return cardFields.get(key);
+}
+
+function cardFact(name, value) {
+  const row = document.createElement('div');
+  const dt = document.createElement('dt');
+  const dd = document.createElement('dd');
+  dt.textContent = name;
+  dd.textContent = value;
+  dd.className = 'num';
+  row.append(dt, dd);
+  return row;
+}
+
+/**
+ * Show what was pressed on the sky: its name, what it is, where it is, and for
+ * a field whose frames are stored here, one real frame and every visit SPHEREx
+ * has made. Nothing is opened until the card's button is pressed.
+ */
+async function showCard(hit, { focus = false } = {}) {
+  if (flying) return;
+  const card = $('gate-card');
+  cardHit = hit;
+  clearInterval(cardBlink);
+  $('gate-pin').hidden = true;
+
+  const preset = hit.kind === 'field' ? state.presets.find((p) => p.key === hit.key) : null;
+  $('gate-card-name').textContent = hit.label ?? t('card.sky');
+  $('gate-card-kind').textContent = preset ? (preset.why?.[getLanguage()] ?? preset.why?.en ?? '')
+    : hit.kind === 'planet' ? t('card.planet')
+      : hit.kind === 'star' ? t('card.star')
+        : hit.kind === 'deep' ? hit.what : '';
+  $('gate-card-kind').hidden = !$('gate-card-kind').textContent;
+  $('gate-card-go-label').textContent = t(preset ? 'card.open' : 'card.search');
+
+  // To the arcminute: the card says where to look, the field screen says exactly.
+  const coarse = (text) => text.split(' ').slice(0, 2).join(' ');
+  const where = cardFact(t('card.pos'), `${coarse(formatRA(hit.ra))} ${coarse(formatDec(hit.dec))}`);
+  const facts = [];
+  if (preset?.visits) facts.push(cardFact(t('card.visits'), t('card.visitsValue', { n: preset.visits, d: preset.spanDays })));
+  if (hit.kind === 'star' && hit.sub) facts.push(cardFact(t('card.name'), hit.sub));
+  if ((hit.kind === 'deep' || hit.kind === 'star') && hit.mag != null) {
+    facts.push(cardFact(t('card.mag'), `V ${fmt(hit.mag, 1)}`));
+  }
+  if (hit.kind === 'star' && Number.isFinite(hit.bv)) facts.push(cardFact(t('card.colour'), t(starColour(hit.bv))));
+  if (hit.kind === 'planet') facts.push(cardFact(t('card.distance'), t('card.au', { au: fmt(hit.au, 2) })));
+  facts.push(where);
+  $('gate-card-facts').replaceChildren(...facts);
+
+  // The frame: only where one is stored. No picture stands in for a missing one.
+  cardThumbs ??= await Promise.all(['data/thumbs.json', 'data/sky/thumbs.json'].map((url) => (
+    fetch(url, { signal: deadline(null, CATALOG_DEADLINE_MS) }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}))
+  ))).then(([fields, deep]) => ({ fields, deep }));
+  if (cardHit !== hit) return;
+  // A named star is stored under its place on the sky, as the bake wrote it.
+  const skyKey = hit.kind === 'deep' ? hit.key
+    : hit.kind === 'star' ? `s${hit.ra.toFixed(2)}_${hit.dec.toFixed(2)}` : null;
+  const thumb = preset ? cardThumbs.fields[preset.key] : skyKey ? cardThumbs.deep[skyKey] : null;
+  const shot = thumb ? (preset ? `img/fields/${preset.key}` : `img/sky/${skyKey}`) : '';
+  if (thumb && !preset) {
+    // Said beside the picture: how many times SPHEREx has been here in its band.
+    where.before(cardFact(t('card.bandVisits', { band: thumb.band }), String(thumb.visits)));
+  }
+  const frame = $('gate-card-frame');
+  const img = $('gate-card-img');
+  frame.hidden = !thumb;
+  cardLive?.abort();
+  $('gate-card-live').hidden = true;
+  img.hidden = false;
+  delete frame.dataset.live;
+  $('gate-card-visits').hidden = true;
+  card.dataset.frame = String(Boolean(thumb));
+  card.dataset.band = thumb?.band ?? '';
+  // The ring marks a point: a field centred on one body, not a galaxy or a cluster.
+  frame.dataset.ring = String(Boolean(preset));
+  if (thumb) {
+    const date = fmtDate(thumb.iso).replace(/\s*г\.?$/, '');
+    frame.dataset.ready = 'false';
+    img.onload = () => { frame.dataset.ready = 'true'; };
+    img.onerror = () => { frame.hidden = true; card.dataset.frame = 'false'; };
+    img.src = `${shot}.png?f=${thumb.fovArcmin}`;
+    img.alt = t('card.frameAlt', { band: thumb.band, date });
+    $('gate-card-tag').textContent = `${thumb.band} · ${date}`;
+    blinkCard(shot, thumb);
+  }
+
+  card.hidden = false;
+  // The next frame, so the card is seen arriving rather than already there.
+  requestAnimationFrame(() => { if (cardHit === hit) card.dataset.on = 'true'; });
+  if (focus) $('gate-card-go').focus({ preventScroll: true });
+  // No stored picture: read one. A planet is left out, because the archive's
+  // frames of where it is today were taken when it was somewhere else.
+  if (!thumb && hit.kind !== 'planet') previewLive(hit, where);
+
+  if (!preset) return;
+  const index = await fieldIndex(preset.key);
+  if (cardHit !== hit || !index?.frames?.length) return;
+  const visits = groupVisits(index.frames, { ra: preset.ra, dec: preset.dec, band: preset.band ?? 'all' });
+  if (visits.length < 2) return;
+  const first = visits[0].mjd;
+  const span = visits[visits.length - 1].mjd - first || 1;
+  $('gate-card-line').replaceChildren(...visits.map((v, i) => {
+    const tick = document.createElement('li');
+    tick.style.setProperty('--at', ((v.mjd - first) / span).toFixed(4));
+    tick.style.setProperty('--i', String(Math.min(i, 24)));
+    tick.dataset.day = v.iso.slice(0, 10);
+    tick.toggleAttribute('data-shown', Boolean(thumb) && v.iso.startsWith(thumb.iso.slice(0, 10)));
+    return tick;
+  }));
+  const bands = bandsPresent(index.frames);
+  where.before(cardFact(t('card.frames'), t('card.framesValue', {
+    n: index.frames.length, bands: bands.length > 1 ? `${bands[0]}–${bands[bands.length - 1]}` : bands[0],
+  })));
+  $('gate-card-from').textContent = fmtDate(visits[0].iso).replace(/\s*г\.?$/, '');
+  $('gate-card-to').textContent = fmtDate(visits[visits.length - 1].iso).replace(/\s*г\.?$/, '');
+  $('gate-card-visits').hidden = false;
+}
+
+/**
+ * Where a second visit of the field is stored, the card blinks the two: the
+ * tool's whole idea, shown with real frames before anything is opened.
+ */
+function blinkCard(shot, thumb) {
+  clearInterval(cardBlink);
+  if (!thumb.blink || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const shots = [[`${shot}.png?f=${thumb.fovArcmin}`, thumb.iso], [`${shot}-2.png?f=${thumb.fovArcmin}`, thumb.blink]];
+  const second = new Image();
+  second.src = shots[1][0];
+  let at = 0;
+  cardBlink = setInterval(() => {
+    if (!second.complete || !second.naturalWidth) return;
+    at = 1 - at;
+    const [src, iso] = shots[at];
+    $('gate-card-img').src = src;
+    $('gate-card-tag').textContent = `${thumb.band} · ${fmtDate(iso).replace(/\s*г\.?$/, '')}`;
+    for (const tick of $('gate-card-line').children) {
+      tick.toggleAttribute('data-shown', tick.dataset.day === iso.slice(0, 10));
+    }
+  }, BLINK_CARD_MS);
+}
+
+/** A star's colour in a word, from its B−V index. */
+function starColour(bv) {
+  return bv < 0 ? 'star.blue' : bv < 0.3 ? 'star.white' : bv < 0.6 ? 'star.yellowWhite'
+    : bv < 0.9 ? 'star.yellow' : bv < 1.4 ? 'star.orange' : 'star.red';
+}
+
+/** The request behind a card's live picture, so leaving the card stops it. */
+let cardLive = null;
+const CARD_PX = 280;
+const CARD_FOV_DEG = 0.1;
+
+/**
+ * Read one real frame for a place that has none stored: ask the archive which
+ * frames cover it, take the first D2 visit that fills the picture, and paint
+ * it the way the plate would. Each step is said on the card while it runs.
+ */
+async function previewLive(hit, where) {
+  const card = $('gate-card');
+  const frame = $('gate-card-frame');
+  const canvas = $('gate-card-live');
+  const tag = $('gate-card-tag');
+  const ctrl = new AbortController();
+  cardLive = ctrl;
+  const mine = () => cardHit === hit && !ctrl.signal.aborted;
+
+  frame.hidden = false;
+  $('gate-card-img').hidden = true;
+  canvas.hidden = false;
+  canvas.getContext('2d').clearRect(0, 0, CARD_PX, CARD_PX);
+  card.dataset.frame = 'true';
+  card.dataset.band = 'D2';
+  frame.dataset.ring = 'false';
+  frame.dataset.ready = 'false';
+  frame.dataset.live = 'asking';
+  tag.textContent = t('card.asking');
+
+  try {
+    const { frames } = await searchFrames({ ra: hit.ra, dec: hit.dec }, { signal: ctrl.signal });
+    if (!mine()) return;
+    const visits = groupVisits(frames, { ra: hit.ra, dec: hit.dec, band: 'D2' });
+    if (!visits.length) { frame.dataset.live = 'none'; tag.textContent = t('card.noFrames'); return; }
+    where.before(cardFact(t('card.bandVisits', { band: 'D2' }), String(visits.length)));
+
+    frame.dataset.live = 'reading';
+    tag.textContent = t('card.reading');
+    const grid = new TangentGrid(hit.ra, hit.dec, CARD_FOV_DEG, CARD_PX, CARD_PX);
+    const tried = visits.slice(0, 4);
+    let failed = 0;
+    for (const visit of tried) {
+      const stamp = await loadStamp(toS3(visit.url), grid, { signal: ctrl.signal, minCoverage: 0.9 })
+        .catch(() => { failed += 1; return null; });
+      if (!mine()) return;
+      if (!stamp) continue;
+      const ctx = canvas.getContext('2d');
+      const picture = ctx.createImageData(CARD_PX, CARD_PX);
+      const { lo, hi } = limitsFromSorted(sortedFinite(stamp.data));
+      paint(picture, stamp.data, rampFromToken(document.documentElement, '--cmap-deep'), {
+        lo, hi, stretch: 'asinh', blankAlpha: 255,
+      });
+      ctx.putImageData(picture, 0, 0);
+      frame.dataset.live = 'shown';
+      frame.dataset.ready = 'true';
+      tag.textContent = `D2 · ${fmtDate(visit.iso).replace(/\s*г\.?$/, '')}`;
+      return;
+    }
+    // Every read failing is the network's doing, not the sky's.
+    const unread = failed === tried.length;
+    frame.dataset.live = unread ? 'failed' : 'none';
+    tag.textContent = t(unread ? 'card.liveFailed' : 'card.noFrames');
+  } catch {
+    if (!mine()) return;
+    frame.dataset.live = 'failed';
+    tag.textContent = t('card.liveFailed');
+  }
+}
+
+function hideCard() {
+  cardLive?.abort();
+  clearInterval(cardBlink);
+  cardHit = null;
+  const card = $('gate-card');
+  delete card.dataset.on;
+  card.hidden = true;
+}
+
+function wireCard() {
+  $('gate-card-go').addEventListener('click', () => { if (cardHit) enterFrom(cardHit); });
+  $('gate-card-close').addEventListener('click', hideCard);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('gate-card').hidden) hideCard();
+  });
 }
 
 /**
@@ -2462,6 +3072,7 @@ function releaseDiveWaiters() {
 async function enterFrom(hit) {
   if (flying) return;
   flying = true;
+  hideCard();
   $('gate').dataset.entering = 'true';
   $('gate-pin').hidden = true;
 
@@ -2481,6 +3092,9 @@ async function enterFrom(hit) {
   }
 }
 
+/** A visit that will not arrive: it misses the field, or could not be read. */
+const isGone = (v) => v.status === 'dropped' || v.status === 'failed';
+
 /** Back out to the sky, the same way, run backwards. */
 async function leaveToSky() {
   if (flying || !gate) return;
@@ -2496,8 +3110,11 @@ async function leaveToSky() {
   try {
     await gate.fly(at, { out: true, ms: 1900 });
   } finally {
-    gate.start();
+    // A link opened mid-flight has already closed the gate again.
+    if (!$('gate').hidden) gate.start();
     flying = false;
+    // Visits that landed while pulling back are waiting on this.
+    releaseDiveWaiters();
   }
 }
 
@@ -2510,7 +3127,11 @@ function openGate() {
 }
 
 function closeGate() {
+  hideCard();
   document.body.dataset.gate = 'closed';
+  // On a phone the page is the scroller: arrive at the top of the field, not
+  // wherever the page under the sky happened to be.
+  window.scrollTo(0, 0);
   $('gate').hidden = true;
   $('gate').dataset.entering = 'false';
   gate?.stop();
@@ -2520,16 +3141,18 @@ function closeGate() {
 
 async function buildGate() {
   gate = new Gate($('gate-sky'), {
-    onPick: (hit) => enterFrom(hit),
+    // A press shows what was pressed. The flight starts from the card.
+    onPick: (hit) => showCard(hit),
     onName: nameOnSky,
   });
   window.addEventListener('resize', () => { if (!$('gate').hidden) gate.resize(); });
 
   const [stars, deep] = await Promise.all([
     loadStars().catch(() => null),
-    fetch('data/sky/deepsky.json').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+    fetch('data/sky/deepsky.json', { signal: deadline(null, CATALOG_DEADLINE_MS) }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
   ]);
   if (stars) gate.setStars(stars);
+  gateDeep = deep;
   gate.setTargets(gateTargets(deep));
   // Say which layers are measured and which are drawn from a model: that
   // difference is the whole difference between this tool and a wallpaper. It
@@ -2540,6 +3163,15 @@ async function buildGate() {
   relabel();
   gate.resize();
   renderGateJump();
+  // On a wide screen the sky opens with its proof beside it: the field this
+  // tool was tested on, two real visits blinking. A phone has no room for both.
+  const proven = state.presets.find((p) => p.key === 'atala');
+  if (proven && !$('gate').hidden && !cardHit && matchMedia('(min-width: 60rem)').matches) {
+    showCard({
+      kind: 'field', key: proven.key, ra: proven.ra, dec: proven.dec, fov: proven.fov,
+      band: proven.band ?? 'all', label: t(`preset.${proven.key}`),
+    });
+  }
 }
 
 /** The ready fields are markers on the sky now; nothing else lists them. */
@@ -2583,8 +3215,8 @@ function jumpButton(f) {
   const why = f.why?.[getLanguage()] ?? f.why?.en;
   if (why) go.title = why;
   go.addEventListener('click', () => {
-    const hit = { ra: f.ra, dec: f.dec, fov: f.fov, band: f.band ?? 'all', label: name };
-    if (gate) { enterFrom(hit); return; }
+    const hit = { kind: 'field', key: f.key, ra: f.ra, dec: f.dec, fov: f.fov, band: f.band ?? 'all', label: name };
+    if (gate) { showCard(hit, { focus: true }); return; }
     // Pressed before the sky has been built: straight in, without the flight.
     if (hit.fov) { state.fov = nearestFov(hit.fov); $('fov').value = String(state.fov); }
     closeGate();
@@ -2706,8 +3338,26 @@ function stepBy(dir) {
   refreshKnownObjects();
 }
 
+/**
+ * On a wide screen the settings open over the findings column, beside the
+ * plate: under the plate they took its height, and the picture shrank at the
+ * moment it was being adjusted. The stylesheet places the panel from the
+ * column's own box, written here because the column's top depends on the
+ * masthead's height.
+ */
+function placeTools() {
+  const tools = $('tools');
+  if (tools.hidden) return;
+  const box = document.querySelector('.side--right').getBoundingClientRect();
+  tools.style.setProperty('--at-x', `${box.left}px`);
+  tools.style.setProperty('--at-y', `${box.top}px`);
+  tools.style.setProperty('--at-w', `${box.width}px`);
+  tools.style.setProperty('--at-h', `${box.height}px`);
+}
+
 function setTools(open) {
   $('tools').hidden = !open;
+  placeTools();
   const toggle = $('tools-toggle');
   toggle.setAttribute('aria-expanded', String(open));
   toggle.textContent = t(open ? 'tools.hide' : 'tools.toggle');
@@ -2716,6 +3366,39 @@ function setTools(open) {
 /* ------------------------------------------------------------------ theme */
 
 const THEME_KEY = 'muninn.theme';
+/**
+ * The band in the beam colours the chrome (redesign.css keys it off
+ * html[data-band]). The canvases read their colours from the same tokens, so
+ * they read them again once the new hue is in place.
+ */
+function watchBandHue() {
+  const box = $('lambda');
+  if (!box) return;
+  let timer = 0;
+  const sync = () => {
+    // While the chips are being rebuilt there is nothing to read: keep the hue.
+    if (!box.children.length) return;
+    const on = box.querySelector('.lambda__chip[aria-pressed="true"]');
+    const band = on?.dataset.band ?? 'all';
+    if (document.documentElement.dataset.band === band) return;
+    document.documentElement.dataset.band = band;
+    // After the hue has finished its walk (redesign.css, 700 ms), so the
+    // canvases do not keep a colour from halfway along the spectrum. Every
+    // change starts the wait again: the walk it follows started again too.
+    const settle = matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 750;
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      sky?.readTheme();
+      readRunPaint();
+      drawAxis();
+    }, settle);
+  };
+  new MutationObserver(sync).observe(box, {
+    childList: true, subtree: true, attributes: true, attributeFilter: ['aria-pressed'],
+  });
+  sync();
+}
+
 const currentTheme = () => (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
 
 /**
@@ -2746,8 +3429,7 @@ function labelTheme() {
 /** Keep the chips in step with whatever set the band. */
 function syncLambda() {
   for (const b of $('lambda').children) {
-    b.setAttribute('aria-pressed', String(b.textContent === state.band
-      || (state.band === 'all' && b.textContent === t('field.bandAll'))));
+    b.setAttribute('aria-pressed', String(b.dataset.band === state.band));
   }
 }
 
@@ -2785,10 +3467,13 @@ function wire() {
     const text = $('gate-target').value;
     if (!text.trim()) return;
     $('target').value = text;
-    closeGate();
-    submitTarget(text);
+    submitTarget(text, { note: $('gate-note'), onFound: closeGate });
   });
   $('to-sky').addEventListener('click', leaveToSky);
+  document.querySelector('.brand').addEventListener('click', (e) => {
+    e.preventDefault();
+    leaveToSky();
+  });
 
   $('random').addEventListener('click', () => {
     // Anywhere is fair, but low ecliptic latitude is where the traffic is.
@@ -2907,7 +3592,17 @@ function wire() {
     record.addEventListener('click', (e) => recordBlink(e.currentTarget));
   }
 
+  for (const radio of document.querySelectorAll('input[name="survey"]')) {
+    radio.checked = radio.value === state.survey;
+    radio.addEventListener('change', (e) => { if (e.target.checked) chooseSurvey(e.target.value); });
+  }
+
   $('tools-toggle').addEventListener('click', () => setTools($('tools').hidden));
+  window.addEventListener('resize', placeTools);
+  // Escape puts the findings back; so does pressing "View" again.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('tools').hidden && !$('about').open) { setTools(false); $('tools-toggle').focus(); }
+  });
   $('hunt-run').addEventListener('click', huntField);
   $('plate-retry').addEventListener('click', () => {
     if (state.ra != null) openField({ ra: state.ra, dec: state.dec, label: state.label });
@@ -2915,13 +3610,15 @@ function wire() {
   $('bare').addEventListener('click', () => setBare(!state.bare));
   $('restore').addEventListener('click', () => setBare(false));
 
-  $('about-open').addEventListener('click', () => {
+  const openAbout = () => {
     // Without this the dialog focuses its Close button and opens scrolled to the
     // end of the text.
     const sheet = $('about');
     sheet.showModal();
     sheet.scrollTop = 0;
-  });
+  };
+  $('about-open').addEventListener('click', openAbout);
+  $('gate-about').addEventListener('click', openAbout);
   $('about-close').addEventListener('click', () => $('about').close());
 
   $('theme').addEventListener('click', () => {
@@ -2940,13 +3637,15 @@ function wire() {
     });
   });
 
-  $('lang').addEventListener('click', () => {
+  const switchLanguage = () => {
     const next = getLanguage() === 'en' ? 'ru' : 'en';
     setLanguage(next);
     try { localStorage.setItem('muninn.lang', next); } catch { /* private window */ }
     relabel();
     writeHash();
-  });
+  };
+  $('lang').addEventListener('click', switchLanguage);
+  $('gate-lang').addEventListener('click', switchLanguage);
 
   // A shared link pasted while the app is already open only changes the fragment,
   // which is a same-document navigation — without this the page would sit there.
@@ -2956,6 +3655,7 @@ function wire() {
     // to switch, so it is applied before the "did the field move" shortcut.
     if (next.lang && next.lang !== getLanguage()) { setLanguage(next.lang); relabel(); }
     if (!next.position) return;
+    if (next.survey !== state.survey) chooseSurvey(next.survey);
     const moved = state.ra == null
       || Math.abs(deltaRA(next.position.ra, state.ra)) > 1e-4
       || Math.abs(next.position.dec - state.dec) > 1e-4
@@ -2985,6 +3685,9 @@ function wire() {
     // .matches — guard rather than throw.
     if (e.target instanceof Element && e.target.matches('input, select, textarea, [contenteditable]')) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
+    // These keys drive the plate. With the sky or the explanation in front of
+    // it they stepped and replayed a field nobody could see.
+    if (!$('gate').hidden || $('about').open) return;
     // Space on a focused control presses that control; it only means "play"
     // when nothing that Space already operates has the focus.
     const pressable = e.target instanceof Element && e.target.closest('button, a[href], summary, [role="button"]');
@@ -3004,10 +3707,15 @@ function labelSky() {
 
 function relabel() {
   applyTranslations();
+  if (cardHit && !$('gate-card').hidden) {
+    showCard(cardHit.kind === 'field' && cardHit.key ? { ...cardHit, label: t(`preset.${cardHit.key}`) } : cardHit);
+  }
   if (sky) { labelSky(); sky.draw(); }
   readRunPaint();
   labelTheme();
-  $('lang-name').textContent = getLanguage() === 'en' ? 'RU' : 'EN';
+  const otherLanguage = getLanguage() === 'en' ? 'RU' : 'EN';
+  $('lang-name').textContent = otherLanguage;
+  $('gate-lang-name').textContent = otherLanguage;
   $('mode-hint').textContent = modeHint(document.querySelector('input[name="mode"]:checked').value);
   $('rate-value').textContent = t('play.fps', { n: state.rate });
   $('play').setAttribute('aria-label', t(state.playing ? 'play.pause' : 'play.play'));
@@ -3043,15 +3751,18 @@ async function boot() {
 
   sky = new SkyView($('sky'), {
     onHover: (sample) => updateReadout(sample ?? undefined),
-    onPick: ({ ra, dec }) => { addMark(ra, dec); retrackMarks(); },
+    onPick: ({ ra, dec }) => { addMark(ra, dec); retrackMarks(); showLatestMark(); },
     onItem: (hit, x, y) => showTip(hit, x, y),
   });
   labelSky();
 
   if (hash.fov) state.fov = nearestFov(hash.fov);
+  state.survey = hash.survey;
   state.band = hash.band;
 
   wire();
+  wireCard();
+  watchBandHue();
   $('fov').value = String(state.fov);
   relabel();
   sky.resize();

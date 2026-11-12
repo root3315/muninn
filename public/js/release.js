@@ -10,3 +10,6 @@
  * with the page, `npm test` checks the pipeline, and a deploy publishes both.
  */
 export const COLLECTIONS = ['spherex_qr2', 'spherex_qr2_deep'];
+
+/** The size of one Level-2 spectral image file at the archive, in megabytes. */
+export const FRAME_FILE_MB = 68.3;

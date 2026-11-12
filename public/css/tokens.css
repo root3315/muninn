@@ -1,11 +1,9 @@
-/* Hallmark · genre: atmospheric · macrostructure: Map / Diagram · theme: custom
- * vibe: "deep sky" — the brief asked for dark blue, going bluer and whiter
- *   where the stars crowd, which is what a real blue reflection nebula does.
+/* Muninn tokens: colour, type, space, motion.
  * ground  oklch(16% 0.040 254)   ink oklch(95% 0.014 240)
  * accent  oklch(76% 0.130 228) azure · counter oklch(80% 0.135 62) amber
- * axes: dark / condensed-grotesk / azure
- * display and body Geologica · outlier IBM Plex Mono (two roles:
- *   measured values, and the fine print)
+ * The scales here (type sizes, space, motion) are what the page uses. The
+ * colours, typefaces and radii below are the base the page started from;
+ * css/redesign.css, loaded after app.css, sets the ones in use.
  *
  * Every value is measured rather than eyeballed: converted to OKLCH, the scale
  * built on one hue family, and each pairing checked for WCAG contrast — 14
@@ -30,6 +28,7 @@
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   --font-record: "Geologica", ui-sans-serif, system-ui, sans-serif;
 
+  --text-2xs: 0.6875rem;
   --text-xs: 0.75rem;
   --text-sm: 0.875rem;
   --text-base: 1rem;
@@ -42,6 +41,8 @@
   --text-display: clamp(1.75rem, 1.8vw + 0.9rem, 2.5rem);
 
   /* ---- space ------------------------------------------------------------ */
+  /* The smallest thing a pointer is asked to hit. */
+  --hit: 2rem;
   --space-3xs: 0.125rem;
   --space-2xs: 0.25rem;
   --space-xs: 0.5rem;

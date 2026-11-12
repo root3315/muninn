@@ -89,26 +89,42 @@ export function coadd(planes) {
   const len = planes[0]?.length ?? 0;
   const out = new Float32Array(len).fill(NaN);
   const n = planes.length;
+  // The zodiacal background changes from visit to visit by more than the
+  // noise. Left in, "drop the brightest" drops the visit with the brightest
+  // sky at most pixels instead of the one with a cosmic ray, and the stack
+  // gains less than it says. Each visit is put on the same sky level first.
+  const levels = planes.map(planeMedian);
+  // A plane with no valid pixel has no level; it must not pull the mean down.
+  const known = levels.filter((v) => v != null);
+  const level = known.reduce((s, v) => s + v, 0) / (known.length || 1);
   for (let p = 0; p < len; p++) {
     let m = 0;
     let sum = 0;
     let max = -Infinity;
     for (let k = 0; k < n; k++) {
-      const v = planes[k][p];
+      const v = planes[k][p] - levels[k];
       if (v === v) { m += 1; sum += v; if (v > max) max = v; }
     }
     if (!m) continue;
-    if (m >= 4) out[p] = (sum - max) / (m - 1);
-    else if (m === 3) out[p] = middleOfThree(planes, p);
-    else out[p] = sum / m;
+    if (m >= 4) out[p] = level + (sum - max) / (m - 1);
+    else if (m === 3) out[p] = level + middleOfThree(planes, levels, p);
+    else out[p] = level + sum / m;
   }
   return out;
 }
 
+/** The sky level of one visit: the median of its unmasked pixels. */
+function planeMedian(plane) {
+  const seen = plane.filter((v) => v === v);
+  if (!seen.length) return null;
+  seen.sort();
+  return seen[seen.length >> 1];
+}
+
 /** The median of a pixel that has exactly three valid values. */
-function middleOfThree(planes, p) {
+function middleOfThree(planes, levels, p) {
   const v = [];
-  for (const plane of planes) { const x = plane[p]; if (x === x) v.push(x); }
+  planes.forEach((plane, k) => { const x = plane[p] - levels[k]; if (x === x) v.push(x); });
   const [a, b, c] = v;
   return Math.max(Math.min(a, b), Math.min(Math.max(a, b), c));
 }

@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en" data-band="D2">
+<head>
+<meta charset="utf-8">
+<title>Muninn link preview, 1200 × 630</title>
+<!-- The source of public/img/og.png. Serve the repo root, open this page at
+     1200 × 630 and capture it once the two frames have been read:
+       chrome --headless --window-size=1200,630 --virtual-time-budget=40000 \
+              --screenshot=public/img/og.png http://127.0.0.1:PORT/design/og.html
+     Both plates are real SPHEREx D2 frames of the Atala field, read from the
+     archive by the site's own modules. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600&family=Onest:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="../public/css/tokens.css">
+<link rel="stylesheet" href="../public/css/redesign.css">
+<style>
+html, body { margin: 0; }
+body {
+  position: relative; inline-size: 1200px; block-size: 630px; overflow: hidden; box-sizing: border-box;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto 1fr auto;
+  column-gap: 40px; padding: 54px 60px 50px;
+  background: var(--rec-ground); color: var(--color-ink); font-family: var(--font-body);
+}
+p, h1 { margin: 0; }
+/* The whole card is the sky itself: the same field, wide, behind the words. */
+.sky { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; opacity: 0.7; filter: blur(1.5px); mix-blend-mode: screen; }
+.veil {
+  position: absolute; inset: 0;
+  background:
+    linear-gradient(to right, var(--gate-veil-deep) 0%, var(--gate-veil) 55%, transparent 100%),
+    linear-gradient(to top, var(--gate-veil-deep) 0%, transparent 45%);
+}
+body > :not(.sky, .veil) { position: relative; }
+.mark { grid-column: 1 / -1; font-family: var(--font-display); font-weight: 600; font-size: 34px; line-height: 1; }
+.claim {
+  align-self: center; font-family: var(--font-display); font-weight: 600;
+  font-size: 66px; line-height: 1.06; letter-spacing: -0.025em; max-inline-size: 11ch;
+}
+.claim b { font-weight: 600; color: var(--color-accent); }
+.what { grid-column: 1; font-size: 26px; line-height: 1.35; color: var(--color-muted); max-inline-size: 30ch; }
+.what span { display: block; padding-block-start: 14px; font-size: 20px; color: var(--color-neutral); }
+
+.board {
+  grid-column: 2; grid-row: 2 / 4; align-self: end;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 14px;
+  padding: 18px; background: var(--rec-panel); border-radius: var(--radius-lg);
+}
+.visit { display: grid; gap: 10px; }
+.visit__when { display: flex; align-items: baseline; gap: 8px; font-family: var(--font-display); font-weight: 500; }
+.visit__day { font-size: 40px; line-height: 1; letter-spacing: -0.02em; }
+.visit__my { font-size: 17px; color: var(--color-muted); }
+.plate {
+  position: relative; inline-size: 236px; block-size: 236px; overflow: hidden;
+  background: var(--color-well); border-radius: var(--radius-md);
+}
+.plate canvas { display: block; inline-size: 100%; block-size: 100%; }
+.plate__ring {
+  position: absolute; inset-block-start: 50%; inset-inline-start: 50%;
+  inline-size: 50px; block-size: 50px; translate: -50% -50%;
+  border: 2.5px solid var(--color-accent); border-radius: var(--radius-round);
+}
+.plate__ring--gone { border-style: dashed; border-color: var(--color-counter); }
+.visit__note { font-size: 20px; font-weight: 600; color: var(--color-accent); }
+.visit__note--gone { color: var(--color-counter); }
+</style>
+</head>
+<body>
+
+<canvas class="sky" id="wide" width="1200" height="630"></canvas>
+<div class="veil"></div>
+
+<p class="mark">Muninn</p>
+<h1 class="claim">See what <b>moved</b> in the infrared sky.</h1>
+<div class="board">
+  <div class="visit">
+    <p class="visit__when"><span class="visit__day">25</span><span class="visit__my">Dec 2025</span></p>
+    <div class="plate"><canvas id="there" width="236" height="236"></canvas><span class="plate__ring"></span></div>
+    <p class="visit__note">(152) Atala</p>
+  </div>
+  <div class="visit">
+    <p class="visit__when"><span class="visit__day">01</span><span class="visit__my">Jan 2026</span></p>
+    <div class="plate"><canvas id="gone" width="236" height="236"></canvas><span class="plate__ring plate__ring--gone"></span></div>
+    <p class="visit__note visit__note--gone">moved on</p>
+  </div>
+</div>
+<p class="what">Real NASA SPHEREx frames of any patch of sky, blinked visit by visit.
+  <span>muninn.mydevbox.xyz · NASA Space Apps 2026</span></p>
+
+<script type="module">
+import { loadStamp } from '../public/js/stamp.js';
+import { TangentGrid } from '../public/js/wcs.js';
+import { toS3 } from '../public/js/catalog.js';
+import { sortedFinite, limitsFromSorted, paint, rampFromToken } from '../public/js/render.js';
+
+const FIELD = { ra: 13.4194, dec: 3.8459, fovDeg: 0.09, band: 'D2' };
+const SIZE = 464; // twice the shown size, for a sharp capture
+const PLATES = [
+  ['there', '2025-12-25T16:33:36', new TangentGrid(FIELD.ra, FIELD.dec, FIELD.fovDeg, SIZE, SIZE)],
+  ['gone', '2026-01-01T01:44:29', new TangentGrid(FIELD.ra, FIELD.dec, FIELD.fovDeg, SIZE, SIZE)],
+  // The backdrop: the same visit as the first plate, four times as wide.
+  ['wide', '2025-12-25T16:33:36', new TangentGrid(FIELD.ra, FIELD.dec, 0.36, 800, 420)],
+];
+
+const lut = rampFromToken(document.documentElement, '--cmap-deep');
+const index = await (await fetch('../public/data/fields/atala.json')).json();
+
+await Promise.all(PLATES.map(async ([id, iso, grid]) => {
+  const frame = index.frames.find((f) => f.band === FIELD.band && f.iso.startsWith(iso));
+  const stamp = await loadStamp(toS3(frame.url), grid);
+  const canvas = document.getElementById(id);
+  canvas.width = stamp.width;
+  canvas.height = stamp.height;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(stamp.width, stamp.height);
+  const { lo, hi } = limitsFromSorted(sortedFinite(stamp.data));
+  paint(img, stamp.data, lut, { lo, hi, stretch: 'asinh', blankAlpha: 255 });
+  ctx.putImageData(img, 0, 0);
+}));
+document.title = 'ready';
+</script>
+</body>
+</html>

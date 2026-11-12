@@ -691,13 +691,18 @@ function duskScene(w, h, s) {
 /**
  * The Moon itself is a photograph: the Lunar Reconnaissance Orbiter's mosaic
  * of the near side (NASA/GSFC/Arizona State University, public domain), lit
- * up to the flat brightness a full Moon has to the eye. Loaded with the page,
- * so it is in hand by the time anyone asks for night; if it is not, the Moon
- * is drawn instead of photographed.
+ * up to the flat brightness a full Moon has to the eye. Fetched once the page
+ * has gone quiet, so 320 KB of Moon is not competing with the first frames
+ * for the connection, and still in hand by the time anyone asks for night; if
+ * it is not, the Moon is drawn instead of photographed.
  */
 const moonPhoto = new Image();
 moonPhoto.decoding = 'async';
-moonPhoto.src = new URL('../img/moon-nearside-lro.jpg', import.meta.url).href;
+const fetchMoon = () => {
+  moonPhoto.src = new URL('../img/moon-nearside-lro.jpg', import.meta.url).href;
+};
+if ('requestIdleCallback' in globalThis) requestIdleCallback(fetchMoon, { timeout: 6000 });
+else setTimeout(fetchMoon, 3000);
 
 /**
  * The Moon brings the night with it.

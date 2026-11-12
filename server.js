@@ -13,6 +13,8 @@
  */
 
 import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
+import { brotliCompressSync, gzipSync, constants as zlib } from 'node:zlib';
 import { readFile, writeFile, mkdir, stat, readdir } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -59,8 +61,28 @@ const TYPES = {
   '.webmanifest': 'application/manifest+json',
 };
 
+/**
+ * The security headers, read from the same file Cloudflare Pages reads, so the
+ * policy is written once: the block under "/*" in public/_headers.
+ */
+function readSecurityHeaders() {
+  const out = {};
+  let inAll = false;
+  let text = '';
+  try { text = readFileSync(join(PUBLIC, '_headers'), 'utf8'); } catch { return out; }
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.trim() || line.trim().startsWith('#')) continue;
+    if (!/^\s/.test(line)) { inAll = line.trim() === '/*'; continue; }
+    const at = line.indexOf(':');
+    if (inAll && at > 0) out[line.slice(0, at).trim().toLowerCase()] = line.slice(at + 1).trim();
+  }
+  return out;
+}
+
+const SECURITY_HEADERS = readSecurityHeaders();
+
 const send = (res, code, body, headers = {}) => {
-  res.writeHead(code, { 'cache-control': 'no-cache', ...headers });
+  res.writeHead(code, { 'cache-control': 'no-cache', ...SECURITY_HEADERS, ...headers });
   res.end(body);
 };
 
@@ -200,7 +222,7 @@ const inflight = new Map();
  * body. A failure is said in the body, as ok: false.
  */
 async function answerSlowly(res, pending) {
-  res.writeHead(200, { 'cache-control': 'no-cache', 'content-type': TYPES['.json'] });
+  res.writeHead(200, { 'cache-control': 'no-cache', ...SECURITY_HEADERS, 'content-type': TYPES['.json'] });
   res.write(' ');
   const beat = setInterval(() => res.write(' '), 10_000);
   res.on('close', () => clearInterval(beat));
@@ -301,57 +323,9 @@ async function lookup(ra, dec, radius, key) {
   return { ok: true, cached: false, ...payload };
 }
 
-/* ------------------------------------------------- fallback byte-range relay */
-
-/**
- * Only used when a browser cannot reach the S3 mirror directly — a corporate
- * proxy, an offline lab. Streams the same byte range with CORS attached.
- */
-const FITS_RANGE_MAX = 32 * 1024 * 1024;
-
-async function handleFits(url, req, res) {
-  // Checked after parsing, not as a string prefix: "…/spherex/../../robots.txt"
-  // passed a startsWith test and relayed the rest of IRSA with CORS attached.
-  let target;
-  try {
-    target = new URL(url.searchParams.get('url') ?? '');
-  } catch {
-    return json(res, 400, { ok: false, error: 'Only SPHEREx archive URLs are relayed' });
-  }
-  const allowed = target.protocol === 'https:' && !target.username && !target.password && !target.port
-    && (target.hostname === 'nasa-irsa-spherex.s3.us-east-1.amazonaws.com'
-      || (target.hostname === 'irsa.ipac.caltech.edu' && target.pathname.startsWith('/ibe/data/spherex/')));
-  if (!allowed) return json(res, 400, { ok: false, error: 'Only SPHEREx archive URLs are relayed' });
-
-  // Only what the viewer itself asks for: one bounded byte range. A request
-  // without one would pull a whole 70 MB file into memory here.
-  const m = /^bytes=(\d+)-(\d+)$/.exec(req.headers.range ?? '');
-  if (!m || Number(m[2]) < Number(m[1]) || Number(m[2]) - Number(m[1]) >= FITS_RANGE_MAX) {
-    return json(res, 400, { ok: false, error: 'A bounded byte range is required' });
-  }
-  const range = m[0];
-
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 60_000);
-  let upstream;
-  let body;
-  try {
-    upstream = await fetch(target, { headers: { range }, redirect: 'error', signal: ctrl.signal });
-    body = Buffer.from(await upstream.arrayBuffer());
-  } finally {
-    clearTimeout(timer);
-  }
-  send(res, upstream.status, body, {
-    'content-type': 'application/fits',
-    'access-control-allow-origin': '*',
-    'accept-ranges': 'bytes',
-    ...(upstream.headers.get('content-range') ? { 'content-range': upstream.headers.get('content-range') } : {}),
-  });
-}
-
 /* -------------------------------------------------------------------- static */
 
-async function serveStatic(pathname, res) {
+async function serveStatic(pathname, req, res) {
   // A malformed escape is the request's fault, not the server's.
   let decoded;
   try {
@@ -366,28 +340,92 @@ async function serveStatic(pathname, res) {
   if (!target.startsWith(PUBLIC + sep) && target !== join(PUBLIC, 'index.html')) {
     return send(res, 403, 'Forbidden');
   }
+  let file;
   try {
-    const body = await readFile(target);
-    return send(res, 200, body, {
-      'content-type': TYPES[extname(target)] ?? 'application/octet-stream',
-    });
+    file = await loadStatic(target);
   } catch {
     return send(res, 404, 'Not found');
   }
+  const ext = extname(target);
+  const headers = {
+    'content-type': TYPES[ext] ?? 'application/octet-stream',
+    'cache-control': cachePolicy(rel),
+    etag: file.etag,
+    vary: 'accept-encoding',
+  };
+  // A proxy may hand the tag back weakened (W/"…"); it is still the same file.
+  const known = String(req.headers['if-none-match'] ?? '').replace(/^W\//, '');
+  if (known === file.etag) return send(res, 304, null, headers);
+
+  const accepts = String(req.headers['accept-encoding'] ?? '');
+  if (file.br && /\bbr\b/.test(accepts)) return send(res, 200, file.br, { ...headers, 'content-encoding': 'br' });
+  if (file.gzip && /\bgzip\b/.test(accepts)) return send(res, 200, file.gzip, { ...headers, 'content-encoding': 'gzip' });
+  return send(res, 200, file.raw, headers);
+}
+
+/**
+ * Text is sent compressed. The page's own code is 700 KB as written and about
+ * a quarter of that on the wire, and a baked frame index goes from 390 KB to
+ * 40. Each file is compressed once and kept until it changes on disk.
+ */
+const COMPRESSIBLE = new Set(['.html', '.js', '.mjs', '.css', '.json', '.svg', '.txt', '.webmanifest']);
+const staticCache = new Map();
+
+async function loadStatic(target) {
+  const info = await stat(target);
+  if (!info.isFile()) throw new Error('not a file');
+  const kept = staticCache.get(target);
+  if (kept && kept.mtimeMs === info.mtimeMs) return kept;
+
+  const raw = await readFile(target);
+  const file = {
+    mtimeMs: info.mtimeMs,
+    raw,
+    etag: `"${info.size.toString(16)}-${Math.round(info.mtimeMs).toString(16)}"`,
+  };
+  if (COMPRESSIBLE.has(extname(target))) {
+    file.br = brotliCompressSync(raw, { params: { [zlib.BROTLI_PARAM_QUALITY]: 9 } });
+    file.gzip = gzipSync(raw, { level: 9 });
+  }
+  staticCache.set(target, file);
+  return file;
+}
+
+/**
+ * The page and its code change with every deploy, so they are always checked
+ * (and answered with a 304 when nothing moved). Data and pictures change with
+ * a data release. The same policy public/_headers gives Cloudflare Pages.
+ */
+function cachePolicy(rel) {
+  const path = rel.replace(/\\/g, '/');
+  if (path.startsWith('data/')) return 'public, max-age=600, stale-while-revalidate=86400';
+  if (path.startsWith('img/')) return 'public, max-age=86400';
+  return 'no-cache';
 }
 
 /* ----------------------------------------------------------------------- run */
 
 const server = createServer(async (req, res) => {
-  const url = new URL(req.url, `http://${req.headers.host}`);
+  // A request line that is not a URL ("//", a host with a space) is the
+  // client's mistake. Parsed outside a try it was an unhandled rejection, and
+  // one such request stopped the process.
+  let url;
+  try {
+    url = new URL(req.url, 'http://localhost');
+  } catch {
+    return send(res, 400, 'Bad request');
+  }
+  // Everything here is read-only.
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    return send(res, 405, 'Method not allowed', { allow: 'GET, HEAD' });
+  }
   try {
     if (url.pathname === '/api/search') return await handleSearch(url, res);
-    if (url.pathname === '/api/fits') return await handleFits(url, req, res);
     if (url.pathname === '/api/targets') {
       const body = await readFile(join(PUBLIC, 'data', 'targets.json'));
       return send(res, 200, body, { 'content-type': TYPES['.json'] });
     }
-    return await serveStatic(url.pathname, res);
+    return await serveStatic(url.pathname, req, res);
   } catch (err) {
     console.error(`${req.method} ${req.url} → ${err.message}`);
     if (res.headersSent) return res.end();
