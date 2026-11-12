@@ -282,7 +282,7 @@ body { font-size: var(--text-base); line-height: 1.5; }
   margin-inline-end: var(--space-xs);
 }
 .mast__group .link { --link-over: var(--color-paper-4); min-block-size: 28px; font-size: var(--text-xs); color: var(--color-muted); }
-.mast__group .link[aria-expanded="true"] { color: var(--color-ink); }
+.link[aria-expanded="true"] { color: var(--color-ink); background-color: var(--color-paper-4); }
 
 .link--lang, .theme-key {
   inline-size: auto; min-inline-size: 36px; block-size: 32px; min-block-size: 32px;
@@ -576,7 +576,8 @@ body { font-size: var(--text-base); line-height: 1.5; }
 
 /* ============================================================= controls */
 
-.tools { border: 0; background: var(--color-paper-2); border-radius: var(--radius-md); }
+.tools { border: 0; background: var(--color-paper-2); border-radius: var(--radius-md); transition: opacity 160ms var(--ease-out); }
+.tools[data-leaving="true"] { opacity: 0; }
 .tools__acts { border-block-start: 0; }
 .field { background: var(--color-paper); border-color: var(--color-rule); border-radius: var(--radius-round); padding-inline: var(--space-sm); }
 .field:focus { border-color: var(--color-accent); }
@@ -678,6 +679,7 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .gate-card[data-band="D6"] { --band-h: var(--hue-d6); }
 .gate-card[hidden] { display: none; }
 .gate-card[data-on="true"] { opacity: 1; translate: 0 0; }
+.gate-card:not([data-on="true"]) { transition-duration: 240ms; }
 .gate-card[data-frame="true"] { grid-template-columns: 13.75rem minmax(0, 1fr); inline-size: min(34rem, calc(100% - 2 * var(--gutter))); }
 
 /* The frame develops from the top, the way a frame arrives in the run. */
@@ -883,6 +885,15 @@ body { font-size: var(--text-base); line-height: 1.5; }
   }
 }
 
+/* On a low, wide screen the findings column is a short window on a long
+   list: its foot fades, so the cut reads as "more below" and not as an edge,
+   and the verdict takes less of the height it has. */
+@media (min-width: 68.0625rem) and (max-height: 46rem) {
+  .side--right, .tools { mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5rem), transparent); }
+  .verdict { padding-block: var(--space-md); gap: var(--space-sm); }
+  .part { padding-block: var(--space-sm) var(--space-md); }
+}
+
 /* ============================================================ responsive */
 
 @media (min-width: 68.0625rem) and (min-height: 34.0625rem) {
@@ -938,7 +949,7 @@ body { font-size: var(--text-base); line-height: 1.5; }
   .mast .link:not(.link--lang) { padding-inline: var(--space-2xs); }
   /* The phone masthead lays its links out itself; the group steps aside. */
   .mast__group { display: contents; }
-  .mast__group > .link { order: 3; font-size: var(--text-xs); color: var(--color-muted); min-block-size: 40px; min-inline-size: 40px; }
+  .mast__group > .link { order: 3; font-size: var(--text-xs); color: var(--color-muted); min-block-size: 40px; }
   #copy-link { margin-inline-start: calc(-1 * var(--space-2xs)); }
   /* Under the plate each step carries its date: room either side of it. */
   .step { block-size: auto; padding-inline: var(--space-2xs) var(--space-sm); }

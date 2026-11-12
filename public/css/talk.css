@@ -477,6 +477,8 @@ a { color: inherit; }
   .flags { grid-template-columns: repeat(2, auto); }
   .targets a { grid-template-columns: minmax(0, 1fr) auto; }
   .targets__why { grid-column: 1 / -1; grid-row: 2; }
+  /* In the tiles the name comes first, the sentence under it. */
+  .slide--targets .targets__why { grid-row: auto; }
   .bytes li, .snr li, .steps li { grid-template-columns: 5.5rem 1fr auto; }
   .steps li { grid-template-columns: 5.5rem 1fr; }
 }

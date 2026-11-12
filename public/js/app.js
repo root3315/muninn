@@ -72,7 +72,7 @@ const state = {
   depth: null, examined: [], sectors: null, candidates: null, hunting: false, loading: false, failed: false, view: 'sky',
   facts: null, bodies: 0,
   survey: 'off',
-  skyCredit: '',
+  skyLayers: { stars: false, deep: false },
 };
 
 let sky;
@@ -2955,6 +2955,8 @@ function starColour(bv) {
 /** The request behind a card's live picture, so leaving the card stops it. */
 let cardLive = null;
 const CARD_PX = 280;
+/** As long as the card's own fade in the stylesheet. */
+const CARD_LEAVE_MS = 260;
 const CARD_FOV_DEG = 0.1;
 
 /**
@@ -3027,8 +3029,10 @@ function hideCard() {
   clearInterval(cardBlink);
   cardHit = null;
   const card = $('gate-card');
+  if (card.hidden) return;
   delete card.dataset.on;
-  card.hidden = true;
+  // Hidden once it has faded, unless another card has opened in the meantime.
+  setTimeout(() => { if (!cardHit) card.hidden = true; }, CARD_LEAVE_MS);
 }
 
 function wireCard() {
@@ -3158,8 +3162,7 @@ async function buildGate() {
   // difference is the whole difference between this tool and a wallpaper. It
   // goes in the colophon with the other credits rather than on the sky, where
   // it was four lines of small type over the only thing worth looking at.
-  state.skyCredit = [stars?.source, deep?.source, t('gate.modelled')]
-    .filter(Boolean).join(' · ');
+  state.skyLayers = { stars: Boolean(stars), deep: Boolean(deep) };
   relabel();
   gate.resize();
   renderGateJump();
@@ -3356,8 +3359,20 @@ function placeTools() {
 }
 
 function setTools(open) {
-  $('tools').hidden = !open;
+  const tools = $('tools');
+  if (open) {
+    tools.hidden = false;
+    delete tools.dataset.leaving;
+  } else if (!tools.hidden) {
+    // Fades out, then steps aside; opened again meanwhile, it stays.
+    tools.dataset.leaving = 'true';
+    setTimeout(() => { if (tools.dataset.leaving) { tools.hidden = true; delete tools.dataset.leaving; } }, 180);
+  }
   placeTools();
+  // On a phone the panel opens under the plate, off the screen: bring it up.
+  if (open && !matchMedia('(min-width: 68.0625rem)').matches) {
+    requestAnimationFrame(() => tools.scrollIntoView({ block: 'nearest' }));
+  }
   const toggle = $('tools-toggle');
   toggle.setAttribute('aria-expanded', String(open));
   toggle.textContent = t(open ? 'tools.hide' : 'tools.toggle');
@@ -3726,7 +3741,10 @@ function relabel() {
     ? 'readout.hintTouch' : 'readout.hint');
   renderPresets();
   // Where the sky in the entry screen comes from, with the other credits.
-  $('credit').textContent = [t('foot.short'), state.skyCredit].filter(Boolean).join(String.fromCharCode(10));
+  const skyCredit = [
+    state.skyLayers.stars && t('credit.stars'), state.skyLayers.deep && t('credit.deep'), t('gate.modelled'),
+  ].filter(Boolean).join(' · ');
+  $('credit').textContent = [t('foot.short'), skyCredit].filter(Boolean).join(String.fromCharCode(10));
   updateIdentity();
   renderBytes();
   renderDepth();
