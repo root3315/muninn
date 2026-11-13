@@ -38,8 +38,31 @@ async function fetchRange(url, start, end, signal) {
   throw new Error(`Range not honoured (HTTP ${res.status}) on ${url}`);
 }
 
+/**
+ * A file read more than once in a session — its wavelength, then its pixels;
+ * or the same field's spectrum for a second mark — has its header and its
+ * wavelength table kept, so the second read costs nothing. A failed or
+ * cancelled read is forgotten, so it can be asked again.
+ */
+const KEPT_FILES = 256;
+
+function remembered(cache, key, read) {
+  if (cache.has(key)) return cache.get(key);
+  const promise = read();
+  cache.set(key, promise);
+  promise.catch(() => { if (cache.get(key) === promise) cache.delete(key); });
+  while (cache.size > KEPT_FILES) cache.delete(cache.keys().next().value);
+  return promise;
+}
+
+const headers = new Map();
+const waveTables = new Map();
+
+/** The IMAGE extension's header, read once per file. */
+const readImageHDU = (url, signal) => remembered(headers, url, () => scanImageHDU(url, signal));
+
 /** Read enough of the file to describe HDU 0 and the IMAGE extension. */
-async function readImageHDU(url, signal) {
+async function scanImageHDU(url, signal) {
   let want = HEADER_PROBE;
   for (;;) {
     const buf = await fetchRange(url, 0, want - 1, signal);
@@ -357,10 +380,10 @@ async function fetchTail(url, bytes, signal) {
  * position is off the detector — never a guess.
  */
 export async function loadWavelength(url, ra, dec, { signal } = {}) {
-  const [hdu, tail] = await Promise.all([
+  const [hdu, table] = await Promise.all([
     readImageHDU(url, signal),
-    fetchTail(url, WAVE_TAIL_BYTES, signal),
+    remembered(waveTables, url, async () => parseWaveTable(await fetchTail(url, WAVE_TAIL_BYTES, signal))),
   ]);
   const pix = new WCS(hdu.cards).worldToPix(ra, dec);
-  return pix ? wavelengthAt(parseWaveTable(tail), pix[0], pix[1]) : null;
+  return pix ? wavelengthAt(table, pix[0], pix[1]) : null;
 }
