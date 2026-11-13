@@ -32,7 +32,7 @@ import { COLLECTIONS } from './public/js/release.js';
 import { parseCsv } from './public/js/csv.js';
 import { CATALOGUES, ROW_CAP, coneQuery, renameRow, mastGaiaRows } from './public/js/overlay.js';
 import { sbIdentUrl, parseSbIdent } from './public/js/sbident.js';
-import { archivesQuery, ARCHIVE_RADIUS } from './public/js/archives.js';
+import { archivesQuery, neossatQuery, neossatFilesQuery, readNeossat, ARCHIVE_RADIUS } from './public/js/archives.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
@@ -567,9 +567,30 @@ async function askCadc(field, key) {
   const res = await withTimeout(`${CADC_TAP}?${query}`, CADC_TIMEOUT_MS);
   const text = await res.text();
   if (!res.ok || !text.startsWith('collection,')) throw new Error(`CADC: HTTP ${res.status}`);
-  const payload = { rows: parseCsv(text), via: 'CADC' };
+  const rows = parseCsv(text);
+  // NEOSSat in the list: one more question, for its newest frame here.
+  const neo = rows.find((r) => r.collection === 'NEOSSAT');
+  const neossat = neo && Number.isFinite(Number(neo.last)) ? await askNeossat({ ...field, last: neo.last }) : null;
+  const payload = { rows, neossat, via: 'CADC' };
   await writeCache(key, payload);
   return { ok: true, cached: false, ...payload };
+}
+
+async function askNeossat(field) {
+  const ask = async (adql) => {
+    const query = new URLSearchParams({ REQUEST: 'doQuery', LANG: 'ADQL', FORMAT: 'csv', QUERY: adql });
+    const res = await withTimeout(`${CADC_TAP}?${query}`, CADC_TIMEOUT_MS);
+    if (!res.ok) throw new Error(`CADC: HTTP ${res.status}`);
+    return parseCsv(await res.text());
+  };
+  try {
+    const [obs] = await ask(neossatQuery(field));
+    if (!obs) return null;
+    return readNeossat(obs, await ask(neossatFilesQuery(obs.planeID)));
+  } catch {
+    // The count stands without the picture.
+    return null;
+  }
 }
 
 /* ---------------------------------------------------- small bodies at JPL */

@@ -34,3 +34,25 @@ test('archives come back largest first, with years, and derived copies left out'
   assert.deepEqual([list[1].from, list[1].to], [1993, 2025]);
   assert.equal(list[3].from, null);
 });
+
+test('NEOSSat: the newest frame, its preview and FITS, and nothing that is not a CADC NEOSSat file', async () => {
+  const { neossatQuery, neossatFilesQuery, readNeossat, CADC_FILES } = await import('../public/js/archives.js');
+  assert.match(neossatQuery({ ra: 269.452, dec: 4.693, radiusDeg: 0.05, last: '58820.0588907' }), /time_bounds_lower >= 58820.0588897/);
+  assert.throws(() => neossatQuery({ ra: 'x', dec: 0, radiusDeg: 0.1, last: 1 }), /not a number/);
+  assert.throws(() => neossatFilesQuery("x' OR '1'='1"), /not a plane id/);
+  assert.match(neossatFilesQuery('483ae3a3-e2b7-4fa7-9800-24146c498f8d'), /planeID = '483ae3a3/);
+  // As CADC answered for Barnard's Star, 13 Nov 2026, trimmed.
+  const obs = { observationID: '2019304000624', target_name: 'BarnardStar', time_bounds_lower: '58787.00444572917', time_exposure: '1.1005', planeID: '483ae3a3-e2b7-4fa7-9800-24146c498f8d' };
+  const files = [
+    { uri: 'cadc:NEOSSAT/2019304000624_raw_prev.png' },
+    { uri: 'cadc:NEOSSAT/2019304000624_raw_prev_256.png' },
+    { uri: 'cadc:NEOSSAT/NEOS_SCI_2019304000624.fits' },
+  ];
+  assert.deepEqual(readNeossat(obs, files), {
+    id: '2019304000624', target: 'BarnardStar', iso: '2019-10-31', exposure: 1.1005,
+    preview: `${CADC_FILES}cadc:NEOSSAT/2019304000624_raw_prev_256.png`,
+    fits: `${CADC_FILES}cadc:NEOSSAT/NEOS_SCI_2019304000624.fits`,
+  });
+  assert.equal(readNeossat(null, []), null);
+  assert.equal(readNeossat(obs, [{ uri: 'https://evil.example/x_prev.png' }]), null);
+});

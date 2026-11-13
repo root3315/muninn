@@ -2600,6 +2600,7 @@ async function openField({ ra, dec, label = '', band = null }) {
   sky.setCatalog([]);
   resetSurveys();
   archives = null;
+  archivesNeossat = null;
   renderArchives();
   showTip(null);
   skybot = { asking: new Set(), failed: new Set() };
@@ -3803,6 +3804,8 @@ function syncLambda() {
 
 /** What CADC said about the open field: null, 'asking', 'failed' or a list. */
 let archives = null;
+/** The newest NEOSSat frame of the field, when CADC has one. */
+let archivesNeossat = null;
 
 async function loadArchives(signal) {
   const at = { ra: state.ra, dec: state.dec };
@@ -3811,7 +3814,8 @@ async function loadArchives(signal) {
   try {
     const list = await fieldArchives({ ...at, radiusDeg: Math.min(0.3, sky.grid.spanDeg / 2) }, { signal });
     if (signal?.aborted || state.ra !== at.ra || state.dec !== at.dec) return;
-    archives = list;
+    archives = list.list;
+    archivesNeossat = list.neossat;
   } catch {
     if (signal?.aborted) return;
     archives = 'failed';
@@ -3844,6 +3848,25 @@ function renderArchives() {
   const link = $('archives-link');
   link.hidden = !list.length;
   link.href = CADC_SEARCH;
+  renderNeossat(Array.isArray(archives) ? archivesNeossat : null);
+}
+
+/**
+ * NEOSSat's newest frame of the field, as delivered: a raw frame with no sky
+ * coordinates, so it is shown beside the list, not laid over the plate.
+ */
+function renderNeossat(n) {
+  const box = $('archives-neossat');
+  box.hidden = !n;
+  if (!n) return;
+  $('archives-neossat-img').src = n.preview;
+  $('archives-neossat-img').alt = t('neossat.alt', { target: n.target ?? '' });
+  $('archives-neossat-cap').textContent = t('neossat.cap', {
+    date: n.iso ? fmtDate(n.iso) : '—', target: n.target ?? '—', s: n.exposure ? fmt(n.exposure, 1) : '—',
+  });
+  const fitsLink = $('archives-neossat-fits');
+  fitsLink.hidden = !n.fits;
+  if (n.fits) fitsLink.href = n.fits;
 }
 
 /* ------------------------------------------------- AllWISE beside the frame */

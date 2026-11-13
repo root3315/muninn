@@ -1057,3 +1057,7 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .mark__link[data-tone="wait"], .mark__link[data-tone="quiet"] { color: var(--color-neutral); }
 .mark__link-acts { display: flex; flex-wrap: wrap; gap: 0 var(--space-xs); }
 .mark__link-acts > .mark__csv[aria-pressed="false"] { color: var(--color-neutral); }
+
+/* NEOSSat's newest frame in the other-archives panel: shown as delivered. */
+.neossat { display: grid; gap: var(--space-2xs); margin: 0; }
+.neossat img { inline-size: 100%; block-size: auto; border-radius: var(--radius-sm, 10px); background: var(--color-well); image-rendering: auto; }
