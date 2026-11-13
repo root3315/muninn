@@ -11,10 +11,12 @@
  * The deep fields are the reason this exists: a cone at the North Ecliptic Pole
  * returns 25 000 rows and 54 MB and takes four minutes unless MAXREC caps it.
  *
- *   node tools/bake-targets.mjs
+ *   node tools/bake-targets.mjs              every field
+ *   node tools/bake-targets.mjs wise0855     only the fields named; the rest
+ *                                            of targets.json is kept as it is
  */
 
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import { parseVOTable } from '../public/js/votable.js';
 import { frameFromRow, groupVisits } from '../public/js/catalog.js';
 import { COLLECTIONS } from '../public/js/release.js';
@@ -116,35 +118,63 @@ const FIELDS = [
     },
   },
   // The five fields the challenge itself names as the test of a tool like this.
-  // High-proper-motion stars are centred where they are now, not at J2000:
-  // Barnard's Star has moved four and a half arcminutes since then.
+  // High-proper-motion stars are centred where they were at the mean date of
+  // their SPHEREx visits in the opening band, not at J2000: Barnard's Star
+  // has moved four and a half arcminutes since then. `target` is the object
+  // itself, a catalogue position at its own epoch and a proper motion in mas
+  // a year, which the page carries to each visit's date to mark it.
   {
     key: 'barnard', group: 'challenge', name: "Barnard's Star",
+    // Gaia DR3 carried to 2026: within 3" of where it was at the mean date of its D2 visits.
     ra: 269.4463, dec: 4.7680, fov: 0.3, band: 'D2',
+    target: {
+      ra: 269.44850253, dec: 4.73942005, epoch: 2016.0, pmRA: -801.551, pmDE: 10362.394,
+      ref: 'Gaia DR3 4472832130942575872',
+    },
     why: {
-      en: 'The fastest star in the sky, 10.3″ a year — about one detector pixel across this baseline.',
-      ru: 'Самая быстрая звезда неба, 10,3″ в год — около одного пикселя детектора за этот срок.',
+      en: 'The fastest star in the sky, 10.4″ a year: under two detector pixels across this baseline.',
+      ru: 'Самая быстрая звезда неба, 10,4″ в год: меньше двух пикселей детектора за этот срок.',
     },
   },
   {
     key: 'epsindib', group: 'challenge', name: 'ε Indi B',
+    // Gaia DR3 carried to 2026: within 3" of where it was at the mean date of its D2 visits.
     ra: 331.0967, dec: -56.8012, fov: 0.3, band: 'D2',
+    target: {
+      ra: 331.07645260, dec: -56.79381207, epoch: 2016.0, pmRA: 3981.977, pmDE: -2466.832,
+      ref: 'Gaia DR3 6412596012146801152',
+    },
     why: {
       en: 'A pair of brown dwarfs; their star, ε Indi A, is in the same field.',
       ru: 'Пара коричневых карликов; их звезда ε Indi A в том же поле.',
     },
   },
   {
+    // Found by Luhman (2014, ApJ 786, L18) in WISE multi-epoch data. The
+    // challenge's 08h55m10.83s -07°14'42.5" (133.7951, -7.2452) is its WISE
+    // designation, a position of about 2010.6. Position at epoch 2000.0 and
+    // motion (-8123.7, +673.2) mas a year from Kirkpatrick et al. (2021,
+    // ApJS 253, 7), as SIMBAD gives them; carried to 2026.12, the mean date
+    // of its D6 visits, that is 2.1' west of the challenge's coordinates.
     key: 'wise0855', group: 'challenge', name: 'WISE 0855−0714',
-    ra: 133.7951, dec: -7.2451, fov: 0.3, band: 'D6',
+    ra: 133.7595, dec: -7.2422, fov: 0.3, band: 'D6',
+    target: {
+      ra: 133.81890825, dec: -7.24704800, epoch: 2000.0, pmRA: -8123.7, pmDE: 673.2,
+      ref: 'Kirkpatrick et al. 2021, ApJS 253, 7',
+    },
     why: {
-      en: 'The coldest known brown dwarf. It is bright only near 4.6 µm, so the field opens in D6.',
-      ru: 'Самый холодный известный коричневый карлик. Ярок только около 4,6 µm, поэтому поле открывается в D6.',
+      en: 'The coldest known brown dwarf, bright only near 4.6 µm, so the field opens in D6. Centred where it was in 2026: 2.1′ west of the challenge’s 08h55m10.83s −07°14′42.5″, its 2010 WISE position.',
+      ru: 'Самый холодный известный коричневый карлик, ярок только около 4,6 µm, поэтому поле открывается в D6. Центр там, где он был в 2026 году: на 2,1′ западнее координат задания 08h55m10.83s −07°14′42.5″, его положения по WISE 2010 года.',
     },
   },
   {
     key: 'rwaur', group: 'challenge', name: 'RW Aurigae',
     ra: 76.9564, dec: 30.4014, fov: 0.3, band: 'D2',
+    // The A-B pair is 1.5" across, inside one SPHEREx pixel.
+    target: {
+      ra: 76.95654431, dec: 30.40131615, epoch: 2016.0, pmRA: 4.906, pmDE: -24.578,
+      ref: 'Gaia DR3 156430817820015232',
+    },
     why: {
       en: 'A young variable star. Use shared scaling: per-visit stretching hides a brightness change.',
       ru: 'Молодая переменная звезда. Включите общую шкалу: своя шкала у каждого кадра прячет изменение яркости.',
@@ -153,6 +183,10 @@ const FIELDS = [
   {
     key: 'rdra', group: 'challenge', name: 'R Draconis',
     ra: 248.1675, dec: 66.7550, fov: 0.3, band: 'D3',
+    target: {
+      ra: 248.16737837, dec: 66.75500675, epoch: 2016.0, pmRA: -20.643, pmDE: 6.149,
+      ref: 'Gaia DR3 1648328016354496384',
+    },
     why: {
       en: 'A Mira variable near the north ecliptic pole, seen on more dates than almost anything.',
       ru: 'Мирида у северного полюса эклиптики: снята в большем числе дат, чем почти что угодно.',
@@ -162,10 +196,22 @@ const FIELDS = [
 
 await mkdir(new URL('fields/', DATA), { recursive: true });
 
+// Named on the command line, only those fields are asked about again; every
+// other entry of targets.json keeps its counts, so one moved field costs one query.
+const only = process.argv.slice(2);
+const unknown = only.filter((k) => !FIELDS.some((f) => f.key === k));
+if (unknown.length) throw new Error(`No such field: ${unknown.join(', ')}`);
+const kept = only.length ? JSON.parse(await readFile(new URL('targets.json', DATA), 'utf8')).targets : [];
+
 const targets = [];
 console.log('Indexing opening fields against IRSA\n');
 
 for (const f of FIELDS) {
+  if (only.length && !only.includes(f.key)) {
+    const old = kept.find((t) => t.key === f.key);
+    if (old) targets.push({ ...old, ...(f.target ? { target: f.target } : {}), why: f.why });
+    continue;
+  }
   const t0 = Date.now();
   const { frames, truncated, errors } = await indexField(f.ra, f.dec);
   const visits = groupVisits(frames, { ra: f.ra, dec: f.dec, band: f.band });
@@ -187,7 +233,7 @@ for (const f of FIELDS) {
 
   targets.push({
     key: f.key, ...(f.group ? { group: f.group } : {}), name: f.name, ra: f.ra, dec: f.dec, fov: f.fov, band: f.band,
-    why: f.why, visits: visits.length, spanDays, truncated,
+    ...(f.target ? { target: f.target } : {}), why: f.why, visits: visits.length, spanDays, truncated,
   });
   await sleep(500);
 }

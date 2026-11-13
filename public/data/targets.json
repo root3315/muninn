@@ -86,12 +86,20 @@
       "fov": 0.3,
       "band": "D2",
       "why": {
-        "en": "The fastest star in the sky, 10.3″ a year — about one detector pixel across this baseline.",
-        "ru": "Самая быстрая звезда неба, 10,3″ в год — около одного пикселя детектора за этот срок."
+        "en": "The fastest star in the sky, 10.4″ a year: under two detector pixels across this baseline.",
+        "ru": "Самая быстрая звезда неба, 10,4″ в год: меньше двух пикселей детектора за этот срок."
       },
       "visits": 17,
       "spanDays": 397,
-      "truncated": false
+      "truncated": false,
+      "target": {
+        "ra": 269.44850253,
+        "dec": 4.73942005,
+        "epoch": 2016,
+        "pmRA": -801.551,
+        "pmDE": 10362.394,
+        "ref": "Gaia DR3 4472832130942575872"
+      }
     },
     {
       "key": "epsindib",
@@ -107,19 +115,35 @@
       },
       "visits": 29,
       "spanDays": 526,
-      "truncated": false
+      "truncated": false,
+      "target": {
+        "ra": 331.0764526,
+        "dec": -56.79381207,
+        "epoch": 2016,
+        "pmRA": 3981.977,
+        "pmDE": -2466.832,
+        "ref": "Gaia DR3 6412596012146801152"
+      }
     },
     {
       "key": "wise0855",
       "group": "challenge",
       "name": "WISE 0855−0714",
-      "ra": 133.7951,
-      "dec": -7.2451,
+      "ra": 133.7595,
+      "dec": -7.2422,
       "fov": 0.3,
       "band": "D6",
+      "target": {
+        "ra": 133.81890825,
+        "dec": -7.247048,
+        "epoch": 2000,
+        "pmRA": -8123.7,
+        "pmDE": 673.2,
+        "ref": "Kirkpatrick et al. 2021, ApJS 253, 7"
+      },
       "why": {
-        "en": "The coldest known brown dwarf. It is bright only near 4.6 µm, so the field opens in D6.",
-        "ru": "Самый холодный известный коричневый карлик. Ярок только около 4,6 µm, поэтому поле открывается в D6."
+        "en": "The coldest known brown dwarf, bright only near 4.6 µm, so the field opens in D6. Centred where it was in 2026: 2.1′ west of the challenge’s 08h55m10.83s −07°14′42.5″, its 2010 WISE position.",
+        "ru": "Самый холодный известный коричневый карлик, ярок только около 4,6 µm, поэтому поле открывается в D6. Центр там, где он был в 2026 году: на 2,1′ западнее координат задания 08h55m10.83s −07°14′42.5″, его положения по WISE 2010 года."
       },
       "visits": 17,
       "spanDays": 370,
@@ -139,7 +163,15 @@
       },
       "visits": 16,
       "spanDays": 372,
-      "truncated": false
+      "truncated": false,
+      "target": {
+        "ra": 76.95654431,
+        "dec": 30.40131615,
+        "epoch": 2016,
+        "pmRA": 4.906,
+        "pmDE": -24.578,
+        "ref": "Gaia DR3 156430817820015232"
+      }
     },
     {
       "key": "rdra",
@@ -155,7 +187,15 @@
       },
       "visits": 55,
       "spanDays": 414,
-      "truncated": true
+      "truncated": true,
+      "target": {
+        "ra": 248.16737837,
+        "dec": 66.75500675,
+        "epoch": 2016,
+        "pmRA": -20.643,
+        "pmDE": 6.149,
+        "ref": "Gaia DR3 1648328016354496384"
+      }
     }
   ]
 }
