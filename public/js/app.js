@@ -2338,7 +2338,18 @@ const CALL = {
 /** What the measurement amounts to, in the fewest words that are still true. */
 const callOf = (a) => (tooSharp(shapeOf(a)) ? t('sharp.call') : t(CALL[a?.kind ?? 'none'] ?? CALL.none));
 
+/**
+ * The verdict, and how many loaded visits never saw the spot: those are left
+ * out of every count in it, and the reader is told so.
+ */
 function verdict(a) {
+  const text = verdictOnly(a);
+  const unseen = (a?.loaded ?? 0) - (a?.total ?? 0);
+  return unseen > 0 && a?.total ? `${text} ${t('mark.uncoveredSome', { n: unseen })}` : text;
+}
+
+function verdictOnly(a) {
+  if (a && !a.total) return t('mark.uncovered');
   if (!a || a.kind === 'none') return t('mark.undetected', { total: a?.total ?? 0 });
   if (a.kind === 'transient') {
     return t('mark.transient', {

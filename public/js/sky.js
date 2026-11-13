@@ -697,6 +697,10 @@ export class SkyView {
     if (!this.catalog.length) return;
     const LABELLED = 12;
     const placed = [];
+    // At the date of the visit on screen: SIMBAD gives J2000, and Barnard's
+    // Star had moved four arcminutes from its square by 2025.
+    const epoch = this.current ? epochOfMjd(this.current.frame.mjd) : null;
+    const target = this.overlays.marks ? this.targetAt() : null;
     // A mark on the object already names it; a second label would say it twice.
     const marked = this.overlays.marks
       ? this.marks.map((m) => this.grid.worldToIndex(m.ra, m.dec)).filter(Boolean).map((g) => this.toCanvas(g[0], g[1]))
@@ -705,7 +709,8 @@ export class SkyView {
     ctx.font = this.fonts.compass;
     ctx.textBaseline = 'middle';
     this.catalog.forEach((o, k) => {
-      const g = this.grid.worldToIndex(o.ra, o.dec);
+      const at = epoch == null ? o : propagate(o, epoch, 2000);
+      const g = this.grid.worldToIndex(at.ra, at.dec);
       if (!g) return;
       const [x, y] = this.toCanvas(g[0], g[1]);
       if (x < 4 || y < 4 || x > this.cssW - 4 || y > this.cssH - 4) return;
@@ -716,6 +721,8 @@ export class SkyView {
       ctx.globalAlpha = 1;
       this.hits.push({ kind: 'catalog', x, y, item: o });
       if (k >= LABELLED || marked.some(([mx, my]) => Math.hypot(mx - x, my - y) < 14)) return;
+      // The field's own target is already named in its own words.
+      if (target && Math.hypot((deltaRA(at.ra, target.ra) * Math.cos((at.dec * Math.PI) / 180)), at.dec - target.dec) * 3600 < 10) return;
 
       const text = shortName(o.name);
       const w = ctx.measureText(text).width;
@@ -1179,6 +1186,34 @@ export class SkyView {
    * flux-weighted centre. Used to turn a click into a measured position in every
    * visit, which is what makes a drift number honest rather than eyeballed.
    */
+  /**
+   * Whether a visit could have shown the spot at all: the spot lies inside
+   * its frame with room for the measurement's ring, and most of the pixels
+   * there hold sky rather than a blank. A saturated core, blanked around
+   * OVERFLOW pixels near it, still counts: the star was there, only too bright.
+   */
+  covers(visit, ra, dec, boxPixels = 2) {
+    const g = this.grid.worldToIndex(ra, dec);
+    if (!g) return false;
+    const { width: W, height: H, data, quality } = visit.stamp;
+    const perPixel = DETECTOR_ARCSEC / (this.grid.scale * 3600);
+    const r = Math.max(2, Math.round(boxPixels * perPixel));
+    const out = r + Math.max(1, Math.round(perPixel)) + Math.max(3, Math.round(1.5 * perPixel));
+    const ci = Math.round(g[0]);
+    const cj = Math.round(g[1]);
+    if (ci - out < 0 || cj - out < 0 || ci + out >= W || cj + out >= H) return false;
+    if (quality && coreQuality(quality, W, H, ci, cj, out).overflow) return true;
+    let sky = 0;
+    let all = 0;
+    for (let j = cj - r; j <= cj + r; j++) {
+      for (let i = ci - r; i <= ci + r; i++) {
+        all += 1;
+        if (data[j * W + i] === data[j * W + i]) sky += 1;
+      }
+    }
+    return sky * 2 >= all;
+  }
+
   measure(visit, ra, dec, { boxPixels = 2, minSnr = 5, orLimit = false } = {}) {
     const g = this.grid.worldToIndex(ra, dec);
     if (!g) return null;
@@ -1350,17 +1385,23 @@ export class SkyView {
    */
   trackMark(ra, dec) {
     const track = [];
+    let total = 0;
     for (const v of this.visits) {
+      // A visit that never saw the spot — off its frame, or the spot blanked
+      // by the pipeline's flags — says nothing about whether it is there. Counted
+      // against it, a steady star found in 36 of 38 visits read as one that
+      // comes and goes.
+      if (!this.covers(v, ra, dec)) continue;
+      total += 1;
       const m = this.measure(v, ra, dec);
       if (m) track.push({ ...m, band: v.frame.band, sharp: m.saturated ? null : sharpnessOf(v, m) });
     }
 
-    const total = this.visits.length;
     const seen = track.length;
     // The detector's pixel, not the grid's: the grid is cut finer than the
     // detector, and resampling finely does not make the astrometry finer.
     const pixelArcsec = DETECTOR_ARCSEC;
-    const result = { track, seen, total, kind: 'none', pixelArcsec };
+    const result = { track, seen, total, loaded: this.visits.length, kind: 'none', pixelArcsec };
     if (!seen) return result;
 
     // Magnitudes run backwards: the smaller number is the brighter visit.

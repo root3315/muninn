@@ -751,16 +751,19 @@ export async function surveySources(kind, { ra, dec, radiusDeg, limit }, { signa
  * ahead of the thousand star clusters catalogued inside it.
  */
 export async function fieldObjects({ ra, dec, radiusDeg }, { signal, limit = 25 } = {}) {
-  const body = await simbadTap(`SELECT TOP 400 main_id, otype, ra, dec, nbref, allfluxes.J AS j, allfluxes.V AS v
+  const body = await simbadTap(`SELECT TOP 400 main_id, otype, ra, dec, nbref, allfluxes.J AS j, allfluxes.V AS v, pmra, pmdec
     FROM basic LEFT JOIN allfluxes ON oid = allfluxes.oidref
     WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', ${ra.toFixed(6)}, ${dec.toFixed(6)}, ${radiusDeg.toFixed(5)})) = 1
     ORDER BY nbref DESC`, 'json', signal);
-  return (body.data ?? []).map(([name, otype, ora, odec, refs, j, v]) => {
+  return (body.data ?? []).map(([name, otype, ora, odec, refs, j, v, pmra, pmdec]) => {
     const kind = String(otype ?? '').trim();
     return {
       name: String(name).trim().replace(/\s+/g, ' '), otype: kind, family: simbadFamily(kind),
       ra: Number(ora), dec: Number(odec), refs: Number(refs) || 0,
       mag: j ?? v ?? null, magBand: j != null ? 'J' : v != null ? 'V' : null,
+      // SIMBAD's positions are for J2000; the motion carries a fast star to
+      // the visit's date, where the picture shows it.
+      pmRA: pmra == null ? null : Number(pmra), pmDE: pmdec == null ? null : Number(pmdec),
     };
   })
     .filter((o) => Number.isFinite(o.ra) && Number.isFinite(o.dec) && !NOT_A_POINT.has(o.otype))

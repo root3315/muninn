@@ -44,7 +44,7 @@ function visit({ mjd = 1, saturated = false, hole = 6, overflow = 2, quality = t
 const measureAt = (v, i, j) => SkyView.prototype.measure.call({ grid }, v, ...grid.indexToWorld(i, j));
 const measure = (v) => measureAt(v, MID, MID);
 const track = (visits) => SkyView.prototype.trackMark.call(
-  { grid, visits, measure: SkyView.prototype.measure }, ...grid.indexToWorld(MID, MID),
+  { grid, visits, measure: SkyView.prototype.measure, covers: SkyView.prototype.covers }, ...grid.indexToWorld(MID, MID),
 );
 
 test('the quality plane is read for overflow and holes around a point', () => {
@@ -140,4 +140,14 @@ test('the display whitens overflow pixels and fills the core they wall in; nothi
   assert.equal(img.data[3], 0, 'a blank out in the sky stays blank');
   assert.equal(grey(6, 6), grey(6, 5), 'the sky is the sky');
   assert.deepEqual(data, before, 'the measured data are not touched');
+});
+
+test('a visit that never saw the spot is not counted against a steady star', () => {
+  const steady = [1, 2, 3, 4, 5].map((k) => visit({ mjd: 60000 + k }));
+  const blank = visit({ mjd: 60010 });
+  blank.stamp.data.fill(NaN);
+  const a = track([...steady, blank]);
+  assert.equal(a.kind, 'fixed');
+  assert.equal(a.total, 5);
+  assert.equal(a.loaded, 6);
 });
