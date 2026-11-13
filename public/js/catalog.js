@@ -29,6 +29,7 @@
 import { deadline, CATALOG_DEADLINE_MS, RELAY_DEADLINE_MS, SEARCH_DEADLINE_MS } from './net.js';
 import {
   CATALOGUES, ROW_CAP, coneQuery, parseGaiaRow, parseWiseRow, parseCatwiseRow, measuredMotion, cutToCap,
+  propagate, GAIA_EPOCH, CATWISE_EPOCH,
 } from './overlay.js';
 import { parseCsv } from './csv.js';
 import { mergeBodies } from './sbident.js';
@@ -400,9 +401,9 @@ const brightest = (rows, key) => rows
   .filter((r) => Number.isFinite(r.sep))
   .sort((a, b) => (a[key] ?? 99) - (b[key] ?? 99) || a.sep - b.sep)[0] ?? null;
 
-async function askSimbad(ra, dec, signal) {
+async function askSimbad(ra, dec, signal, arcsec = 8) {
   const body = await tap(SIMBAD_TAP, `SELECT TOP 8 main_id, otype, ${sepCol('ra', 'dec', ra, dec)}, allfluxes.J AS j, allfluxes.V AS v, allfluxes.G AS g
-    FROM basic LEFT JOIN allfluxes ON oid = allfluxes.oidref WHERE ${cone('ra', 'dec', ra, dec, 8)}`, 'json', signal);
+    FROM basic LEFT JOIN allfluxes ON oid = allfluxes.oidref WHERE ${cone('ra', 'dec', ra, dec, arcsec)}`, 'json', signal);
   const rows = (body.data ?? []).map(([name, otype, sep, j, v, g]) => ({
     name: String(name).trim().replace(/\s+/g, ' '), otype: String(otype ?? '').trim(), sep: Number(sep),
     mag: j ?? v ?? g ?? null, magBand: j != null ? 'J' : v != null ? 'V' : g != null ? 'G' : null,
@@ -422,57 +423,124 @@ export function arcsecBetween(ra1, dec1, ra2, dec2) {
 /** How far a marked source is looked around in each catalogue: one SPHEREx pixel. */
 const NEAR_ARCSEC = 6;
 
+/** The fastest proper motion of any star, Barnard's 10.4″ a year, rounded up. */
+const MAX_PM_ARCSEC = 11;
+
 /**
- * One catalogue's rows around a marked spot, each with its distance from it
- * (`sep`) and the archive that answered (`via`). The distance is worked out
- * here, so IRSA and VizieR need ask nothing different.
+ * The epochs the fixed-position catalogues were observed at, and how far
+ * either side of that their sources were seen: a star that moves is only
+ * where its catalogue says within that spread.
  */
-async function nearby(kind, ra, dec, signal, [raCol, decCol]) {
-  const { rows, via } = await catalogueRows(kind, { ra, dec, radiusDeg: NEAR_ARCSEC / 3600, top: 8 }, { signal });
-  return rows.map((r) => ({ r, via, sep: arcsecBetween(ra, dec, num(r[raCol]) ?? NaN, num(r[decCol]) ?? NaN) }));
+const EPOCHS = {
+  twomass: { at: 1999.5, spread: 2 },   // 2MASS, 1997–2001
+  wise: { at: 2010.5, spread: 0.6 },    // AllWISE coadds, 2010 Jan – 2011 Feb
+  simbad: { at: 2000.0, spread: 0 },    // SIMBAD and VSX positions: ICRS at J2000
+};
+
+/**
+ * One catalogue's rows around a spot, each with its distance from it (`sep`)
+ * and the archive that answered (`via`). The distance is worked out here,
+ * so IRSA and VizieR need ask nothing different.
+ */
+async function nearby(kind, ra, dec, signal, [raCol, decCol], arcsec = NEAR_ARCSEC) {
+  const { rows, via } = await catalogueRows(kind, { ra, dec, radiusDeg: arcsec / 3600, top: 8 }, { signal });
+  return rows.map((r) => ({ r, via, sep: arcsecBetween(ra, dec, num(r[raCol]) ?? NaN, num(r[decCol]) ?? NaN) }))
+    .filter((x) => x.sep <= arcsec);
 }
 
-async function askGaia(ra, dec, signal) {
-  const rows = (await nearby('gaia', ra, dec, signal, ['RA_ICRS', 'DE_ICRS'])).map(({ r, via, sep }) => ({
-    id: r.Source, mag: num(r.Gmag), sep, via, variable: /^VARIABLE/.test(r.VarFlag),
-    pStar: num(r.PSS), pGalaxy: num(r.PGal), pQuasar: num(r.PQSO), plx: num(r.Plx), plxErr: num(r.e_Plx),
-  }));
-  return brightest(rows, 'mag');
+/**
+ * A catalogue with proper motions, matched at the visit's own date. Its
+ * positions are of their own epoch — Gaia's 2016.0, CatWISE's 2015.4 — and a
+ * fast star has moved since: Barnard's Star is 98″ from its Gaia position by
+ * 2025. So the circle asked for is as wide as the fastest star could have gone,
+ * every row is carried to `epoch`, and only then matched within a pixel.
+ */
+async function nearbyMoving(kind, ra, dec, epoch, from, signal, toRow) {
+  const reach = NEAR_ARCSEC + MAX_PM_ARCSEC * Math.abs(epoch - from);
+  const { rows, via } = await catalogueRows(kind, { ra, dec, radiusDeg: reach / 3600, top: 200 }, { signal });
+  return rows.map(toRow).filter(Boolean).map((row) => {
+    const now = propagate(row, epoch, from);
+    return { ...row, from, via, sep: arcsecBetween(ra, dec, now.ra, now.dec) };
+  }).filter((row) => row.sep <= NEAR_ARCSEC);
 }
 
-async function askTwoMass(ra, dec, signal) {
-  const rows = (await nearby('twomass', ra, dec, signal, ['RAJ2000', 'DEJ2000'])).map(({ r, via, sep }) => ({
+const gaiaRow = (r) => {
+  const ra = num(r.RA_ICRS);
+  const dec = num(r.DE_ICRS);
+  if (ra == null || dec == null) return null;
+  return {
+    id: r.Source, ra, dec, mag: num(r.Gmag), pmRA: num(r.pmRA), pmDE: num(r.pmDE),
+    variable: /^VARIABLE/.test(r.VarFlag), pStar: num(r.PSS), pGalaxy: num(r.PGal), pQuasar: num(r.PQSO),
+    plx: num(r.Plx), plxErr: num(r.e_Plx),
+  };
+};
+
+async function askGaia(ra, dec, signal, epoch) {
+  return brightest(await nearbyMoving('gaia', ra, dec, epoch, GAIA_EPOCH, signal, gaiaRow), 'mag');
+}
+
+/** CatWISE2020: whether the source moves, measured over ten years of WISE. */
+async function askCatwise(ra, dec, signal, epoch) {
+  const rows = await nearbyMoving('catwise', ra, dec, epoch, CATWISE_EPOCH, signal, parseCatwiseRow);
+  const best = brightest(rows, 'mag');
+  return best && { ...best, w1: best.mag, pm: measuredMotion(best) };
+}
+
+async function askTwoMass(ra, dec, signal, arcsec) {
+  const rows = (await nearby('twomass', ra, dec, signal, ['RAJ2000', 'DEJ2000'], arcsec)).map(({ r, via, sep }) => ({
     id: r['2MASS'], j: num(r.Jmag), h: num(r.Hmag), k: num(r.Kmag), sep, via,
   }));
   return brightest(rows, 'j');
 }
 
-async function askWise(ra, dec, signal) {
-  const rows = (await nearby('wise', ra, dec, signal, ['RAJ2000', 'DEJ2000'])).map(({ r, via, sep }) => ({
+async function askWise(ra, dec, signal, arcsec) {
+  const rows = (await nearby('wise', ra, dec, signal, ['RAJ2000', 'DEJ2000'], arcsec)).map(({ r, via, sep }) => ({
     id: r.AllWISE, w1: num(r.W1mag), w2: num(r.W2mag), sep, via,
   }));
   return brightest(rows, 'w1');
 }
 
-/** CatWISE2020: whether the source moves, measured over ten years of WISE. */
-async function askCatwise(ra, dec, signal) {
-  const rows = (await nearby('catwise', ra, dec, signal, ['ra_pm', 'dec_pm'])).map(({ r, via, sep }) => {
-    const row = parseCatwiseRow(r);
-    return row && { id: row.id, w1: row.mag, w2: row.w2, pm: measuredMotion(row), sep, via };
-  }).filter(Boolean);
-  return brightest(rows, 'w1');
-}
-
-async function askVsx(ra, dec, signal) {
+async function askVsx(ra, dec, signal, arcsec = 10) {
   const rows = parseCsv(await tap(VIZIER_TAP, `SELECT TOP 4 Name, Type, Period, max, min, ${sepCol('RAJ2000', 'DEJ2000', ra, dec)}
-    FROM "B/vsx/vsx" WHERE ${cone('RAJ2000', 'DEJ2000', ra, dec, 10)}`, 'csv', signal))
+    FROM "B/vsx/vsx" WHERE ${cone('RAJ2000', 'DEJ2000', ra, dec, arcsec)}`, 'csv', signal))
     .map((r) => ({ name: r.Name.replace(/\s+/g, ' '), type: r.Type, period: num(r.Period), max: num(r.max), min: num(r.min), sep: num(r.sep) }))
     .sort((a, b) => a.sep - b.sep);
   return rows[0] ?? null;
 }
 
 /**
- * What the catalogues say about a marked spot, all asked at once.
+ * The star found moving, as a position at its catalogue's epoch and a
+ * motion, or null. Gaia first; CatWISE for what Gaia cannot see, the cold
+ * brown dwarfs WISE 0855 belongs to — and only a motion CatWISE measured at
+ * five times its error, since a noise-sized one would send the other
+ * catalogues to the wrong place.
+ */
+export function motionAnchor(gaia, catwise) {
+  const fromGaia = gaia && Number.isFinite(gaia.pmRA) && Number.isFinite(gaia.pmDE)
+    ? { ra: gaia.ra, dec: gaia.dec, pmRA: gaia.pmRA, pmDE: gaia.pmDE, from: gaia.from } : null;
+  const fromWise = catwise?.pm != null
+    ? { ra: catwise.ra, dec: catwise.dec, pmRA: catwise.pmRA, pmDE: catwise.pmDE, from: catwise.from } : null;
+  // A brown dwarf Gaia cannot see shares its pixel with some faint, still
+  // star Gaia does see; the motion that matters is the one CatWISE measured.
+  const fast = (a) => (a ? Math.hypot(a.pmRA, a.pmDE) / 1000 : -1);
+  if (fromWise && fast(fromWise) > fast(fromGaia) + 0.5) return fromWise;
+  return fromGaia ?? fromWise;
+}
+
+/**
+ * Where to ask a fixed-epoch catalogue, and how wide: the anchor carried back
+ * to that catalogue's epoch, with room for the years its sources span; or,
+ * with no anchor, the marked spot itself.
+ */
+export function askedAt(anchor, ra, dec, { at, spread }, base) {
+  if (!anchor) return { ra, dec, arcsec: base };
+  const there = propagate(anchor, at, anchor.from);
+  const pm = Math.hypot(anchor.pmRA, anchor.pmDE) / 1000;
+  return { ra: there.ra, dec: there.dec, arcsec: base + pm * spread };
+}
+
+/**
+ * What the catalogues say about a marked spot.
  *
  *   SIMBAD     a name and a kind — star, galaxy, quasar;
  *   Gaia DR3   the faint stars SIMBAD never named, whether Gaia saw it vary,
@@ -484,21 +552,47 @@ async function askVsx(ra, dec, signal) {
  *   VSX        the variable-star index: for a source that comes and goes,
  *              the first question is whether it is simply known to vary.
  *
+ * Asked in two steps. Gaia and CatWISE carry motions, so they are matched at
+ * `epoch`, the date of the visits; whatever they find moving is then carried
+ * back to the epoch of each other catalogue and asked about there. Without
+ * that, the challenge's own fast stars — Barnard's, WISE 0855, ε Indi — were
+ * matched to whatever faint thing sat at today's position in a 1999 catalogue.
+ *
  * A SPHEREx pixel is 6.15″, so several catalogued things can share one; the
  * brightest is the one SPHEREx saw, so that is the one reported. Each answer is
  * on its own: one service down leaves the others standing, and says so.
  */
-export async function identifySource({ ra, dec }, { signal } = {}) {
-  const asks = { simbad: askSimbad, gaia: askGaia, tmass: askTwoMass, wise: askWise, catwise: askCatwise, vsx: askVsx };
-  const keys = Object.keys(asks);
-  const settled = await Promise.allSettled(keys.map((k) => asks[k](ra, dec, signal)));
+export async function identifySource({ ra, dec, epoch = 2026 }, { signal } = {}) {
   const out = { failed: [] };
-  settled.forEach((s, i) => {
-    if (s.status === 'fulfilled') out[keys[i]] = s.value;
-    else { out[keys[i]] = null; out.failed.push(keys[i]); }
-  });
-  if (out.failed.length === keys.length) throw new Error('No catalogue answered');
-  out.any = keys.some((k) => out[k]);
+  const take = (key, s) => {
+    if (s.status === 'fulfilled') out[key] = s.value;
+    else { out[key] = null; out.failed.push(key); }
+  };
+  const [gaia, catwise] = await Promise.allSettled([
+    askGaia(ra, dec, signal, epoch), askCatwise(ra, dec, signal, epoch),
+  ]);
+  take('gaia', gaia);
+  take('catwise', catwise);
+
+  const anchor = motionAnchor(out.gaia, out.catwise);
+  const where = (kind, base) => askedAt(anchor, ra, dec, EPOCHS[kind], base);
+  const tm = where('twomass', NEAR_ARCSEC);
+  const wi = where('wise', NEAR_ARCSEC);
+  const sb = where('simbad', 8);
+  const vs = where('simbad', 10);
+  const rest = {
+    simbad: () => askSimbad(sb.ra, sb.dec, signal, sb.arcsec),
+    tmass: () => askTwoMass(tm.ra, tm.dec, signal, tm.arcsec),
+    wise: () => askWise(wi.ra, wi.dec, signal, wi.arcsec),
+    vsx: () => askVsx(vs.ra, vs.dec, signal, vs.arcsec),
+  };
+  const keys = Object.keys(rest);
+  (await Promise.allSettled(keys.map((k) => rest[k]()))).forEach((s, i) => take(keys[i], s));
+
+  const all = ['simbad', 'gaia', 'tmass', 'wise', 'catwise', 'vsx'];
+  if (out.failed.length === all.length) throw new Error('No catalogue answered');
+  out.any = all.some((k) => out[k]);
+  out.moved = anchor ? { epoch } : null;
   return out;
 }
 
