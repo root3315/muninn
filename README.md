@@ -634,8 +634,9 @@ of the image and read the verdict: one visit, named by SkyBoT as the asteroid.
 - **The archive caps large queries.** A cone at the ecliptic poles matches over 25 000
   frames and takes four minutes unserved. We ask for `MAXREC=500` per collection and say so
   in the interface when the list came back truncated.
-- **Ten visits at a time**, sampled to span the full time baseline rather than taking the
-  first ten. Fields with more visits than that are listed but not all loaded.
+- **Sixty visits at most, unless asked.** A field opens with ten visits spread over the whole
+  baseline, then reads the rest in the background, widest gaps first, up to sixty (thirty on a
+  phone); beyond that a "Load all" control reads the remainder. The polar fields have over two hundred.
 - **Brightness across bands is not comparable.** SPHEREx is a spectral survey with a linear
   variable filter; the wavelength at a given pixel depends on where it falls on the
   detector. The band filter and the per-band wavelength labels exist for this reason.
@@ -653,9 +654,11 @@ of the image and read the verdict: one visit, named by SkyBoT as the asteroid.
   the light outside the aperture, and it does not match wavelengths between visits.
 - **The distance bound assumes a circular orbit in the ecliptic.** It is a ceiling from a rate,
   not an orbit fit.
-- **The relay is not hardened for abuse.** It caps twelve lookups in flight, but has no per-client
-  limit and never prunes its disk cache.
-- **No video yet.** The submission's 30-second recording is not made; the ten slides and their appendix are.
+- **The relay is a small public service.** Each kind of question has its own cap on lookups in
+  flight, each visitor 180 archive questions a minute, and the disk cache is swept every ten
+  minutes (expired answers, then oldest first above 300 MB). It is not built for heavy traffic.
+- **Video.** A 30-second demo and a two-minute walkthrough exist in English and Russian; they
+  are linked from the project page rather than kept in the repository.
 - **Cosmic rays look like transients.** They are single-frame, sharp, and common. The ones
   the pipeline caught are masked through `FLAGS`; the ones it missed are not. Anything
   seen exactly once still deserves that explanation first.
