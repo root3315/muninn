@@ -5,7 +5,7 @@
 NASA Space Apps Challenge 2026 — *Planet X and SPHEREx* · team **Yggdrasil**
 
 **Live: <https://muninn.mydevbox.xyz>** · open *(152) Atala* under the search and press Space.
-**The talk, eight slides: <https://muninn.mydevbox.xyz/talk.html>** — its first slide reads real frames
+**The talk, seventeen slides: <https://muninn.mydevbox.xyz/talk.html>** — its first slide reads real frames
 from the archive as you watch.
 
 Three things it shows on real data:
@@ -361,7 +361,33 @@ read as fixed. Across a year it would move, but **the brightness is out of reach
 anyway — 17.61 AB per visit against a prediction of V 22.6–24.3. And the tracker as built measures each
 place in a fixed box about ±12″ across, while a body at 400–800 AU shifts by
 8–17′ between SPHEREx's two visits a year: it follows a mover within one season,
-not across seasons. Linking the seasons at a trial distance is the next step.
+not across seasons. That is what **Link across seasons** on a mark (or a Hunter X
+candidate) is for. It takes the mark's measured position in its own season, places a body
+on that line of sight at each trial distance from 30 to 2000 AU, and works out where the
+Earth's move to the far side of the Sun would put it at each visit of the next season — a
+"parallax arc", drawn on the plate with ticks at 50, 100, 200, 500 and 1000 AU. It reads
+that season's visits, finds every ≥ 5σ source with the same photometry the marks use, and
+keeps one on the arc only if the same spot is empty (nothing even at 3σ) in every visit
+of the first season — a star there in both seasons is a star. With two or more visits in
+the second season, the same trial distance has to fit a detection in at least two of them,
+moved between them as the arc says. The answer is either "candidate link, check by eye:
+d ≈ X AU (range)" with its magnitude, or "nothing along the arc for d in [a, b] AU, down to
+the 5σ one-visit limit", and never more than that (`public/js/seasons.js`).
+
+Its limits are part of the answer. The observer is the Earth (the Earth–Moon barycentre
+of the ephemeris), not SPHEREx: its low orbit moves the line of sight by 0.3″ at 30 AU,
+a twentieth of a pixel. The body's own orbit cannot be neglected — circular speed over
+half a year carries a body at 500 AU 58″ (9.4 pixels), at 300 AU 125″, and only past
+~2230 AU would it stay under a pixel — and its direction is unknown, so each trial
+distance allows a disc of that radius around its arc point. That is a fixed fraction of
+the parallax, about π / (2√d): 7% at 500 AU, 16% at 100, 29% at 30, and it is why the
+distance comes as a range. And only the part of the arc inside the open field can be
+checked; the card says which distances that is. A 36′ field centred on the mark holds the
+arc from about 270 AU outward on the Atala field (the jump is 23′ at 300 AU, 13.7′ at 500, 3.4′ at
+2000); nearer distances need a wider field. Checked against a synthetic two-season sky
+(`tests/seasons.test.mjs`): a source placed at 300 AU links at 300 AU (range 269–321 with
+40″ of its own motion), a star on the arc is turned away in every visit, and a peak in one
+visit alone links nothing.
 That is a far more useful account than either "we found it" or "we cannot look".
 
 ### What this can and cannot find
@@ -598,7 +624,7 @@ of the image and read the verdict: one visit, named by SkyBoT as the asteroid.
   not an orbit fit.
 - **The relay is not hardened for abuse.** It caps twelve lookups in flight, but has no per-client
   limit and never prunes its disk cache.
-- **No video yet.** The submission's 30-second recording is not made; the eight slides are.
+- **No video yet.** The submission's 30-second recording is not made; the seventeen slides are.
 - **Cosmic rays look like transients.** They are single-frame, sharp, and common. The ones
   the pipeline caught are masked through `FLAGS`; the ones it missed are not. Anything
   seen exactly once still deserves that explanation first.
@@ -655,7 +681,7 @@ public/
   js/votable.js           just enough IVOA VOTable for both services
   js/i18n.js              English and Russian
   js/app.js               state, wiring, the loading choreography
-  js/talk.js              the eight slides at talk.html; slide 1 reads frames live
+  js/talk.js              the seventeen slides at talk.html; slide 1 reads frames live
   data/targets.json       the ten opening fields, with counts from the archive
   data/fields/*.json      their frame indexes, pre-resolved so they open in ~80 ms
 tools/                    the scripts that verified all of the above

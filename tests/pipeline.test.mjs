@@ -56,3 +56,20 @@ test('a server that ignores Range is refused, not decoded as the wrong rows', as
     /Range not honoured/,
   );
 });
+
+test('a saturated core is filled for display, and the blank beyond the frame is not', async () => {
+  const { fillCores } = await import('../public/js/render.js');
+  const N = NaN;
+  // 6×4: a NaN core walled by bright pixels (9), and a NaN edge column meeting sky (1).
+  const data = Float32Array.from([
+    9, 9, 9, 1, 1, N,
+    9, N, 9, 1, 1, N,
+    9, N, 9, 1, 1, N,
+    9, 9, 9, 1, 1, N,
+  ]);
+  const out = fillCores(data, 6, 8);
+  assert.equal(out[7], 9);
+  assert.equal(out[13], 9);
+  assert.ok(Number.isNaN(out[5]) && Number.isNaN(out[23]), 'the edge stays blank');
+  assert.ok(Number.isNaN(data[7]), 'the data themselves are untouched');
+});

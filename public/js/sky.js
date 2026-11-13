@@ -83,6 +83,9 @@ export class SkyView {
        filed under a position drifted onto the wrong visit when one landed early. */
     this.knownObjects = new Map();
     this.marks = [];
+    /* One mark's parallax arc into another season, while it is being looked
+       at: { points, ticks, match, tickLabel } in sky coordinates, or null. */
+    this.link = null;
     /* Words the picture needs in the reader's language, set by the page. */
     this.labels = { rate: (r) => `${r.toFixed(r < 10 ? 1 : 0)}″/h` };
     this.hover = null;
@@ -206,6 +209,7 @@ export class SkyView {
     // wipe shows it as B.
     this.ref = null;
     this.useRef = false;
+    this.link = null;
     this.draw();
   }
 
@@ -464,6 +468,7 @@ export class SkyView {
       if (this.overlays.catalog) this.drawCatalog(ctx);
       this.drawSurveys(ctx);
       if (this.overlays.sectors || this.sector) this.drawSectors(ctx);
+      if (this.link) this.drawLink(ctx);
       if (this.overlays.marks) this.drawMarks(ctx);
       if (this.overlays.compass) this.drawCompass(ctx);
       if (this.hover) this.drawCrosshair(ctx);
@@ -822,6 +827,68 @@ export class SkyView {
     ctx.restore();
   }
 
+  /**
+   * Where a marked source would be in another season at each trial distance:
+   * a thin line, ticks at round distances, and a ring on the point that
+   * matched, if one did. Clipped to the plate, since only that part was looked at.
+   */
+  drawLink(ctx) {
+    const { points, ticks, match, tickLabel } = this.link;
+    const at = (p) => {
+      const g = this.grid.worldToIndex(p.ra, p.dec);
+      return g ? this.toCanvas(g[0], g[1]) : null;
+    };
+    const xy = points.map(at);
+    const { offX, offY, gw, gh, scale } = this.view;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(offX, offY, gw * scale, gh * scale);
+    ctx.clip();
+    ctx.strokeStyle = this.colors.accent;
+    ctx.lineWidth = 1.2;
+    ctx.globalAlpha = 0.9;
+    ctx.beginPath();
+    let open = false;
+    for (const q of xy) {
+      if (!q) { open = false; continue; }
+      if (open) ctx.lineTo(q[0], q[1]); else ctx.moveTo(q[0], q[1]);
+      open = true;
+    }
+    ctx.stroke();
+
+    // A tick across the line at each round distance, its label to one side.
+    ctx.font = this.fonts.compass;
+    ctx.textBaseline = 'middle';
+    for (const tk of ticks) {
+      const q = at(tk.point);
+      const r = at(tk.next);
+      if (!q || !r) continue;
+      const len = Math.hypot(r[0] - q[0], r[1] - q[1]) || 1;
+      const nx = -(r[1] - q[1]) / len;
+      const ny = (r[0] - q[0]) / len;
+      ctx.globalAlpha = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(q[0] - nx * 4, q[1] - ny * 4);
+      ctx.lineTo(q[0] + nx * 4, q[1] + ny * 4);
+      ctx.stroke();
+      const text = tickLabel(tk.d);
+      const w = ctx.measureText(text).width;
+      const lx = q[0] + nx * 10 - (nx < 0 ? w : 0);
+      this.label(ctx, text, lx, q[1] + ny * 10, this.colors.accent);
+    }
+    if (match) {
+      const q = at(match);
+      if (q) {
+        ctx.globalAlpha = 1;
+        ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ring(ctx, q[0], q[1], 9);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
   /** Where the compass and scale bar go, and the box they fill. */
   compassLayout(ctx) {
     const pad = 20;
@@ -1079,6 +1146,46 @@ export class SkyView {
       // of grid samples, so it is a little more than the nominal 3 × 3.
       aperturePx: (2 * half + 1) ** 2 / (perPixel * perPixel),
     };
+  }
+
+  /**
+   * Everything in one visit that stands at least `minSnr` above its own
+   * background, measured the way a mark is. Local maxima are the candidates;
+   * the same photometry decides, so a source here and a mark on it agree.
+   */
+  sources(visit, { minSnr = 5 } = {}) {
+    const { width: W, height: H, data } = visit.stamp;
+    const sigma = visit.stamp.meta?.detectorSigma;
+    visit.sorted ??= sortedFinite(data);
+    const sorted = visit.sorted;
+    if (!(sigma > 0) || !sorted.length) return [];
+    const median = sorted[sorted.length >> 1];
+    // A little below the bar the measurement sets, since the local background
+    // differs from the field's median; the measurement has the last word.
+    const floor = median + 0.8 * minSnr * sigma;
+    const perPixel = DETECTOR_ARCSEC / (this.grid.scale * 3600);
+    const out = [];
+    for (let j = 1; j < H - 1; j++) {
+      for (let i = 1; i < W - 1; i++) {
+        const v = data[j * W + i];
+        if (!(v > floor)) continue;
+        let top = true;
+        for (let dj = -1; dj <= 1 && top; dj++) {
+          for (let di = -1; di <= 1; di++) {
+            if ((di || dj) && data[(j + dj) * W + i + di] > v) { top = false; break; }
+          }
+        }
+        if (!top) continue;
+        const [ra, dec] = this.grid.indexToWorld(i, j);
+        const m = this.measure(visit, ra, dec, { minSnr });
+        if (!m) continue;
+        const g = this.grid.worldToIndex(m.ra, m.dec);
+        // One source, found from two neighbouring maxima, is kept once.
+        if (out.some((o) => Math.hypot(o.i - g[0], o.j - g[1]) < perPixel)) continue;
+        out.push({ ...m, i: g[0], j: g[1] });
+      }
+    }
+    return out;
   }
 
   /**

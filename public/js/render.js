@@ -130,9 +130,40 @@ export function rampFromToken(el, token) {
  * `blank` is the colour used where the detector had no data (NaN) — the frame
  * edges after reprojection, and masked pixels.
  */
+/**
+ * For the eye only: the hole the pipeline leaves in a saturated star's core,
+ * filled from its rim. A bright star came out as a white disc with a black
+ * square in it, which reads as a broken picture. Only holes walled in by
+ * pixels at or above the top of the stretch are filled, so the blank beyond
+ * the frame's edge, which meets sky, stays blank; the measured data are not
+ * touched.
+ */
+export function fillCores(data, width, ceiling, passes = 12) {
+  let cur = data;
+  for (let pass = 0; pass < passes; pass++) {
+    let next = null;
+    for (let i = 0; i < cur.length; i++) {
+      if (cur[i] === cur[i]) continue;
+      const x = i % width;
+      let best = -Infinity;
+      for (const j of [x > 0 ? i - 1 : -1, x < width - 1 ? i + 1 : -1, i - width, i + width]) {
+        const v = j >= 0 && j < cur.length ? cur[j] : NaN;
+        if (v === v && v >= ceiling && v > best) best = v;
+      }
+      if (best === -Infinity) continue;
+      next ??= Float32Array.from(cur);
+      next[i] = best;
+    }
+    if (!next) break;
+    cur = next;
+  }
+  return cur;
+}
+
 export function paint(target, data, lut, {
   lo, hi, stretch = 'asinh', softening, blank = [0, 0, 0], blankAlpha = 0,
 } = {}) {
+  data = fillCores(data, target.width, hi);
   const fn = STRETCHES[stretch] ?? STRETCHES.asinh;
   const span = hi - lo || 1e-6;
   const px = target.data;

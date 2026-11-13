@@ -99,7 +99,7 @@ function eccentricAnomaly(Mdeg, e) {
 }
 
 /** Heliocentric position in the J2000 ecliptic frame, in au. */
-function heliocentric(name, T) {
+export function heliocentric(name, T) {
   const el = ELEMENTS[name];
   const a = el.a[0] + el.a[1] * T;
   const e = el.e[0] + el.e[1] * T;
