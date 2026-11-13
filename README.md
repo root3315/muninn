@@ -183,11 +183,11 @@ reason the threshold is stated. It crosses the pixel once the baseline passes 21
 | resource | how Muninn uses it |
 | --- | --- |
 | NASA/IPAC IRSA, SPHEREx | every pixel (DR1 and QR3 Level-2 images), the frame index, the FLAGS plane; also AllWISE, CatWISE2020, 2MASS and Gaia DR3 catalogues and AllWISE Atlas images. IRSA's SPHEREx cutout service was measured and not used: 4 MB and 13–21 s a frame, against 1–3 MB in a few seconds by byte range from the S3 mirror |
-| SPHEREx Tutorial Notebooks | the reference for the DR1 file layout: the IMAGE, FLAGS (Rice-compressed from DR1 on) and WCS-WAVE extensions read in `stamp.js` |
+| SPHEREx Tutorial Notebooks | the reference for the DR1 file layout: the IMAGE, FLAGS (Rice-compressed from DR1 on) and WCS-WAVE extensions read in `stamp.js`; `notebooks/verify-with-astropy.ipynb` follows them to check Muninn's numbers with astropy |
 | WiseView | the model for the wipe between a SPHEREx visit and the AllWISE picture of the same field |
 | Gaia mission data (DR3) | Gaia DR3 from MAST for a marked star, and from IRSA or VizieR for the overlay, carried by proper motion to the date of each visit |
 | CADC (CSA partner) | the "In other archives" panel; NEOSSat observations of a field are counted there |
-| NEOSSat pages, tutorial and dataset | reached through CADC, where the NEOSSat observations are indexed |
+| NEOSSat pages, tutorial and dataset | reached through CADC, where the NEOSSat observations are indexed; the same notebook follows the NEOSSat Data Tutorial to open a frame of Barnard's Star |
 
 ### When a new SPHEREx release lands
 
