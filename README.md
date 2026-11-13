@@ -540,8 +540,9 @@ What is left is a real search rather than a consolation prize:
   saturated in most exposures is at the edge of saturation; both are drawn
   hollow and kept out of the line and the light curve. Tried live: R Draconis
   and RW Aurigae are saturated in nearly every exposure, so neither gets a
-  light curve; a 2MASS star beside R Dra comes out steady within ±0.22 mag at
-  1.675 µm over five visits; (152) Atala, seen in one run, gives four D2 and
+  light curve; a 2MASS star beside R Dra comes out steady within ±0.14 mag at
+  1.67 µm over five visits (±0.22 mag in another run, which had other visits on
+  the plate); (152) Atala, seen in one run, gives four D2 and
   four D5 points six minutes apart, 22 mJy at 1.5 µm falling to 5 mJy at
   4.3 µm; and an empty patch gives sixty 5σ limits of 0.2–0.7 mJy.
 
