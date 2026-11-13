@@ -10,8 +10,8 @@
 
 import { loadStamp } from './stamp.js';
 import { TangentGrid } from './wcs.js';
-import { skySigma } from './depth.js';
-import { limits } from './render.js';
+import { skySigmaFromSorted } from './depth.js';
+import { sortedFinite, limitsFromSorted, quantileTable } from './render.js';
 
 /** The white point the page opens with; a visit cut here needs no cut on arrival. */
 const DEFAULT_CLIP = 99.5;
@@ -32,11 +32,13 @@ self.addEventListener('message', async ({ data: msg }) => {
     // detector patch carries them for sharpness.js); the pixels are moved
     // rather than copied.
     const { wcs, ...plain } = stamp;
-    // Both of these sort every pixel of the visit, and on the page's thread
-    // they were the stall each time a visit landed — felt as a hitch in the
-    // blink and in anything else moving. Done here, they arrive with it.
-    plain.sigma = skySigma(plain.data);
-    plain.cut = { key: DEFAULT_CLIP, lim: limits(plain.data, { loPercent: 5, hiPercent: DEFAULT_CLIP }) };
+    // The noise, the opening cut and the table every later cut is read from
+    // all come from the pixels in order. Sorted once, here: on the page's
+    // thread each sort was a hitch in the blink as the visit landed.
+    const sorted = sortedFinite(plain.data);
+    plain.sigma = skySigmaFromSorted(sorted);
+    plain.cut = { key: DEFAULT_CLIP, lim: limitsFromSorted(sorted, { loPercent: 5, hiPercent: DEFAULT_CLIP }) };
+    plain.quantiles = quantileTable(sorted);
     self.postMessage({ id, stamp: plain }, [plain.data.buffer, plain.quality.buffer, plain.detector.data.buffer]);
   } catch (err) {
     self.postMessage({ id, error: err?.name === 'AbortError' ? 'AbortError' : String(err?.message ?? err) });

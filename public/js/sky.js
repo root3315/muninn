@@ -18,7 +18,7 @@
  */
 
 import { DETECTOR_ARCSEC, magAB } from './depth.js';
-import { limitsFromSorted, limitsFromTable, quantileTable, sortedFinite, paint, paintDifference, rampFromToken, resolveColor } from './render.js';
+import { limitsFromSorted, limitsFromTable, quantileTable, quantileAt, sortedFinite, paint, paintDifference, rampFromToken, resolveColor } from './render.js';
 import { SECTOR_COLS, SECTOR_ROWS, sectorBounds } from './sectors.js';
 import { deltaRA } from './wcs.js';
 import { coadd } from './stack.js';
@@ -341,7 +341,7 @@ export class SkyView {
   ownLimits(v) {
     const key = this.render.clip;
     if (v.cut?.key !== key) {
-      v.quantiles ??= quantileTable(sortedFinite(v.stamp.data));
+      v.quantiles ??= v.stamp.quantiles ?? quantileTable(sortedFinite(v.stamp.data));
       v.cut = { key, lim: limitsFromTable(v.quantiles, { loPercent: 5, hiPercent: key }) };
     }
     return v.cut.lim;
@@ -1308,9 +1308,9 @@ export class SkyView {
   sources(visit, { minSnr = 5 } = {}) {
     const { width: W, height: H, data } = visit.stamp;
     const sigma = visit.stamp.meta?.detectorSigma;
-    visit.quantiles ??= quantileTable(sortedFinite(data));
+    visit.quantiles ??= visit.stamp.quantiles ?? quantileTable(sortedFinite(data));
     if (!(sigma > 0) || !visit.quantiles.n) return [];
-    const median = visit.quantiles.at(50);
+    const median = quantileAt(visit.quantiles, 50);
     // A little below the bar the measurement sets, since the local background
     // differs from the field's median; the measurement has the last word.
     const floor = median + 0.8 * minSnr * sigma;

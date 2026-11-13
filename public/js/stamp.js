@@ -21,7 +21,12 @@ import { deadline, FRAME_DEADLINE_MS } from './net.js';
 import { parseWaveTable, wavelengthAt } from './spectrum.js';
 import { riceDecode } from './rice.js';
 
-const HEADER_PROBE = 65536;
+/**
+ * The first read of a file. SPHEREx's IMAGE data start at 25,920 or 28,800
+ * bytes, so 36 KB holds both headers with room; a file that needs more is
+ * read again at twice the size.
+ */
+const HEADER_PROBE = 36864;
 const MAX_HEADER = 1 << 20;
 
 async function fetchRange(url, start, end, signal) {
@@ -111,6 +116,12 @@ const FLAG_MASK = Object.values(MASK_BITS).reduce((m, bit) => m | (1 << bit), 0)
 const OVERFLOW_BIT = 1;
 export const QUALITY = { OVERFLOW: 1, HOLE: 2 };
 const FLAGS_HEADER_PROBE = 5 * 2880 * 4;
+/**
+ * A compressed FLAGS plane's row pointers, 8 bytes for each of the
+ * detector's 2040 rows, read with its header: the header ends where they
+ * begin, so one read in place of two, and a round trip off every frame.
+ */
+const FLAGS_POINTER_BYTES = 2048 * 8;
 
 /**
  * Read the FLAGS plane for the same detector rows as the image.
@@ -121,7 +132,7 @@ const FLAGS_HEADER_PROBE = 5 * 2880 * 4;
  */
 async function readFlags(url, img, rowFrom, rowTo, nx, signal) {
   const at = img.dataStart + padded(img.dataBytes ?? dataLength(img.cards));
-  let head = await fetchRange(url, at, at + FLAGS_HEADER_PROBE - 1, signal);
+  let head = await fetchRange(url, at, at + FLAGS_HEADER_PROBE + FLAGS_POINTER_BYTES - 1, signal);
   let hdr = readHeader(head, 0);
   if (!hdr) {
     head = await fetchRange(url, at, at + 4 * FLAGS_HEADER_PROBE - 1, signal);
@@ -130,7 +141,7 @@ async function readFlags(url, img, rowFrom, rowTo, nx, signal) {
   if (!hdr || String(hdr.cards.get('EXTNAME') ?? '').trim() !== 'FLAGS') return null;
   const dataAt = at + hdr.headerBytes;
   if (hdr.cards.get('ZIMAGE') === true) {
-    const tiles = await readRiceRows(url, hdr.cards, dataAt, rowFrom, rowTo, nx, signal);
+    const tiles = await readRiceRows(url, hdr.cards, dataAt, rowFrom, rowTo, nx, signal, { buf: head, at });
     return tiles && { values: tiles.values, bytes: head.byteLength + tiles.bytes };
   }
   if (hdr.cards.get('BITPIX') !== 32 || hdr.cards.get('NAXIS1') !== nx) return null;
@@ -148,7 +159,7 @@ async function readFlags(url, img, rowFrom, rowTo, nx, signal) {
  * stretch of heap they point into. Any other layout returns null, so the
  * frame is shown unmasked and says so, rather than masked wrongly.
  */
-async function readRiceRows(url, cards, dataAt, rowFrom, rowTo, nx, signal) {
+async function readRiceRows(url, cards, dataAt, rowFrom, rowTo, nx, signal, have = null) {
   if (String(cards.get('ZCMPTYPE') ?? '').trim() !== 'RICE_1') return null;
   if (cards.get('ZBITPIX') !== 32 || cards.get('ZNAXIS1') !== nx) return null;
   if (cards.get('ZTILE1') !== nx || (cards.get('ZTILE2') ?? 1) !== 1) return null;
@@ -160,7 +171,13 @@ async function readRiceRows(url, cards, dataAt, rowFrom, rowTo, nx, signal) {
     if (name === 'BYTEPIX' && cards.get(`ZVAL${k}`) !== 4) return null;
   }
 
-  const pointers = new DataView(await fetchRange(url, dataAt + (rowFrom - 1) * 8, dataAt + rowTo * 8 - 1, signal));
+  // The pointers come with the header's read when it reached them.
+  const ptrFrom = dataAt + (rowFrom - 1) * 8;
+  const ptrTo = dataAt + rowTo * 8;
+  const inHead = have && ptrTo - have.at <= have.buf.byteLength;
+  const pointers = inHead
+    ? new DataView(have.buf, ptrFrom - have.at, ptrTo - ptrFrom)
+    : new DataView(await fetchRange(url, ptrFrom, ptrTo - 1, signal));
   const rows = rowTo - rowFrom + 1;
   const tiles = [];
   for (let r = 0; r < rows; r++) tiles.push([pointers.getInt32(r * 8, false), pointers.getInt32(r * 8 + 4, false)]);
@@ -173,7 +190,7 @@ async function readRiceRows(url, cards, dataAt, rowFrom, rowTo, nx, signal) {
   tiles.forEach(([len, off], r) => {
     values.set(riceDecode(heap.subarray(off - from, off - from + len), nx, block), r * nx);
   });
-  return { values, bytes: pointers.byteLength + heap.byteLength };
+  return { values, bytes: (inHead ? 0 : pointers.byteLength) + heap.byteLength };
 }
 
 /** Blank, in place, every pixel of the rows read that the pipeline flagged. */

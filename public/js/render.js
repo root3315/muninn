@@ -75,7 +75,7 @@ export function limitsFromSorted(valid, opts = {}) {
 
 /** The cut, read off a quantileTable. */
 export function limitsFromTable(table, opts = {}) {
-  return limitsFrom((p) => table.at(p), table.n, opts);
+  return limitsFrom((p) => quantileAt(table, p), table.n, opts);
 }
 
 /**
@@ -83,7 +83,8 @@ export function limitsFromTable(table, opts = {}) {
  * pixels: the median and the noise points exactly, the white-point slider's
  * range (95 to 100) every 0.005, the rest every 0.1. Sixteen kilobytes a
  * visit, where the sorted copy was megabytes and so was thrown away — and
- * every step of the slider then sorted every visit again.
+ * every step of the slider then sorted every visit again. Plain arrays, so a
+ * worker can hand one over with the visit it read.
  */
 const FINE_FROM = 95;
 const FINE_STEP = 0.005;
@@ -94,15 +95,16 @@ export function quantileTable(sorted) {
   const pick = (p) => (n ? percentile(sorted, p) : NaN);
   const coarse = Float64Array.from({ length: 1001 }, (_, i) => pick(i / 10));
   const fine = Float64Array.from({ length: Math.round((100 - FINE_FROM) / FINE_STEP) + 1 }, (_, i) => pick(FINE_FROM + i * FINE_STEP));
-  const exact = new Map(EXACT.map((p) => [p, pick(p)]));
-  return {
-    n,
-    at(p) {
-      if (exact.has(p)) return exact.get(p);
-      if (p >= FINE_FROM) return fine[Math.min(fine.length - 1, Math.round((p - FINE_FROM) / FINE_STEP))];
-      return coarse[Math.max(0, Math.round(p * 10))];
-    },
-  };
+  const exact = Float64Array.from(EXACT, pick);
+  return { n, coarse, fine, exact };
+}
+
+/** The value at percentile `p`, read off a quantileTable. */
+export function quantileAt(table, p) {
+  const k = EXACT.indexOf(p);
+  if (k >= 0) return table.exact[k];
+  if (p >= FINE_FROM) return table.fine[Math.min(table.fine.length - 1, Math.round((p - FINE_FROM) / FINE_STEP))];
+  return table.coarse[Math.max(0, Math.round(p * 10))];
 }
 
 function limitsFrom(at, n, { loPercent = 5, hiPercent = 99.5, floorSigma = 1 } = {}) {

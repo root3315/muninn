@@ -59,9 +59,15 @@ export function skySigma(data) {
     // rather than through Number.isFinite because this runs once per pixel.
     if (v === v && v > -Infinity && v < Infinity) valid[n++] = v;
   }
-  if (n < 200) return null;
   const kept = valid.subarray(0, n);
   kept.sort();
+  return skySigmaFromSorted(kept);
+}
+
+/** The same, from the finite pixels already sorted. */
+export function skySigmaFromSorted(kept) {
+  const n = kept.length;
+  if (n < 200) return null;
   const at = (p) => kept[Math.min(n - 1, Math.max(0, Math.round(p * (n - 1))))];
   const sigma = at(0.5) - at(0.1587);
   return sigma > 0 ? sigma : null;
