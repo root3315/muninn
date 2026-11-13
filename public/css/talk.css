@@ -115,7 +115,8 @@ a { color: inherit; }
   font-size: clamp(1rem, 0.5vw + 0.85rem, 1.3rem); line-height: 1.5;
   color: var(--color-muted); max-inline-size: 44ch; text-wrap: pretty;
 }
-.slide__src { font-size: var(--text-xs); color: var(--color-neutral); max-inline-size: 60ch; }
+/* Read from the back of a room, so never below the size of a note. */
+.slide__src { font-size: var(--text-sm); color: var(--color-neutral); max-inline-size: 64ch; }
 .slide__src a { color: var(--color-accent); text-underline-offset: 4px; }
 /* The last slide's only source is where to go next: it is said at full size. */
 .slide__src:has(> a:only-child) { font-size: var(--text-md); }
@@ -295,7 +296,7 @@ a { color: inherit; }
 .sources__row { display: grid; gap: 0.15rem; padding-block-start: var(--space-xs); border-block-start: 1px solid color-mix(in oklab, var(--color-ink) 12%, transparent); }
 .sources__row dt { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-xs); font-size: var(--text-sm); font-weight: 500; color: var(--color-ink); }
 .sources__row dt span { font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 400; color: var(--color-neutral); }
-.sources__row dd { font-size: var(--text-xs); line-height: 1.4; color: var(--color-muted); }
+.sources__row dd { font-size: var(--text-sm); line-height: 1.4; color: var(--color-muted); }
 .slide[data-on] .sources__row { animation: rise 420ms var(--ease-out) calc(500ms + var(--l, 0) * 90ms) backwards; }
 
 /* ------------------------------------------------------------- 8 · the ledger */
@@ -378,6 +379,9 @@ a { color: inherit; }
 /* 1 · the plate is the slide: as large as the room allows, the words beside it. */
 .slide--live { grid-template-columns: minmax(0, 1fr) auto; }
 .slide--live .slide__claim { font-size: clamp(2rem, min(4.4vw, 8vh), 5rem); max-inline-size: 12ch; }
+/* Russian words run longer: a wider measure and a smaller cap keep the claim
+   clear of the plate. */
+.slide--live .slide__claim:lang(ru) { font-size: clamp(1.8rem, min(3.3vw, 6.4vh), 3.9rem); max-inline-size: 15ch; }
 .slide--live .exhibit--plate { grid-template-columns: auto minmax(10rem, 13rem); gap: var(--space-lg); align-items: end; }
 .slide--live .plate { inline-size: min(72vh, 44vw); max-inline-size: none; border-radius: var(--radius-lg); }
 .slide--live .plate__date { font-size: clamp(1.4rem, 2.4vw, 2.4rem); line-height: 1.05; }
@@ -423,7 +427,7 @@ a { color: inherit; }
 .slide[data-on].slide--run .snr__bar { transform-origin: bottom; animation-name: lift; }
 @keyframes lift { from { transform: scaleY(0); } }
 /* A tall room gives the column its height: the one that matters should tower. */
-@media (min-height: 46rem) { .slide--run .snr { --h: clamp(10rem, 36vh, 26rem); } }
+@media (min-height: 46rem) { .slide--run .snr { --h: clamp(10rem, 32vh, 26rem); } }
 
 /* 4 · two readings of one pixel, side by side at full height. */
 .slide--duel .verdicts { gap: clamp(1.5rem, 6vw, 6rem); align-items: end; }
@@ -629,15 +633,20 @@ a { color: inherit; }
 /* 8 · the mark: the plate, its card and its spectrum, side by side. */
 .exhibit--mark {
   grid-template-columns: auto auto auto; grid-template-rows: auto auto; justify-content: start;
-  align-items: start; column-gap: clamp(1rem, 2vw, 2rem); row-gap: var(--space-sm);
+  align-items: start; column-gap: var(--gap); row-gap: var(--space-sm);
+  /* The three stand one height: as tall as the room allows, and no taller
+     than the width lets three of them sit side by side (3.15 is the sum of
+     their aspect ratios). The card and the chart are set inside a margin of
+     their own panel, so no line of either runs to its edge. */
+  --gap: clamp(1rem, 2vw, 2rem);
+  --pad: clamp(0.6rem, 1.1vw, 1.25rem);
+  --shot-h: min(52vh, 36rem, calc((100vw - 2 * var(--edge) - 2 * var(--gap) - 4 * var(--pad)) / 3.15));
 }
 .exhibit--mark .shot img { inline-size: auto; block-size: var(--shot-h); }
-.exhibit--mark { --shot-h: min(44vh, 30rem); }
 .shot--plate { grid-row: 1 / span 2; }
-.shot--card { background: var(--rec-panel); }
+.exhibit--mark .shot--card, .exhibit--mark .shot--spectrum { background: var(--rec-panel); padding: var(--pad); }
+.exhibit--mark .shot--card img, .exhibit--mark .shot--spectrum img { block-size: calc(var(--shot-h) - 2 * var(--pad)); }
 .exhibit--mark .csv { grid-column: 2 / span 2; max-inline-size: none; }
-.shot--card img { block-size: var(--shot-h); }
-.exhibit--mark .shot--spectrum { background: var(--rec-panel); }
 .slide[data-on] .shot--card { animation: rise 600ms var(--ease-out) 700ms backwards; }
 /* The six bands are read one after another, D1 to D6: the chart is uncovered that way. */
 .slide[data-on] .shot--spectrum img { animation: uncoverX 1600ms var(--ease-out) 1300ms backwards; }
@@ -662,7 +671,7 @@ a { color: inherit; }
 .asks__list li { display: grid; gap: 1px; padding-block-start: var(--space-xs); border-block-start: 1px solid color-mix(in oklab, var(--color-ink) 12%, transparent); }
 .asks__name { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-xs); font-size: var(--text-sm); font-weight: 500; }
 .asks__name span { font-size: var(--text-xs); font-weight: 400; color: var(--color-neutral); }
-.asks__what { font-size: var(--text-xs); color: var(--color-muted); line-height: 1.4; }
+.asks__what { font-size: var(--text-sm); color: var(--color-muted); line-height: 1.4; }
 .slide[data-on] .asks__list li { animation: rise 420ms var(--ease-out) calc(1100ms + var(--i, 0) * 110ms) backwards; }
 
 /* 10 · the wipe between a SPHEREx visit and the AllWISE picture. */
@@ -674,7 +683,10 @@ a { color: inherit; }
 .wipe img { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; object-fit: cover; }
 .wipe__a { clip-path: inset(0 calc(100% - var(--wx, 50%)) 0 0); }
 .wipe__divider { position: absolute; inset-block: 0; inset-inline-start: var(--wx, 50%); inline-size: 2px; translate: -1px 0; background: var(--color-ink); }
-.slide[data-on] .wipe { animation: sweep 7000ms var(--ease-out) 600ms infinite; }
+/* The divider rests at the middle and swings either way of it, so neither
+   picture is ever a sliver. */
+.slide[data-on] .wipe { animation: sway 7000ms var(--ease-out) 600ms infinite; }
+@keyframes sway { 0%, 18% { --wx: 50%; } 42% { --wx: 64%; } 72% { --wx: 36%; } 100% { --wx: 50%; } }
 .wipe__legend { display: flex; flex-wrap: wrap; gap: var(--space-xs) var(--space-lg); font-size: var(--text-sm); color: var(--color-muted); }
 .wipe__legend p { display: flex; align-items: center; gap: var(--space-xs); }
 .slotchip {
@@ -684,7 +696,7 @@ a { color: inherit; }
 .slotchip--b { background: var(--color-counter); }
 .wise__facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-md); }
 .wise__facts div { display: grid; gap: var(--space-2xs); align-content: start; }
-.wise__facts dt { font-size: var(--text-xs); color: var(--color-neutral); order: 2; }
+.wise__facts dt { font-size: var(--text-sm); color: var(--color-neutral); order: 2; }
 .wise__facts dd { font-family: var(--font-display); font-size: clamp(1.25rem, 2vw, 2rem); letter-spacing: -0.02em; color: var(--color-accent); }
 .wise__facts div:first-child dd { color: var(--color-counter); }
 
@@ -710,6 +722,17 @@ a { color: inherit; }
 .guards li::before { content: ""; flex: none; inline-size: 0.5rem; block-size: 0.5rem; margin-block-start: 0.5em; border-radius: var(--radius-round); background: var(--color-accent); }
 .shot--panel img { inline-size: auto; block-size: min(46vh, 30rem); }
 .shot--panel { background: var(--rec-panel); }
+/* The words take the wider column, so they run fewer lines and leave the
+   height to the curve and the panel. */
+.slide--hunt .slide__text { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); }
+.slide--hunt .slide__say { max-inline-size: 56ch; }
+.slide--hunt .slide__src { max-inline-size: 76ch; }
+/* A tall room has the height to show the panel at a size its words can be
+   read at from the back: about two thirds of the crop's own pixels. */
+@media (min-height: 64rem) {
+  .slide--hunt { gap: clamp(0.75rem, 2.4vh, 2rem); }
+  .shot--panel img { block-size: min(54vh, 36rem); }
+}
 .slide[data-on] .guards li { animation: rise 420ms var(--ease-out) calc(1200ms + var(--i, 0) * 120ms) backwards; }
 .guards li:nth-child(2) { --i: 1; }
 .guards li:nth-child(3) { --i: 2; }
@@ -790,6 +813,14 @@ a { color: inherit; }
 }
 @media (max-width: 40rem) {
   .exhibit--plate { grid-template-columns: minmax(0, 1fr); }
+  /* Under the plate the date fell below the fold, behind the foot: on a phone
+     it is pinned to the plate's corner, as the tool's own plate carries it. */
+  .slide--live .exhibit--plate { position: relative; }
+  .slide--live .plate__date {
+    position: absolute; z-index: 1; inset-block-start: var(--space-sm); inset-inline-start: var(--space-sm);
+    padding: var(--space-2xs) var(--space-sm); border-radius: var(--radius-round);
+    font-size: var(--text-sm); background: color-mix(in oklab, var(--color-well) 72%, transparent);
+  }
   .plate { max-inline-size: 100%; }
   .verdicts, .ledger, .sources { grid-template-columns: minmax(0, 1fr); }
   .flags { grid-template-columns: repeat(2, auto); }
