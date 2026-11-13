@@ -9,12 +9,16 @@ NASA Space Apps Challenge 2026 — *Planet X and SPHEREx* · team **Yggdrasil**
 frames from the archive as you watch. PDF copies: [English](https://muninn.mydevbox.xyz/talk.pdf),
 [Russian](https://muninn.mydevbox.xyz/talk.ru.pdf).
 
+![The (152) Atala field on 25 Dec 2025: the asteroid ringed and named, Hunter X on the right, every visit along the bottom](docs/img/atala.jpg)
+
+![The way in: the sky from star catalogues, a card with a real SPHEREx frame of the picked object](docs/img/sky.jpg)
+
 ## Team Yggdrasil
 
 - Khurshiddinov Timur Khurshiddinovich (team owner)
 - Stepan Ionichev
 - Muhammadyusuf Bahtiyarov
-- Edem
+- Edem Galiev
 - Temur Kholjigitov
 - Khamidkhodjayeva Fayziya
 
@@ -86,8 +90,10 @@ twice.
 
 ### Putting it on the web
 
-The site is the static `public/` directory plus one server-side function, so it
-deploys to Cloudflare Pages as-is:
+The live site, <https://muninn.mydevbox.xyz>, is `server.js` itself on our own small
+server behind a Cloudflare Tunnel: every relay is there (`/api/search`, `/api/tap`,
+`/api/sbident`, `/api/wise`, `/api/archives`). A lighter fallback, with the frame search
+only, deploys to Cloudflare Pages as-is:
 
 ```bash
 npx wrangler login              # once, in a browser
@@ -265,9 +271,9 @@ plates were blinked in 1930.
 
 ## How it works
 
-### Reading 70 MB files a few megabytes at a time
+### Reading 65 MB files a few megabytes at a time
 
-A SPHEREx Level-2 spectral image is a ~70 MB multi-extension FITS file. Most of that is
+A SPHEREx Level-2 spectral image is a 65 MB multi-extension FITS file (DR1). Most of that is
 the PSF cube; the flux plane is 2040 × 2040 float32 near the front. Ten visits would be
 700 MB, which is not a web page.
 
@@ -747,7 +753,7 @@ SPHEREx снимает всё небо целиком примерно дваж�
 снимки на несколько разных дат. Звёзды стоят на месте, тела Солнечной системы — нет.
 Muninn складывает заходы друг на друга и показывает разницу.
 
-Кадры SPHEREx — файлы по 70 МБ. Браузер читает их прямо из публичного зеркала AWS по
+Кадры SPHEREx — файлы по 65 МБ. Браузер читает их прямо из публичного зеркала AWS по
 диапазонам байтов: сначала заголовок, потом только те строки детектора, на которые
 попадает поле, и флаги качества пайплайна для тех же строк. Заход обходится в
 несколько мегабайт. Между заходами аппарат
