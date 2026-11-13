@@ -31,6 +31,7 @@ import { nearestExposures, fluxPoint, placeInBand } from './spectrum.js';
 import { spectrumBlock } from './spectrum-view.js';
 import { trackCSV } from './export.js';
 import { SkyView, shortName } from './sky.js';
+import { loadWise, WISE_BANDS } from './wise.js';
 import {
   searchFrames, NoRelayError, UpstreamError, groupVisits, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, identifySource, fieldObjects, toS3, surveySources,
@@ -72,6 +73,8 @@ const state = {
   depth: null, examined: [], sectors: null, candidates: null, hunting: false, loading: false, failed: false, view: 'sky',
   facts: null, bodies: 0,
   survey: 'off',
+  /** The AllWISE band shown as B of the wipe (1 or 2), or null. */
+  reference: null,
   skyLayers: { stars: false, deep: false },
 };
 
@@ -1211,10 +1214,11 @@ function fillSlots() {
         opt.textContent = `${fmtDate(v.frame.iso)} · ${v.frame.band}`;
         sel.append(opt);
       });
+      if (id === 'slot-b') sel.append(wiseOptions());
       sel.dataset.signature = signature;
     }
-    sel.value = String(current);
-    sel.disabled = list.length < 2;
+    sel.value = id === 'slot-b' && state.reference ? `wise${state.reference}` : String(current);
+    sel.disabled = id === 'slot-a' ? list.length < 2 : !list.length;
   }
 }
 
@@ -2356,6 +2360,7 @@ async function openField({ ra, dec, label = '', band = null }) {
   updateIdentity();
 
   if (!chosen.length) { state.loading = false; setPlateState(t('epochs.none')); return; }
+  if (state.reference) loadReference(ctrl.signal);
   setPlateState(t('epochs.loading', { done: 0, total: chosen.length }), { progress: 0 });
 
   let done = 0;
@@ -3246,6 +3251,7 @@ const MODE_HINT = { blink: 'mode.blinkHint', wipe: 'mode.wipeHint', difference: 
  * band plus what averaging those visits buys.
  */
 function modeHint(mode) {
+  if (mode === 'wipe' && state.reference) return referenceHint();
   if (mode !== 'stack') return t(MODE_HINT[mode] ?? MODE_HINT.blink);
   const band = sky?.current?.frame.band ?? '';
   const members = sky?.current ? sky.stackMembers() : [];
@@ -3456,6 +3462,75 @@ function syncLambda() {
   }
 }
 
+/* ------------------------------------------------- AllWISE beside the frame */
+
+/** Where the AllWISE picture for the open field stands: asking, ok or failed. */
+let referenceStatus = null;
+
+/** The AllWISE choices at the foot of B's list. */
+function wiseOptions() {
+  const group = document.createElement('optgroup');
+  group.label = t('ref.group');
+  for (const band of [1, 2]) {
+    const opt = document.createElement('option');
+    opt.value = `wise${band}`;
+    opt.textContent = t('ref.option', { band: WISE_BANDS[band].name, micron: fmt(WISE_BANDS[band].micron, 1) });
+    group.append(opt);
+  }
+  return group;
+}
+
+/**
+ * Put AllWISE as B of the wipe (band 1 or 2), or take it away (null). The
+ * wipe is the one mode where two instruments can sit side by side honestly:
+ * a difference across them would subtract one camera's units from another's.
+ */
+function chooseReference(band) {
+  state.reference = band;
+  for (const radio of document.querySelectorAll('input[name="refimg"]')) {
+    radio.checked = Number(radio.value) === (band ?? 0);
+  }
+  sky.setUseRef(Boolean(band));
+  if (band) {
+    if (sky.mode !== 'wipe') {
+      for (const radio of document.querySelectorAll('input[name="mode"]')) radio.checked = radio.value === 'wipe';
+      applyMode('wipe');
+    }
+    if (sky.ref?.bandNumber !== band && sky.visits.length) loadReference(state.abort?.signal);
+  }
+  fillSlots();
+  $('mode-hint').textContent = modeHint(sky.mode);
+}
+
+async function loadReference(signal) {
+  const band = state.reference;
+  const grid = sky.grid;
+  if (!band || !grid) return;
+  referenceStatus = 'asking';
+  sky.setReference(null);
+  $('mode-hint').textContent = modeHint(sky.mode);
+  try {
+    const ref = await loadWise(grid, band, { signal });
+    // Another field, or another band, has been asked for since.
+    if (signal?.aborted || sky.grid !== grid || state.reference !== band) return;
+    sky.setReference({ ...ref, bandNumber: band });
+    referenceStatus = 'ok';
+  } catch {
+    if (signal?.aborted || sky.grid !== grid) return;
+    referenceStatus = 'failed';
+  }
+  $('mode-hint').textContent = modeHint(sky.mode);
+}
+
+function referenceHint() {
+  const { name, micron } = WISE_BANDS[state.reference];
+  const words = { band: name, micron: fmt(micron, 1) };
+  if (referenceStatus === 'failed') return t('ref.failed', words);
+  if (referenceStatus !== 'ok' || !sky.ref) return t('ref.asking', words);
+  const a = sky.visits[sky.a];
+  return t('ref.hint', { ...words, date: a ? fmtDate(a.frame.iso) : '' });
+}
+
 function applyMode(mode) {
   sky.setMode(mode);
   $('plate').dataset.mode = mode;
@@ -3556,7 +3631,16 @@ function wire() {
   $('scrub').addEventListener('input', (e) => { holdStill(); jumpToNearest(Number(e.target.value)); });
 
   $('slot-a').addEventListener('change', (e) => { sky.setAB(Number(e.target.value), null); syncScrub(); refreshKnownObjects(); });
-  $('slot-b').addEventListener('change', (e) => { sky.setAB(null, Number(e.target.value)); syncScrub(); });
+  $('slot-b').addEventListener('change', (e) => {
+    const v = e.target.value;
+    if (v.startsWith('wise')) { chooseReference(Number(v.slice(4))); return; }
+    chooseReference(null);
+    sky.setAB(null, Number(v));
+    syncScrub();
+  });
+  for (const radio of document.querySelectorAll('input[name="refimg"]')) {
+    radio.addEventListener('change', (e) => { if (e.target.checked) chooseReference(Number(e.target.value) || null); });
+  }
 
   for (const radio of document.querySelectorAll('input[name="mode"]')) {
     radio.addEventListener('change', (e) => applyMode(e.target.value));
