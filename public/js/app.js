@@ -2531,8 +2531,11 @@ function roomAspect() {
   const mount = document.querySelector('.mount');
   const cell = document.querySelector('.stage__cell');
   if (!room || !mount || !cell) return 1;
-  const r = room.getBoundingClientRect();
-  const chrome = mount.getBoundingClientRect().width - cell.getBoundingClientRect().width;
+  // Layout sizes, not boxes on screen: the plate lands from slightly too big,
+  // and a field cut while it was still scaled came out too wide and was shown
+  // short of the room's height.
+  const r = { width: room.offsetWidth, height: room.offsetHeight };
+  const chrome = mount.offsetWidth - cell.offsetWidth;
   const cs = getComputedStyle(mount);
   const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
   // With the run folded away the room is taller than it will be once the
