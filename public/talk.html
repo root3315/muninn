@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Muninn — the talk</title>
-<meta name="description" content="Muninn in eight slides: what it does, the evidence from real SPHEREx frames, and what it cannot find.">
+<meta name="description" content="Muninn in seventeen slides: every feature of the tool, the evidence from real SPHEREx frames, and what it cannot find.">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#171721">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23171721'/%3E%3Ccircle cx='11' cy='13' r='2.5' fill='%23e6f0f7'/%3E%3Ccircle cx='21' cy='19' r='2.5' fill='%2356c1f5'/%3E%3C/svg%3E">
@@ -67,7 +67,86 @@
     </figure>
   </section>
 
-  <!-- 2 · how little of the archive that took -->
+
+  <!-- 2 · the way in: the real sky, turning, and a card for what is pressed -->
+  <section class="slide slide--sky" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="sky.claim"></h2>
+      <p class="slide__say" data-t="sky.say"></p>
+      <ol class="beats" id="sky-beats">
+        <li data-t="sky.beat1"></li>
+        <li data-t="sky.beat2"></li>
+        <li data-t="sky.beat3"></li>
+        <li data-t="sky.beat4"></li>
+      </ol>
+      <p class="slide__src" data-t="sky.src"></p>
+    </div>
+    <figure class="exhibit exhibit--sky">
+      <div class="dome">
+        <!-- The tool's own sky: gate.js, the same catalogue, the same reticle. -->
+        <canvas class="dome__sky" id="dome" aria-hidden="true"></canvas>
+        <img class="dome__field" id="dome-field" alt="">
+        <p class="dome__at num" id="dome-at"></p>
+        <article class="card" id="card">
+          <figure class="card__frame">
+            <img id="card-img" alt="" width="280" height="280">
+            <figcaption class="card__tag num" id="card-tag"></figcaption>
+          </figure>
+          <div class="card__body">
+            <h3 class="card__name" id="card-name"></h3>
+            <p class="card__kind" id="card-kind"></p>
+            <dl class="card__facts" id="card-facts"></dl>
+            <p class="card__go"><span data-t="sky.open"></span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg></p>
+          </div>
+        </article>
+      </div>
+    </figure>
+  </section>
+
+  <!-- 3 · five ways to compare one grid -->
+  <section class="slide slide--modes" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="modes.claim"></h2>
+      <p class="slide__say" data-t="modes.say"></p>
+      <p class="slide__src" data-t="modes.src"></p>
+    </div>
+    <figure class="exhibit exhibit--modes">
+      <div class="modes" role="group" id="modes"></div>
+      <div class="view" id="view" data-mode="blink">
+        <img class="view__a" src="img/talk/atala-a.png" alt="">
+        <img class="view__b" src="img/talk/atala-b.png" alt="">
+        <img class="view__diff" src="img/talk/atala-diff.png" alt="">
+        <img class="view__stack" src="img/talk/atala-stack.png" alt="">
+        <span class="view__divider" aria-hidden="true"></span>
+        <p class="view__date num" id="view-date"></p>
+      </div>
+      <p class="view__what" id="view-what"></p>
+    </figure>
+  </section>
+
+  <!-- 4 · six bands, a width, and the address that carries them -->
+  <section class="slide slide--bands" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="bands.claim"></h2>
+      <p class="slide__say" data-t="bands.say"></p>
+      <p class="slide__src" data-t="bands.src"></p>
+    </div>
+    <figure class="exhibit">
+      <p class="exhibit__k" data-t="bands.head"></p>
+      <ol class="lambdas" id="bands"></ol>
+      <div class="widths">
+        <p class="exhibit__k" data-t="bands.width"></p>
+        <ol class="widths__row num" id="widths"></ol>
+      </div>
+      <div class="permalink">
+        <p class="exhibit__k" data-t="bands.link"></p>
+        <p class="address num" id="address"></p>
+      </div>
+    </figure>
+  </section>
+
+  <!-- 5 · how little of the archive that took -->
   <section class="slide slide--bytes" data-slide>
     <div class="slide__text">
       <h2 class="slide__claim" data-t="s2.claim"></h2>
@@ -90,7 +169,7 @@
     </figure>
   </section>
 
-  <!-- 3 · a mover found, and named -->
+  <!-- 6 · a mover found, and named -->
   <section class="slide slide--run" data-slide>
     <div class="slide__text">
       <h2 class="slide__claim" data-t="s3.claim"></h2>
@@ -103,7 +182,7 @@
     </figure>
   </section>
 
-  <!-- 4 · a discovery refused -->
+  <!-- 7 · a discovery refused -->
   <section class="slide slide--duel" data-slide>
     <div class="slide__text">
       <h2 class="slide__claim" data-t="s4.claim"></h2>
@@ -115,12 +194,12 @@
       <div class="verdicts">
         <div class="verdicts__one">
           <p class="verdicts__k" data-t="s4.before"></p>
-          <p class="verdicts__v verdicts__v--alarm num" data-n="192" data-digits="0"></p>
+          <p class="verdicts__v verdicts__v--alarm num" data-n="140" data-digits="0"></p>
           <p class="verdicts__say" data-t="s4.beforeSay"></p>
         </div>
         <div class="verdicts__one">
           <p class="verdicts__k" data-t="s4.after"></p>
-          <p class="verdicts__v num" data-n="1.6" data-digits="1"></p>
+          <p class="verdicts__v num" data-n="1.2" data-digits="1"></p>
           <p class="verdicts__say" data-t="s4.afterSay"></p>
         </div>
       </div>
@@ -134,7 +213,92 @@
     </figure>
   </section>
 
-  <!-- 5 · the challenge's own targets -->
+
+  <!-- 8 · a mark, measured in every visit, and its spectrum -->
+  <section class="slide slide--mark" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="mark.claim"></h2>
+      <p class="slide__say" data-t="mark.say"></p>
+      <p class="slide__src" data-t="mark.src"></p>
+    </div>
+    <figure class="exhibit exhibit--mark">
+      <div class="shot shot--plate"><img src="img/talk/mark-plate.png" alt=""></div>
+      <div class="shot shot--card"><img data-src-lang="img/talk/mark-card.{lang}.png" alt=""></div>
+      <div class="shot shot--spectrum"><img data-src-lang="img/talk/mark-spectrum.{lang}.png" alt=""></div>
+      <p class="csv num" id="csv"></p>
+    </figure>
+  </section>
+
+  <!-- 9 · other missions' catalogues, over the frame -->
+  <section class="slide slide--overlay" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="ov.claim"></h2>
+      <p class="slide__say" data-t="ov.say"></p>
+      <p class="slide__src" data-t="ov.src"></p>
+    </div>
+    <figure class="exhibit exhibit--overlay">
+      <div class="shot shot--layers">
+        <img src="img/talk/barnard-spherex.png" alt="">
+        <img class="shot__over" src="img/talk/barnard-overlay.png" alt="">
+      </div>
+      <div class="asks">
+        <ul class="legend">
+          <li><span class="legend__ring" aria-hidden="true"></span><span data-t="ov.gaia"></span></li>
+          <li><span class="legend__diamond" aria-hidden="true"></span><span data-t="ov.wise"></span></li>
+        </ul>
+        <p class="exhibit__k" data-t="ov.head"></p>
+        <ol class="asks__list" id="asks"></ol>
+      </div>
+    </figure>
+  </section>
+
+  <!-- 10 · AllWISE 2010 beside a SPHEREx visit, under the wipe -->
+  <section class="slide slide--wise" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="wise.claim"></h2>
+      <p class="slide__say" data-t="wise.say"></p>
+      <p class="slide__src" data-t="wise.src"></p>
+    </div>
+    <figure class="exhibit exhibit--wise">
+      <div class="wipe">
+        <img class="wipe__b" src="img/talk/barnard-wise.png" alt="">
+        <img class="wipe__a" src="img/talk/barnard-spherex.png" alt="">
+        <span class="wipe__divider" aria-hidden="true"></span>
+      </div>
+      <div class="wipe__legend">
+        <p><span class="slotchip slotchip--a">A</span><span data-t="wise.a"></span></p>
+        <p><span class="slotchip slotchip--b">B</span><span data-t="wise.b"></span></p>
+      </div>
+      <dl class="wise__facts">
+        <div><dt data-t="wise.f1"></dt><dd class="num" data-t="wise.f1v"></dd></div>
+        <div><dt data-t="wise.f2"></dt><dd class="num" data-t="wise.f2v"></dd></div>
+        <div><dt data-t="wise.f3"></dt><dd class="num" data-t="wise.f3v"></dd></div>
+      </dl>
+    </figure>
+  </section>
+
+  <!-- 11 · Hunter X: a distance read out of slowness -->
+  <section class="slide slide--hunt" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="hunt.claim"></h2>
+      <p class="slide__say" data-t="hunt.say"></p>
+      <p class="slide__src" data-t="hunt.src"></p>
+    </div>
+    <figure class="exhibit exhibit--hunt">
+      <div class="rate">
+        <p class="exhibit__k" data-t="hunt.head"></p>
+        <svg class="rate__chart" id="rate" role="img" data-t-label="hunt.alt"></svg>
+        <ol class="guards">
+          <li data-t="hunt.g1"></li>
+          <li data-t="hunt.g2"></li>
+          <li data-t="hunt.g3"></li>
+        </ol>
+      </div>
+      <div class="shot shot--panel"><img data-src-lang="img/talk/hunt.{lang}.png" alt=""></div>
+    </figure>
+  </section>
+
+  <!-- 12 · the challenge's own targets -->
   <section class="slide slide--targets" data-slide>
     <div class="slide__text">
       <h2 class="slide__claim" data-t="s5.claim"></h2>
@@ -147,7 +311,22 @@
     </figure>
   </section>
 
-  <!-- 6 · how far SPHEREx is from Planet Nine -->
+
+  <!-- 13 · which other telescopes looked here -->
+  <section class="slide slide--archives" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="arc.claim"></h2>
+      <p class="slide__say" data-t="arc.say"></p>
+      <p class="slide__src" data-t="arc.src"></p>
+    </div>
+    <figure class="exhibit">
+      <p class="exhibit__k" data-t="arc.head"></p>
+      <ol class="archives" id="archives"></ol>
+      <p class="exhibit__note" data-t="arc.note"></p>
+    </figure>
+  </section>
+
+  <!-- 14 · how far SPHEREx is from Planet Nine -->
   <section class="slide slide--reach" data-slide>
     <div class="slide__text">
       <h2 class="slide__claim" data-t="s6.claim"></h2>
@@ -161,7 +340,7 @@
     </figure>
   </section>
 
-  <!-- 7 · where every pixel and every name comes from -->
+  <!-- 15 · where every pixel and every name comes from -->
   <section class="slide slide--sources" data-slide>
     <div class="slide__text">
       <h2 class="slide__claim" data-t="src.claim"></h2>
@@ -182,7 +361,27 @@
     </figure>
   </section>
 
-  <!-- 8 · what is left, said plainly -->
+
+  <!-- 16 · a new release is one line -->
+  <section class="slide slide--release" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="rel.claim"></h2>
+      <p class="slide__say" data-t="rel.say"></p>
+      <p class="slide__src" data-t="rel.src"></p>
+    </div>
+    <figure class="exhibit">
+      <p class="exhibit__k num">public/js/release.js</p>
+      <pre class="code num"><span class="code__old">export const COLLECTIONS = ['spherex_qr2', 'spherex_qr2_deep'];</span>
+<span class="code__new">export const COLLECTIONS = [<span class="code__typed" id="typed"></span><span class="code__caret" aria-hidden="true"></span>];</span></pre>
+      <ol class="runbook">
+        <li><span class="num" data-t="rel.when"></span><span data-t="rel.step1"></span></li>
+        <li><span class="num">npm run bake</span><span data-t="rel.step2"></span></li>
+        <li><span class="num">npm test</span><span data-t="rel.step3"></span></li>
+      </ol>
+    </figure>
+  </section>
+
+  <!-- 17 · what is left, said plainly -->
   <section class="slide slide--ledger" data-slide>
     <div class="slide__text">
       <h2 class="slide__claim" data-t="s7.claim"></h2>
