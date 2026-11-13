@@ -149,6 +149,8 @@ function drawPoint(add, p, cx, y, fresh) {
 const logSpan = Math.log(WAVE_RANGE[1] / WAVE_RANGE[0]);
 /** A few pixels in from the flux axis, so the shortest wavelengths do not sit on it. */
 const INSET = 5;
+/** The widest gap, in ln λ (about a quarter of a band), the median line is drawn across. */
+const MAX_LINE_GAP = 0.25;
 const waveX = (um) => PLOT.left + INSET
   + (Math.log(clamp(um, ...WAVE_RANGE) / WAVE_RANGE[0]) / logSpan) * (PLOT.right - PLOT.left - INSET);
 
@@ -182,9 +184,16 @@ function spectrumChart(points, ranges, window, shown) {
 
   // The shape: the binned medians joined across the bands, drawn over the
   // points it summarises with a rim of the page so it reads through them.
-  const line = medianLine(trusted(points));
-  if (line.length >= 2) {
-    const path = line.map((b) => `${waveX(b.um).toFixed(1)},${y(b.mJy).toFixed(1)}`).join(' ');
+  // Where no exposure falls for a long stretch the line stops rather than
+  // drawing a straight guess across it.
+  const segments = [];
+  for (const bin of medianLine(trusted(points))) {
+    const last = segments.at(-1)?.at(-1);
+    if (last && Math.log(bin.um / last.um) <= MAX_LINE_GAP) segments.at(-1).push(bin);
+    else segments.push([bin]);
+  }
+  for (const bins of segments.filter((s) => s.length >= 2)) {
+    const path = bins.map((b) => `${waveX(b.um).toFixed(1)},${y(b.mJy).toFixed(1)}`).join(' ');
     add('polyline', { points: path, class: 'spectrum__median spectrum__median--rim' });
     add('polyline', { points: path, class: 'spectrum__median' });
   }
