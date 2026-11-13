@@ -257,3 +257,21 @@ test('MAST Gaia rows keep the exact source id and are cut like the ADQL', async 
   assert.equal(rows[0].pmDE, 10362.39);
   assert.equal(mastGaiaRows(data, { limit: null, top: 1 }).length, 1);
 });
+
+test('a fast star is matched at the visit date, and the other catalogues are asked where it was', async () => {
+  const { motionAnchor, askedAt } = await import('../public/js/catalog.js');
+  // Barnard's Star in Gaia DR3 (J2016.0).
+  const gaia = { ra: 269.44850252544, dec: 4.73942005111, pmRA: -801.551, pmDE: 10362.394, from: 2016 };
+  const anchor = motionAnchor(gaia, null);
+  // 2MASS saw it around 1999.5: 171″ south of its 2016 place.
+  const tm = askedAt(anchor, 0, 0, { at: 1999.5, spread: 2 }, 6);
+  assert.ok(Math.abs((tm.dec - gaia.dec) * 3600 + 10.362394 * 16.5) < 0.5, `dec ${tm.dec}`);
+  assert.ok(tm.arcsec > 26 && tm.arcsec < 28, `radius ${tm.arcsec}`);
+  // No anchor: the marked spot itself, a pixel wide.
+  assert.deepEqual(askedAt(null, 10, 20, { at: 2000, spread: 0 }, 6), { ra: 10, dec: 20, arcsec: 6 });
+  // A still faint Gaia star in the pixel does not outrank a CatWISE brown dwarf's motion.
+  const still = { ra: 133.79, dec: -7.24, pmRA: 2, pmDE: -3, from: 2016 };
+  const dwarf = { ra: 133.7951, dec: -7.2452, pmRA: -8100, pmDE: 680, pm: 8.1, from: 2015.4 };
+  assert.equal(motionAnchor(still, dwarf).pmRA, -8100);
+  assert.equal(motionAnchor(still, null).pmRA, 2);
+});

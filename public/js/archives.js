@@ -5,7 +5,7 @@
  * resources) keeps a common observation index (CAOM) over many archives:
  * HST, JWST, TESS, Chandra, Gemini, CFHT, JCMT, SDSS, VLASS and the CSA's
  * NEOSSat among them. One question to its TAP service says how many science
- * observations each one has of a circle on the sky, and over which years.
+ * observations (not planes: one observation can have several) each one has of a circle on the sky, and over which years.
  * The page's relay asks it (CADC sends no CORS headers); this side only
  * validates the question and reads the answer.
  */
@@ -31,7 +31,7 @@ function fixed(value, digits) {
 /** The one question asked of CADC, with nothing from the client but three numbers. */
 export function archivesQuery({ ra, dec, radiusDeg }) {
   const r = Math.min(ARCHIVE_RADIUS.max, Math.max(ARCHIVE_RADIUS.min, Number(radiusDeg)));
-  return `SELECT o.collection, COUNT(*) AS n, MIN(p.time_bounds_lower) AS first, MAX(p.time_bounds_lower) AS last
+  return `SELECT o.collection, COUNT(DISTINCT o.obsID) AS n, MIN(p.time_bounds_lower) AS first, MAX(p.time_bounds_lower) AS last
     FROM caom2.Observation AS o JOIN caom2.Plane AS p ON o.obsID = p.obsID
     WHERE o.intent = 'science' AND p.calibrationLevel >= 1
       AND INTERSECTS(CIRCLE('ICRS', ${fixed(ra, 6)}, ${fixed(dec, 6)}, ${fixed(r, 5)}), p.position_bounds) = 1

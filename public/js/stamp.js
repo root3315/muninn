@@ -60,7 +60,9 @@ async function readImageHDU(url, signal) {
  * in Quick Release files and the MSKN* keys from DR1 on; they did not change.
  *
  * Deliberately not masked: OVERFLOW (the cores of bright stars), OUTLIER (set
- * on real sources too) and SOURCE (a known source, i.e. the sky itself).
+ * on real sources too) and SOURCE (a known source, i.e. the sky itself); nor
+ * DR1's GHOST, CROSSTALK and HALO planes, which cover real sky around bright
+ * stars and would cut holes in it.
  *
  * Without this the "flash" that opened the Atala field on 6 Jul 2025 was one
  * pixel at eleven times its neighbours: FLAGS 0x80005 in QR2 (TRANSIENT,
@@ -69,6 +71,10 @@ async function readImageHDU(url, signal) {
  */
 const MASK_BITS = {
   TRANSIENT: 0, SUR_ERROR: 2, NONFUNC: 6, MISSING_DATA: 9, HOT: 10, COLD: 11, PERSIST: 17,
+  // DR1 adds artefact planes. A satellite streak and a "snowball" (a burst
+  // of charge from a particle shower) are each a one-visit bright patch:
+  // exactly what a mover hunt would otherwise report.
+  STREAK: 25, SNOWBALL: 27,
 };
 const FLAG_MASK = Object.values(MASK_BITS).reduce((m, bit) => m | (1 << bit), 0);
 const FLAGS_HEADER_PROBE = 5 * 2880 * 4;

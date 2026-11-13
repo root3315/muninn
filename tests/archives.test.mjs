@@ -19,10 +19,10 @@ test('the radius is clamped, so no query covers the whole sky', () => {
 });
 
 test('archives come back largest first, with years, and derived copies left out', () => {
-  // As CADC answered for Barnard's Star, 13 Nov 2026, trimmed.
+  // As CADC answered for Barnard's Star, 13 Nov 2026 (distinct observations), trimmed.
   const rows = [
-    { collection: 'CFHT', n: '10694', first: '49896.247245', last: '59830.3828655' },
-    { collection: 'HST', n: '1222', first: '49025.633796180555', last: '60812.483245104166' },
+    { collection: 'CFHT', n: '1970', first: '49896.247245', last: '59830.3828655' },
+    { collection: 'HST', n: '826', first: '49025.633796180555', last: '60812.483245104166' },
     { collection: 'HSTHLA', n: '297', first: '49829.5571419', last: '50712.922794' },
     { collection: 'NEOSSAT', n: '572', first: '58769.06014008102', last: '58820.05889074074' },
     { collection: 'IRIS', n: '8', first: '', last: '' },

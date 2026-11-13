@@ -119,7 +119,7 @@ export function stackDepth(perVisit) {
  * reflects less, so treating an AB limit as directly comparable is generous to
  * us rather than to the prediction.
  */
-export const PLANET_NINE_V = { bright: 22, faint: 25 };
+export const PLANET_NINE_V = { bright: 22.6, faint: 24.3 };
 
 /** How far short of the prediction a given depth falls. */
 export function shortfall(stackedAB) {
