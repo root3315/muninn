@@ -31,14 +31,14 @@ import { loadStamp, loadWavelength } from './stamp.js';
 import { nearestExposures, fluxPoint, placeInBand } from './spectrum.js';
 import { spectrumBlock } from './spectrum-view.js';
 import { trackCSV } from './export.js';
-import { SkyView, shortName } from './sky.js';
+import { SkyView, shortName, mostlySaturated } from './sky.js';
 import { loadWise, WISE_BANDS } from './wise.js';
 import { fieldArchives, CADC_SEARCH } from './archives.js';
 import {
   searchFrames, NoRelayError, UpstreamError, groupVisits, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, identifySource, fieldObjects, toS3, surveySources,
 } from './catalog.js';
-import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP } from './overlay.js';
+import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP, propagate, epochOfMjd } from './overlay.js';
 
 /* The reprojected grid is shaped like the viewport so the sky can fill it. 640
    across is already four times finer than SPHEREx's 6.15" pixel, so the canvas
@@ -75,6 +75,8 @@ const state = {
   depth: null, examined: [], sectors: null, candidates: null, hunting: false, loading: false, failed: false, view: 'sky',
   facts: null, bodies: 0,
   survey: 'off',
+  /** The object the field was opened for, marked on the plate (see fieldTarget). */
+  target: null,
   /** The AllWISE band shown as B of the wipe (1 or 2), or null. */
   reference: null,
   skyLayers: { stars: false, deep: false },
@@ -188,6 +190,10 @@ function writeHash() {
     fov: String(state.fov), band: state.band, lang: getLanguage(),
   });
   if (state.label) p.set('name', state.label);
+  // A named object's motion, when the name came with one and is not a preset's.
+  if (state.target?.key == null && Number.isFinite(state.target?.pmRA)) {
+    p.set('pm', `${state.target.pmRA},${state.target.pmDE}`);
+  }
   if (state.survey !== 'off') p.set('cat', state.survey);
   history.replaceState(null, '', `#${p}`);
 }
@@ -203,6 +209,7 @@ function readHash() {
     band: p.get('band') ?? 'all',
     fov: FOV_CHOICES.includes(Number(p.get('fov'))) ? Number(p.get('fov')) : null,
     name: p.get('name') ?? '',
+    pm: p.has('pm') ? p.get('pm').split(',').map(Number) : null,
     survey: SURVEY_CHOICES.includes(p.get('cat')) ? p.get('cat') : 'off',
     position: Number.isFinite(ra) && Number.isFinite(dec) && ra >= 0 && ra < 360 && Math.abs(dec) <= 90
       ? { ra, dec } : null,
@@ -1605,12 +1612,13 @@ function tagOf(m) {
  * and asking a star catalogue about it first would name whatever faint star
  * happens to lie near its path — so it waits until SkyBoT has said no.
  */
-const IDENTIFY = new Set(['fixed', 'intermittent', 'transient']);
+const IDENTIFY = new Set(['fixed', 'saturated', 'intermittent', 'transient']);
+const STILL = new Set(['fixed', 'saturated']);
 
 function identifyMark(m) {
   const a = m.analysis;
   const ready = a && IDENTIFY.has(a.kind)
-    && (a.kind === 'fixed' || ['none', 'failed', 'off'].includes(m.catalog?.state));
+    && (STILL.has(a.kind) || ['none', 'failed', 'off'].includes(m.catalog?.state));
   if (!ready) { m.who = null; return; }
 
   // The measured centre, not the click: that is what a catalogue should be asked about.
@@ -1964,6 +1972,7 @@ const CALL = {
   transient: 'mark.callTransient',
   moving: 'mark.callMoving',
   fixed: 'mark.callFixed',
+  saturated: 'mark.callSaturated',
   intermittent: 'mark.callIntermittent',
 };
 
@@ -1982,6 +1991,7 @@ function verdict(a) {
     return t('mark.moving', { rate: fmt(a.ratePerHour, 2), seen: a.seen, days: fmt(a.spanDays, 1), rms: fmt(a.rms, 1) });
   }
   if (a.kind === 'fixed') return t('mark.fixed', { total: a.total, rms: fmt(a.rms, 1) });
+  if (a.kind === 'saturated') return t('mark.saturated', { n: a.saturated, total: a.total });
   // Two points always fit a straight line perfectly, so quoting a scatter would be
   // a number with no information in it. Name the dates instead.
   if (a.seen <= 3) {
@@ -1989,6 +1999,33 @@ function verdict(a) {
     return t('mark.intermittentDates', { seen: a.seen, total: a.total, dates });
   }
   return t('mark.intermittent', { seen: a.seen, total: a.total, rms: fmt(a.rms, 1) });
+}
+
+/**
+ * A saturated source cannot be centred well enough to see it move, but a
+ * catalogue that knows its motion can say how far it went over these visits,
+ * against the one detector pixel a blink could ever show. The motion is the
+ * identification's (Gaia, else CatWISE2020), or the named target's when the
+ * mark sits on it.
+ */
+function saturatedMotion(m) {
+  const a = m.analysis;
+  if (a?.kind !== 'saturated' || !(a.spanDays > 0)) return null;
+  const r = m.who?.state === 'done' ? m.who.result : null;
+  const tg = state.target;
+  const when = a.track.reduce((s, p) => s + p.mjd, 0) / a.track.length;
+  const target = tg && Number.isFinite(tg.epoch)
+    && separationArcsec(propagate(tg, epochOfMjd(when), tg.epoch), m) <= 3 * DETECTOR_ARCSEC ? tg : null;
+  const source = [r?.gaia, r?.catwise, target].find((s) => Number.isFinite(s?.pmRA) && Number.isFinite(s?.pmDE));
+  if (!source) return null;
+  const pm = Math.hypot(source.pmRA, source.pmDE) / 1000;
+  // An ordinary star's motion rounds to nothing here; only a fast one is worth a line.
+  if (pm < 0.1) return null;
+  const shift = (pm * a.spanDays) / 365.25;
+  return t(shift < DETECTOR_ARCSEC ? 'mark.saturatedUnder' : 'mark.saturatedOver', {
+    pm: fmt(pm, pm < 1 ? 2 : 1), shift: fmt(shift, 1), days: fmt(a.spanDays, 0),
+    px: fmt(DETECTOR_ARCSEC, 2), n: fmt(shift / DETECTOR_ARCSEC, 1),
+  });
 }
 
 /**
@@ -2113,7 +2150,14 @@ function renderMarks() {
     // "no match in SkyBoT" under it only raised the question of why anyone
     // asked. What it is comes from the star catalogues instead.
     body.append(call, detail);
-    if (m.analysis?.kind !== 'fixed') body.append(id);
+    const motion = saturatedMotion(m);
+    if (motion) {
+      const p = document.createElement('p');
+      p.className = 'mark__detail';
+      p.textContent = motion;
+      body.append(p);
+    }
+    if (!STILL.has(m.analysis?.kind)) body.append(id);
     if (m.who) body.append(...whoLines(m.who, m.analysis?.kind));
 
     const curve = m.analysis?.seen ? markCurve(m.analysis) : null;
@@ -2330,8 +2374,10 @@ async function linkStamps(frames, onEach) {
 async function runLink(m, visitsA, visitsB) {
   // Where the mark is in season A, measured: the strongest detection of it.
   let anchorHit = null;
+  const hitsA = [];
   for (const v of visitsA) {
     const hit = sky.measure(v, m.ra, m.dec);
+    if (hit) hitsA.push(hit);
     if (hit && (!anchorHit || hit.snr > anchorHit.snr)) anchorHit = hit;
   }
   const refMjd = visitsA.find((v) => v.frame.obsId === m.obsId)?.frame.mjd ?? visitsA[0].frame.mjd;
@@ -2359,6 +2405,11 @@ async function runLink(m, visitsA, visitsB) {
     return Boolean(hit) && separationArcsec(hit, { ra, dec }) <= 1.5 * DETECTOR_ARCSEC;
   };
   const asVisit = (v) => ({ id: v.frame.obsId, mjd: v.frame.mjd, item: v });
+  // The source at the mark, still at the same spot in a season-B visit.
+  const anchorInB = (v) => {
+    const hit = sky.measure(v.item, anchor.ra, anchor.dec);
+    return Boolean(hit) && separationArcsec(hit, anchor) <= 1.5 * DETECTOR_ARCSEC;
+  };
   const result = linkSeasons({
     anchor,
     aVisits: visitsA.map(asVisit),
@@ -2366,13 +2417,13 @@ async function runLink(m, visitsA, visitsB) {
     sources: (v) => sourcesOf.get(v.id) ?? [],
     occupied,
     inField,
+    anchorInB: anchorHit ? anchorInB : undefined,
+    anchorSaturated: mostlySaturated(hitsA),
     pixelArcsec: DETECTOR_ARCSEC,
   });
   // A source at the mark that is still there in season B sits still: a star.
-  const stillThere = anchorHit ? visitsB.filter((v) => {
-    const hit = sky.measure(v, anchor.ra, anchor.dec);
-    return hit && separationArcsec(hit, anchor) <= 1.5 * DETECTOR_ARCSEC;
-  }).length : 0;
+  const stillThere = result.star?.stillThere
+    ?? (anchorHit ? visitsB.filter((v) => anchorInB(asVisit(v))).length : 0);
   const limits = visitsB.map((v) => limitAB(v.stamp.meta?.detectorSigma)).filter((x) => x != null).sort((x, y) => x - y);
   return {
     anchor,
@@ -2392,7 +2443,8 @@ async function runLink(m, visitsA, visitsB) {
  */
 function showLink(m) {
   const link = m?.link;
-  if (!link || link.state !== 'done' || !link.shown) {
+  // A star has no arc to follow.
+  if (!link || link.state !== 'done' || !link.shown || link.result.star) {
     sky.link = null;
     sky.draw();
     return;
@@ -2448,6 +2500,15 @@ function linkLines(m) {
 
   const r = link.result;
   const dateB = fmtDate(link.visitsB[0].iso);
+  // A star at the mark is the whole answer: nothing on the arc is offered
+  // as where it went, because it did not go anywhere.
+  if (r.star) {
+    line(t(r.star.saturated ? 'link.starSaturated' : 'link.star', {
+      n: r.star.stillThere, total: r.checked, date: dateB,
+    }));
+    if (r.star.stillThere) line(t('link.starWhy'), 'quiet');
+    return out;
+  }
   if (!r.covered) {
     line(t('link.outside', { near: fmt(NEAR_AU, 0), far: fmt(FAR_AU, 0) }));
   } else if (r.link) {
@@ -2565,7 +2626,34 @@ function fieldGrid(ra, dec) {
   return grid;
 }
 
-async function openField({ ra, dec, label = '', band = null }) {
+/** The preset centred on this spot, if one is. */
+function presetAt(ra, dec) {
+  const cos = Math.cos((dec * Math.PI) / 180);
+  return state.presets.find((p) => Number.isFinite(p.ra)
+    && Math.hypot(deltaRA(p.ra, ra) * cos, p.dec - dec) < 0.01) ?? null;
+}
+
+/**
+ * The object a field is opened for, to be marked on the plate: a preset's
+ * catalogue position and motion; a name's, as the name service gave it (a
+ * J2000 position, its motion if SIMBAD has one); the same target again when
+ * the same field is reopened in another band or width. A field opened at
+ * bare coordinates has none.
+ */
+function fieldTarget({ ra, dec, label, target, pm }) {
+  if (target !== undefined) return target;
+  const preset = presetAt(ra, dec);
+  if (preset?.target) return { ...preset.target, key: preset.key, label: t(`preset.${preset.key}`) };
+  const kept = state.target;
+  if (kept?.field && kept.label === label && Math.abs(kept.field.ra - ra) < 1e-6 && Math.abs(kept.field.dec - dec) < 1e-6) {
+    return kept;
+  }
+  if (!label) return null;
+  const moving = Number.isFinite(pm?.[0]) && Number.isFinite(pm?.[1]);
+  return moving ? { ra, dec, epoch: 2000, pmRA: pm[0], pmDE: pm[1], label } : { ra, dec, label };
+}
+
+async function openField({ ra, dec, label = '', band = null, target, pm }) {
   fieldSeq += 1;
   state.abort?.abort();
   const ctrl = new AbortController();
@@ -2575,6 +2663,8 @@ async function openField({ ra, dec, label = '', band = null }) {
   state.ra = ra;
   state.dec = dec;
   state.label = label;
+  state.target = fieldTarget({ ra, dec, label, target, pm });
+  if (state.target) state.target.field = { ra, dec };
   if (band) state.band = band;
   state.visits = [];
   state.truncated = false;
@@ -2594,6 +2684,7 @@ async function openField({ ra, dec, label = '', band = null }) {
   // fieldGrid for why its short side is the one the size control sets.
   let grid = fieldGrid(ra, dec);
   sky.reset(grid);
+  sky.target = state.target;
   // The mount names the frame on the plate; with none on it yet it must not
   // go on naming the last field's.
   renderWhen();
@@ -2854,7 +2945,7 @@ async function submitTarget(raw, { note = $('find-note'), onFound } = {}) {
     if (!hit) { note.textContent = t('target.notFound'); return; }
     note.textContent = '';
     onFound?.();
-    openField({ ra: hit.ra, dec: hit.dec, label: hit.name });
+    openField({ ra: hit.ra, dec: hit.dec, label: hit.name, pm: hit.pm });
   } catch {
     if (ticket !== askSeq) return;
     note.textContent = movedOn() ? '' : t('target.offline');
@@ -3321,7 +3412,7 @@ async function previewLive(hit, where) {
       const picture = ctx.createImageData(CARD_PX, CARD_PX);
       const { lo, hi } = limitsFromSorted(sortedFinite(stamp.data));
       paint(picture, stamp.data, rampFromToken(document.documentElement, '--cmap-deep'), {
-        lo, hi, stretch: 'asinh', blankAlpha: 255,
+        lo, hi, stretch: 'asinh', blankAlpha: 255, quality: stamp.quality,
       });
       ctx.putImageData(picture, 0, 0);
       frame.dataset.live = 'shown';
@@ -4221,6 +4312,8 @@ function wire() {
 /** The words the picture draws itself, in the reader's language. */
 function labelSky() {
   sky.labels.rate = (r) => t('overlay.rate', { rate: fmt(r, r < 10 ? 1 : 0) });
+  // A preset's name is the reader's language's; a looked-up name is SIMBAD's.
+  if (state.target?.key) state.target.label = t(`preset.${state.target.key}`);
 }
 
 function relabel() {
@@ -4295,7 +4388,7 @@ async function boot() {
   // A shared link goes straight to its field; anyone else starts at the sky.
   if (hash.position) {
     closeGate();
-    openField({ ...hash.position, label: hash.name, band: hash.band });
+    openField({ ...hash.position, label: hash.name, band: hash.band, pm: hash.pm });
   } else {
     openGate();
     setPlateState(t('status.idle'));

@@ -23,8 +23,38 @@ import { SECTOR_COLS, SECTOR_ROWS, sectorBounds } from './sectors.js';
 import { deltaRA } from './wcs.js';
 import { coadd } from './stack.js';
 import { epochOfMjd, propagate, markRadius } from './overlay.js';
+import { QUALITY } from './stamp.js';
 
 const RAMP_TOKENS = { deep: '--cmap-deep', ice: '--cmap-ice', infrared: '--cmap-infrared' };
+
+/**
+ * What a visit's quality plane says about the samples within `reach` of
+ * (ci, cj): how many sit on a saturated detector pixel and where they are
+ * centred, and what share of them hold no value at all.
+ */
+export function coreQuality(quality, width, height, ci, cj, reach) {
+  let overflow = 0;
+  let holes = 0;
+  let n = 0;
+  let sx = 0;
+  let sy = 0;
+  for (let j = Math.max(0, cj - reach); j <= Math.min(height - 1, cj + reach); j++) {
+    for (let i = Math.max(0, ci - reach); i <= Math.min(width - 1, ci + reach); i++) {
+      const q = quality[j * width + i];
+      n += 1;
+      if (q & QUALITY.HOLE) holes += 1;
+      if (q & QUALITY.OVERFLOW) { overflow += 1; sx += i; sy += j; }
+    }
+  }
+  return { overflow, holeShare: n ? holes / n : 0, centre: overflow ? [sx / overflow, sy / overflow] : null };
+}
+
+/**
+ * Most of a mark's detections on saturated pixels: the measurement has
+ * nothing to say about its brightness or how it moves.
+ */
+export const mostlySaturated = (track) => track.length > 0
+  && 2 * track.filter((p) => p.saturated).length > track.length;
 
 /** The two survey marks, added to the path being built. */
 function ring(ctx, x, y, r) {
@@ -86,6 +116,10 @@ export class SkyView {
     /* One mark's parallax arc into another season, while it is being looked
        at: { points, ticks, match, tickLabel } in sky coordinates, or null. */
     this.link = null;
+    /* The object the field was opened for, when it was opened by name:
+       { ra, dec, epoch, pmRA, pmDE, label } — a catalogue position at its own
+       epoch and a motion in mas a year, either of which may be missing. */
+    this.target = null;
     /* Words the picture needs in the reader's language, set by the page. */
     this.labels = { rate: (r) => `${r.toFixed(r < 10 ? 1 : 0)}″/h` };
     this.hover = null;
@@ -302,7 +336,7 @@ export class SkyView {
     const lim = shared ?? this.ownLimits(v);
     v.limits = lim;
     const img = v.ctx.createImageData(v.stamp.width, v.stamp.height);
-    paint(img, v.stamp.data, lut, { lo: lim.lo, hi: lim.hi, stretch: this.render.stretch });
+    paint(img, v.stamp.data, lut, { lo: lim.lo, hi: lim.hi, stretch: this.render.stretch, quality: v.stamp.quality });
     v.ctx.putImageData(img, 0, 0);
   }
 
@@ -465,6 +499,7 @@ export class SkyView {
       // SkyBoT's rings are positions at one exposure's moment; on a season's
       // sum they would pin a body to a place it held for one of the visits.
       if (this.overlays.skybot && this.mode !== 'stack') this.drawKnownObjects(ctx);
+      if (this.overlays.marks && this.target) this.drawTarget(ctx);
       if (this.overlays.catalog) this.drawCatalog(ctx);
       this.drawSurveys(ctx);
       if (this.overlays.sectors || this.sector) this.drawSectors(ctx);
@@ -786,6 +821,57 @@ export class SkyView {
     ctx.restore();
   }
 
+  /**
+   * Where the named target was at the date of the visit on screen: its
+   * catalogue position carried by its proper motion, or where it stands
+   * when no motion is known.
+   */
+  targetAt() {
+    const t = this.target;
+    const v = this.current;
+    if (!t) return null;
+    if (!v || !Number.isFinite(t.epoch)) return { ra: t.ra, dec: t.dec };
+    return propagate(t, epochOfMjd(v.frame.mjd), t.epoch);
+  }
+
+  /**
+   * The object the field was opened for: a thin ring and its name, in the
+   * ink of the user's own marks but open, so it reads as "this is the one
+   * you asked for" and not as a measurement. It follows a fast star from
+   * visit to visit.
+   */
+  drawTarget(ctx) {
+    const at = this.targetAt();
+    const g = at && this.grid.worldToIndex(at.ra, at.dec);
+    if (!g) return;
+    const [x, y] = this.toCanvas(g[0], g[1]);
+    if (x < -20 || y < -20 || x > this.cssW + 20 || y > this.cssH + 20) return;
+    const r = 16;
+    ctx.save();
+    ctx.strokeStyle = this.colors.ink;
+    ctx.lineWidth = 1;
+    ctx.globalAlpha = 0.85;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    this.taken.push({ x0: x - r - 2, x1: x + r + 2, y0: y - r - 2, y1: y + r + 2 });
+    const text = this.target.label;
+    if (text) {
+      ctx.font = this.fonts.mark;
+      ctx.textBaseline = 'middle';
+      const w = ctx.measureText(text).width;
+      // Under the ring, or over it at the bottom edge; never on the star.
+      const below = y + r + 14 <= this.cssH - 4;
+      const ty = below ? y + r + 9 : y - r - 9;
+      const tx = Math.min(Math.max(x, 4 + w / 2), this.cssW - 4 - w / 2);
+      ctx.textAlign = 'center';
+      this.label(ctx, text, tx, ty, this.colors.ink);
+      this.taken.push({ x0: tx - w / 2 - 2, x1: tx + w / 2 + 2, y0: ty - 8, y1: ty + 8 });
+    }
+    ctx.restore();
+  }
+
   drawMarks(ctx) {
     ctx.save();
     ctx.lineWidth = 1.4;
@@ -1068,6 +1154,24 @@ export class SkyView {
     const out = r + gap + band;
     if (ci - out < 0 || cj - out < 0 || ci + out >= W || cj + out >= H) return null;
 
+    // A star too bright for the detector: its core ran past the well
+    // (OVERFLOW) and the pipeline blanked much of it. Its rim is not its
+    // centre and the light left is not its brightness, so the answer is
+    // that it is saturated, where the saturated pixels are, and nothing more.
+    // Only the FLAGS plane can say this; a stamp without one claims nothing.
+    const quality = visit.stamp.quality;
+    if (quality) {
+      const box = coreQuality(quality, W, H, ci, cj, r);
+      const wide = box.overflow ? box : coreQuality(quality, W, H, ci, cj, out);
+      if (box.overflow || (box.holeShare > 0.5 && wide.overflow)) {
+        const [mra, mdec] = this.grid.indexToWorld(wide.centre[0], wide.centre[1]);
+        return {
+          ra: mra, dec: mdec, saturated: true, peak: null, flux: null, mag: null, snr: null, noise: null,
+          mjd: visit.frame.mjd, obsId: visit.frame.obsId,
+        };
+      }
+    }
+
     // Background and noise from an annulus a pixel clear of the search box.
     const ring = [];
     for (let j = cj - out; j <= cj + out; j++) {
@@ -1127,19 +1231,24 @@ export class SkyView {
     const half = Math.max(1, Math.round(1.5 * perPixel));
     let flux = 0;
     let lost = 0;
+    let overflow = 0;
     for (let j = Math.round(cy) - half; j <= Math.round(cy) + half; j++) {
       for (let i = Math.round(cx) - half; i <= Math.round(cx) + half; i++) {
-        const v = i < 0 || j < 0 || i >= W || j >= H ? NaN : data[j * W + i] - bg;
+        const outside = i < 0 || j < 0 || i >= W || j >= H;
+        const v = outside ? NaN : data[j * W + i] - bg;
         if (v === v) flux += v;
         else lost += 1;
+        if (!outside && quality && quality[j * W + i] & QUALITY.OVERFLOW) overflow += 1;
       }
     }
     // An aperture with a hole in it is not the star's light. Past a tenth
-    // masked or off the frame, no brightness is quoted for this visit.
-    const whole = lost <= 0.1 * (2 * half + 1) ** 2;
+    // masked or off the frame, no brightness is quoted for this visit; nor
+    // when any of it lies on a saturated pixel, a bright neighbour's core.
+    const whole = lost <= 0.1 * (2 * half + 1) ** 2 && !overflow;
     flux = whole ? flux / (perPixel * perPixel) : null;
 
     return {
+      ...(overflow ? { saturated: true } : {}),
       ra: mra, dec: mdec, peak: peak - bg, flux, mag: whole ? magAB(flux) : null,
       snr: (peak - bg) / noise, noise, mjd: visit.frame.mjd, obsId: visit.frame.obsId,
       // The area actually summed, in detector pixels: the box is a whole number
@@ -1218,6 +1327,16 @@ export class SkyView {
     result.brightness = sameBand && mags.length
       ? { brightest: Math.min(...mags), faintest: Math.max(...mags), band: track[0].band }
       : null;
+
+    // Saturated in most visits: neither "fixed" nor "comes and goes" is
+    // something these pixels can support. A visit missed or a centre a pixel
+    // off is the saturation talking, not the star.
+    if (mostlySaturated(track)) {
+      result.kind = 'saturated';
+      result.saturated = track.filter((p) => p.saturated).length;
+      result.spanDays = track[track.length - 1].mjd - track[0].mjd;
+      return result;
+    }
 
     if (seen === 1) {
       result.kind = 'transient';

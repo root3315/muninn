@@ -36,7 +36,7 @@ self.addEventListener('message', async ({ data: msg }) => {
     // blink and in anything else moving. Done here, they arrive with it.
     plain.sigma = skySigma(plain.data);
     plain.cut = { key: DEFAULT_CLIP, lim: limits(plain.data, { loPercent: 5, hiPercent: DEFAULT_CLIP }) };
-    self.postMessage({ id, stamp: plain }, [plain.data.buffer]);
+    self.postMessage({ id, stamp: plain }, [plain.data.buffer, plain.quality.buffer]);
   } catch (err) {
     self.postMessage({ id, error: err?.name === 'AbortError' ? 'AbortError' : String(err?.message ?? err) });
   } finally {
