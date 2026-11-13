@@ -1853,9 +1853,25 @@ function nameMarks() {
  * name if SkyBoT has one, the catalogue name of a star if one was found, and
  * otherwise what the measurement says it is.
  */
+/** What the catalogues have said about a mark so far: all of it once done, the answers in while asking. */
+function whoSoFar(m) {
+  if (m.who?.state === 'done') return m.who.result;
+  return m.who?.state === 'asking' ? m.who.partial ?? null : null;
+}
+
+/**
+ * The same, for a word drawn on the picture: only once both catalogues that
+ * know how stars move have spoken, since before then a fast cold star can
+ * carry its neighbour's name.
+ */
+function whoSettled(m) {
+  const r = whoSoFar(m);
+  return r && !r.pending?.some((k) => k === 'gaia' || k === 'catwise') ? r : null;
+}
+
 function tagOf(m) {
   if (m.known) return m.known;
-  const r = m.who?.state === 'done' ? m.who.result : null;
+  const r = whoSettled(m);
   if (r?.simbad) return shortName(r.simbad.name);
   if (r?.vsx) return r.vsx.name;
   if (r?.gaia && Number.isFinite(r.gaia.mag)) return `G ${fmt(r.gaia.mag, 1)}ᵐ`;
@@ -1925,7 +1941,16 @@ function identifyMark(m) {
     who.slow = true;
     if (sky.marks.includes(m)) renderMarks();
   }, IDENTIFY_SLOW_MS);
-  identifySource(at, { signal })
+  // Each answer is shown as it comes: SIMBAD's name in a second need not
+  // wait on an IRSA catalogue that takes twenty.
+  const onUpdate = (partial) => {
+    if (m.who !== who || !sky.marks.includes(m)) return;
+    who.partial = partial;
+    m.tag = tagOf(m);
+    sky.draw();
+    renderMarks();
+  };
+  identifySource(at, { signal, onUpdate })
     .then((result) => settle({ key, state: 'done', result }))
     .catch(() => {
       // The field was closed under the question: nobody is waiting for this
@@ -1977,13 +2002,27 @@ function whoLines(who, kind) {
     const dot = document.createElement('span');
     dot.className = 'mark__asking-dot';
     dot.setAttribute('aria-hidden', 'true');
-    p.append(dot, t(who.slow ? 'mark.whoSlow' : 'mark.whoAsking'));
-    return [p];
+    const out = who.partial?.asking ?? [];
+    const so = who.partial ? answerLines(who.partial, kind) : [];
+    const text = so.length && out.length
+      ? t('mark.whoStill', { list: out.map((k) => CATALOGUE_NAMES[k]).join(', ') })
+      : t(who.slow ? 'mark.whoSlow' : 'mark.whoAsking');
+    p.append(dot, text);
+    return [...so, p];
   }
   if (who.state === 'failed') return [whoP(t('mark.whoFailed'))];
   if (who.state === 'timeout') return [whoP(t('mark.whoTimeout', { s: Math.round(IDENTIFY_CAP_MS / 1000) }))];
   const r = who.result;
+  const lines = answerLines(r, kind);
+  if (!lines.length) lines.push(whoP(t('mark.whoNone')));
+  if (r.failed.length) lines.push(whoP(t('mark.whoPartial', { list: r.failed.map((k) => CATALOGUE_NAMES[k]).join(', ') })));
+  return lines;
+}
+
+/** A line for each thing the catalogues had to say, from all of them or the ones in so far. */
+function answerLines(r, kind) {
   const lines = [];
+  const heard = (key) => !r.failed.includes(key) && !r.pending?.includes(key);
   // Beyond a couple of arcsec the name is a neighbour's, and it should say so.
   const off = (sep) => (sep > 2 ? `, ${t('mark.whoSep', { sep: fmt(sep, 1) })}` : '');
 
@@ -2013,7 +2052,7 @@ function whoLines(who, kind) {
       ` — ${bits.join(', ')}`));
   } else if (r.gaia?.variable) {
     lines.push(whoP(t('mark.whoGaiaVar')));
-  } else if ((kind === 'intermittent' || kind === 'transient') && r.any && !r.failed.includes('vsx') && !r.failed.includes('gaia')) {
+  } else if ((kind === 'intermittent' || kind === 'transient') && r.any && heard('vsx') && heard('gaia')) {
     lines.push(whoP(t('mark.whoNotVar')));
   }
 
@@ -2041,9 +2080,6 @@ function whoLines(who, kind) {
     lines.push(whoP(t('mark.whoPlx', { plx: fmt(g.plx, 2), pc: fmt(pc, pc < 100 ? 1 : 0) })));
   }
   if (r.catwise?.pm != null) lines.push(whoP(t('mark.whoCatwise', { pm: fmt(r.catwise.pm, 2) })));
-
-  if (!lines.length) lines.push(whoP(t('mark.whoNone')));
-  if (r.failed.length) lines.push(whoP(t('mark.whoPartial', { list: r.failed.map((k) => CATALOGUE_NAMES[k]).join(', ') })));
   return lines;
 }
 
@@ -2329,7 +2365,7 @@ function sharpLine(a) {
 function saturatedMotion(m) {
   const a = m.analysis;
   if (a?.kind !== 'saturated' || !(a.spanDays > 0)) return null;
-  const r = m.who?.state === 'done' ? m.who.result : null;
+  const r = whoSoFar(m);
   const tg = state.target;
   const when = a.track.reduce((s, p) => s + p.mjd, 0) / a.track.length;
   const target = tg && Number.isFinite(tg.epoch)
