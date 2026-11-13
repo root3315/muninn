@@ -7,7 +7,14 @@
  *
  * What the browser cannot reach is IRSA's Simple Image Access service — the index
  * that says which frames cover a position. IRSA sends no CORS headers at all, so
- * that one call is relayed here, parsed into plain JSON, and cached on disk.
+ * that call is relayed here, parsed into plain JSON, and cached on disk.
+ *
+ * Two more NASA services send no CORS headers either, and are relayed the same
+ * way: IRSA's TAP service, for the Gaia, AllWISE, CatWISE2020 and 2MASS
+ * catalogues (/api/tap), and JPL's Small-Body Identification service, for the
+ * known asteroids and comets in a field at a moment (/api/sbident). Neither
+ * takes a query from the page: the relay writes it from a fixed template and
+ * checked numbers.
  *
  * No dependencies. `node server.js` and open the address it prints.
  */
@@ -22,6 +29,9 @@ import { fileURLToPath } from 'node:url';
 import { parseVOTable } from './public/js/votable.js';
 import { frameFromRow } from './public/js/catalog.js';
 import { COLLECTIONS } from './public/js/release.js';
+import { parseCsv } from './public/js/csv.js';
+import { CATALOGUES, ROW_CAP, coneQuery, renameRow } from './public/js/overlay.js';
+import { sbIdentUrl, parseSbIdent } from './public/js/sbident.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
@@ -30,7 +40,12 @@ const PORT = Number(process.env.PORT) || 5173;
 const HOST = process.env.HOST || '127.0.0.1';
 
 const SIA = 'https://irsa.ipac.caltech.edu/SIA';
+const IRSA_TAP = 'https://irsa.ipac.caltech.edu/TAP/sync';
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+/** IRSA's TAP answers a cone in 7–30 s; well past that, it is not coming. */
+const TAP_TIMEOUT_MS = 75_000;
+/** JPL's second pass takes 20–70 s on a crowded ecliptic field. */
+const SBIDENT_TIMEOUT_MS = 120_000;
 /**
  * A position the archive has not seen before routinely takes 70 s or more. The
  * answer keeps its connection alive while it waits (see answerSlowly), so
@@ -105,13 +120,15 @@ const memory = new Map();
 /** Answers kept in memory; the disk keeps the rest. Oldest out first. */
 const MEMORY_MAX = 256;
 /**
- * Distinct positions being asked of IRSA at once. Behind a public tunnel a
- * crawler could otherwise open as many slow archive queries as it liked.
+ * Distinct questions out to the archives at once. Behind a public tunnel a
+ * crawler could otherwise open as many slow archive queries as it liked. One
+ * field asks for its frames, two overlays, four catalogues for a marked source
+ * and two ephemeris answers at a time; this leaves room for that, not for more.
  */
-const INFLIGHT_MAX = 6;
+const INFLIGHT_MAX = 12;
 
-const cacheKey = (ra, dec, radius) =>
-  `sia_${ra.toFixed(4)}_${dec.toFixed(4)}_${radius.toFixed(4)}`.replace(/[^\w.-]/g, '_');
+const safeKey = (text) => text.replace(/[^\w.-]/g, '_');
+const cacheKey = (ra, dec, radius) => safeKey(`sia_${ra.toFixed(4)}_${dec.toFixed(4)}_${radius.toFixed(4)}`);
 
 async function readCache(key) {
   const hit = memory.get(key);
@@ -237,22 +254,54 @@ async function answerSlowly(res, pending) {
   res.end(JSON.stringify(body));
 }
 
+/**
+ * A question for an archive, answered from the cache, by joining the same
+ * question already out, or by asking. `ask` caches its own answer, since only
+ * it knows whether the answer is whole.
+ */
+async function relay(res, key, ask) {
+  const cached = await readCache(key);
+  if (cached) return json(res, 200, { ok: true, cached: true, ...cached });
+
+  let pending = inflight.get(key);
+  if (!pending && inflight.size >= INFLIGHT_MAX) {
+    return json(res, 503, { ok: false, error: 'The archive relay is busy with other questions; try again in a moment.' });
+  }
+  if (!pending) {
+    pending = ask().finally(() => inflight.delete(key));
+    inflight.set(key, pending);
+  }
+  return answerSlowly(res, pending);
+}
+
+/**
+ * A number from the query string. Number(null) and Number('') are both 0: an
+ * absent coordinate would otherwise be a query at the vernal equinox.
+ */
+function param(url, name) {
+  const raw = url.searchParams.get(name)?.trim();
+  return raw ? Number(raw) : NaN;
+}
+
+const clamp = (value, lo, hi) => Math.min(hi, Math.max(lo, value));
+
+/** The position asked about, or null when it is not one on the sky. */
+function position(url) {
+  const ra = param(url, 'ra');
+  const dec = param(url, 'dec');
+  if (!Number.isFinite(ra) || !Number.isFinite(dec) || ra < 0 || ra >= 360 || Math.abs(dec) > 90) return null;
+  return { ra, dec };
+}
+
+const BAD_POSITION = { ok: false, error: 'ra must be 0–360 and dec −90–90' };
+
 async function handleSearch(url, res) {
-  // Number(null) and Number('') are both 0: an absent coordinate would
-  // otherwise be a query at the vernal equinox.
-  const coord = (name) => {
-    const raw = url.searchParams.get(name)?.trim();
-    return raw ? Number(raw) : NaN;
-  };
-  const ra = coord('ra');
+  const at = position(url);
+  if (!at) return json(res, 400, BAD_POSITION);
+  const { ra, dec } = at;
   // A SPHEREx frame is about 3.5° across, so a near-point cone already finds every
   // frame that can cover the field — and a wider cone costs the archive dearly.
-  const dec = coord('dec');
   const radius = Math.min(0.03, Math.max(0.002, Number(url.searchParams.get('radius')) || 0.006));
-
-  if (!Number.isFinite(ra) || !Number.isFinite(dec) || ra < 0 || ra >= 360 || Math.abs(dec) > 90) {
-    return json(res, 400, { ok: false, error: 'ra must be 0–360 and dec −90–90' });
-  }
 
   const prebaked = findBaked(ra, dec);
   if (prebaked) {
@@ -263,18 +312,91 @@ async function handleSearch(url, res) {
   }
 
   const key = cacheKey(ra, dec, radius);
-  const cached = await readCache(key);
-  if (cached) return json(res, 200, { ok: true, cached: true, ...cached });
+  return relay(res, key, () => lookup(ra, dec, radius, key));
+}
 
-  let pending = inflight.get(key);
-  if (!pending && inflight.size >= INFLIGHT_MAX) {
-    return json(res, 503, { ok: false, error: 'The archive relay is busy with other positions; try again in a moment.' });
+/* ------------------------------------------------------- catalogues at IRSA */
+
+/**
+ * Sources of one catalogue in a circle, from IRSA's TAP service.
+ *
+ *   cat   gaia | wise | catwise | twomass — the name of a template, nothing more
+ *   r     radius in degrees, 1″ to 1° (a plate's overlay needs about 0.6°)
+ *   top   the most rows, 1 to ROW_CAP + 1
+ *   mag   optional: nothing fainter than this in the catalogue's own band
+ *
+ * Rows come back under the shared column names (see CATALOGUES in overlay.js),
+ * every value as text, so the page parses IRSA's answer and VizieR's alike.
+ */
+async function handleTap(url, res) {
+  const cat = url.searchParams.get('cat');
+  const archive = Object.hasOwn(CATALOGUES, cat ?? '') ? CATALOGUES[cat].irsa : null;
+  if (!archive) return json(res, 400, { ok: false, error: `cat must be one of ${Object.keys(CATALOGUES).join(', ')}` });
+  const at = position(url);
+  if (!at) return json(res, 400, BAD_POSITION);
+  const radiusDeg = param(url, 'r');
+  if (!Number.isFinite(radiusDeg)) return json(res, 400, { ok: false, error: 'r (degrees) is required' });
+
+  const field = {
+    ...at,
+    radiusDeg: clamp(radiusDeg, 1 / 3600, 1),
+    top: clamp(Math.trunc(param(url, 'top')) || 9, 1, ROW_CAP + 1),
+    limit: Number.isFinite(param(url, 'mag')) ? clamp(param(url, 'mag'), -2, 30) : null,
+  };
+  const key = safeKey(`tap_${cat}_${field.ra.toFixed(5)}_${field.dec.toFixed(5)}_${field.radiusDeg.toFixed(5)}_${field.top}_${field.limit ?? 'all'}`);
+  return relay(res, key, () => askIrsaTap(archive, field, key));
+}
+
+async function askIrsaTap(archive, field, key) {
+  const query = new URLSearchParams({ REQUEST: 'doQuery', LANG: 'ADQL', FORMAT: 'csv', QUERY: coneQuery(archive, field) });
+  const res = await withTimeout(`${IRSA_TAP}?${query}`, TAP_TIMEOUT_MS);
+  const text = await res.text();
+  // A refusal comes back as a VOTable whatever format was asked for.
+  if (!res.ok || text.trimStart().startsWith('<')) {
+    const said = text.trimStart().startsWith('<') ? parseVOTable(text).message : '';
+    throw new Error(`IRSA TAP: ${said || `HTTP ${res.status}`}`);
   }
-  if (!pending) {
-    pending = lookup(ra, dec, radius, key).finally(() => inflight.delete(key));
-    inflight.set(key, pending);
+  const rows = parseCsv(text).map((row) => renameRow(row, archive.columns));
+  const payload = { rows, via: 'IRSA', table: archive.table };
+  await writeCache(key, payload);
+  return { ok: true, cached: false, ...payload };
+}
+
+/* ---------------------------------------------------- small bodies at JPL */
+
+/** "2025-08-15T20:45:12" and nothing looser: it becomes part of a URL to JPL. */
+const ISO_SECOND = /^(19|20)\d\d-[01]\d-[0-3]\dT[0-2]\d:[0-5]\d:[0-5]\d/;
+
+/**
+ * Known asteroids and comets in a square field at a moment, from JPL.
+ *
+ *   ra, dec   the centre; r   half the side, degrees, 0.01° to 2°
+ *   time      UTC, ISO 8601 to the second;  mag   faintest V, 10 to 25
+ */
+async function handleSbIdent(url, res) {
+  const at = position(url);
+  if (!at) return json(res, 400, BAD_POSITION);
+  const time = url.searchParams.get('time') ?? '';
+  if (!ISO_SECOND.test(time) || Number.isNaN(Date.parse(`${time.slice(0, 19)}Z`))) {
+    return json(res, 400, { ok: false, error: 'time must be UTC as YYYY-MM-DDThh:mm:ss' });
   }
-  return answerSlowly(res, pending);
+  const field = {
+    ...at,
+    halfWidthDeg: clamp(param(url, 'r') || 0.1, 0.01, 2),
+    iso: time.slice(0, 19),
+    magLimit: clamp(param(url, 'mag') || 20, 10, 25),
+  };
+  const key = safeKey(`sbid_${field.ra.toFixed(4)}_${field.dec.toFixed(4)}_${field.halfWidthDeg.toFixed(4)}_${field.iso}_${field.magLimit}`);
+  return relay(res, key, () => askJpl(field, key));
+}
+
+async function askJpl(field, key) {
+  const res = await withTimeout(sbIdentUrl(field), SBIDENT_TIMEOUT_MS);
+  const body = await res.json().catch(() => null);
+  if (!res.ok || !body?.signature) throw new Error(`JPL sb_ident: ${body?.message ?? `HTTP ${res.status}`}`);
+  const payload = { bodies: parseSbIdent(body), via: 'JPL' };
+  await writeCache(key, payload);
+  return { ok: true, cached: false, ...payload };
 }
 
 /** Ask the archive which frames cover a position, and cache a complete answer. */
@@ -421,6 +543,8 @@ const server = createServer(async (req, res) => {
   }
   try {
     if (url.pathname === '/api/search') return await handleSearch(url, res);
+    if (url.pathname === '/api/tap') return await handleTap(url, res);
+    if (url.pathname === '/api/sbident') return await handleSbIdent(url, res);
     if (url.pathname === '/api/targets') {
       const body = await readFile(join(PUBLIC, 'data', 'targets.json'));
       return send(res, 200, body, { 'content-type': TYPES['.json'] });
@@ -439,7 +563,8 @@ server.listen(PORT, HOST, () => {
   console.log(`\n  Muninn — SPHEREx time-domain viewer`);
   console.log(`  http://${HOST}:${PORT}\n`);
   console.log(`  Image data is read straight from the AWS mirror by the browser.`);
-  console.log(`  This process relays the IRSA frame index and caches it in .cache/`);
+  console.log(`  This process relays the IRSA frame index and catalogues, and JPL's`);
+  console.log(`  small-body identification, and caches the answers in .cache/`);
   console.log(baked.length
     ? `  ${baked.length} pre-resolved fields loaded: ${baked.map((b) => b.key).join(', ')}\n`
     : `  No pre-resolved fields — run "npm run bake" to make the presets open instantly.\n`);

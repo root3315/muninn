@@ -46,11 +46,13 @@ node server.js          # Node 18+, no dependencies to install
 
 Then open <http://127.0.0.1:5173>.
 
-The server does two things: it serves the page, and it relays one call to IRSA that the
-browser is not allowed to make itself. Image data never passes through it.
+The server does two things: it serves the page, and it relays the calls to NASA services
+that send no CORS headers, which the browser is therefore not allowed to make itself:
+IRSA's frame index, IRSA's catalogue service (TAP) and JPL's small-body identification.
+Image data never passes through it.
 
 ```bash
-npm test                # 53 offline tests: a synthetic FITS through the whole pipeline, and more
+npm test                # 65 offline tests: a synthetic FITS through the whole pipeline, and more
 npm run bake            # refresh the pre-resolved opening fields (optional)
 npm run probe           # check the WCS round-trip against a live SPHEREx header
 node tools/verify-mover.mjs 13.4194 3.8459 0.15   # the photometry check below
@@ -84,7 +86,9 @@ npm run deploy                  # wrangler pages deploy
 IRSA relay ported to the Workers runtime. Both import the same VOTable parser, but
 the port runs under tighter limits (a 20 s wait on IRSA against 150 s, 400 rows per
 collection against 500), so a position IRSA has not seen before can time out there.
-The live site runs `server.js`.
+The live site runs `server.js`. The catalogue and small-body relays (`/api/tap`,
+`/api/sbident`) exist only there; on Pages the catalogues come from VizieR alone and
+known asteroids from SkyBoT alone.
 Pixels are not involved either way: the browser reads them straight from the S3
 mirror.
 
@@ -165,9 +169,11 @@ reason the threshold is stated. It crosses the pixel once the baseline passes 21
 | SPHEREx Level-2 spectral images (Data Release 1 and Quick Release 3) | NASA/JPL-Caltech · IPAC/IRSA, via the AWS Open Data mirror `nasa-irsa-spherex` | every pixel on screen, read by HTTP range request |
 | SPHEREx frame index | IRSA Simple Image Access v2, collections `spherex_dr1`, `spherex_dr1_deep`, `spherex_qr3`, `spherex_qr3_deep` | which frames cover a position, when, and in which band |
 | SPHEREx `FLAGS` plane | the same files | masking cosmic-ray hits and bad pixels before anything is measured; the caption of every frame says how many pixels that was |
-| AllWISE W1/W2 | NASA WISE, through CDS VizieR | identifying a marked source at 3.4 and 4.6 µm; an overlay of AllWISE positions on the plate (epoch about 2010.5, not moved) |
-| Gaia DR3 | ESA Gaia, through CDS VizieR | identifying a faint marked star, and whether Gaia saw it vary; an overlay of Gaia positions on the plate, carried by proper motion from J2016.0 to the date of the visit |
-| Known solar-system objects | SkyBoT, IMCCE | naming asteroids at the moment of each exposure |
+| AllWISE W1/W2 | NASA WISE, through IRSA TAP (`allwise_p3as_psd`), raced against CDS VizieR | identifying a marked source at 3.4 and 4.6 µm; an overlay of AllWISE positions on the plate (epoch about 2010.5, not moved) |
+| CatWISE2020 | NASA WISE and NEOWISE, through IRSA TAP (`catwise_2020`) | whether a marked source moves: a proper motion from ten years of WISE, said only at five times its error. The catalogue the coldest brown dwarfs, WISE 0855−0714 among them, were found in |
+| 2MASS | NASA/IPAC 2MASS Point Source Catalog, through IRSA TAP (`fp_psc`), raced against CDS VizieR | J, H and K of a marked source, the near infrared SPHEREx works in |
+| Gaia DR3 | ESA Gaia, through IRSA TAP (`gaia_dr3_source`), raced against CDS VizieR | identifying a faint marked star, and whether Gaia saw it vary; an overlay of Gaia positions on the plate, carried by proper motion from J2016.0 to the date of the visit |
+| Known solar-system objects | NASA/JPL Small-Body Identification (`sb_ident`), merged with SkyBoT (IMCCE) | naming asteroids and comets at the moment of each exposure; either service alone is enough |
 
 ### When a new SPHEREx release lands
 
@@ -562,7 +568,7 @@ of the image and read the verdict: one visit, named by SkyBoT as the asteroid.
   the light outside the aperture, and it does not match wavelengths between visits.
 - **The distance bound assumes a circular orbit in the ecliptic.** It is a ceiling from a rate,
   not an orbit fit.
-- **The relay is not hardened for abuse.** It caps six lookups in flight, but has no per-client
+- **The relay is not hardened for abuse.** It caps twelve lookups in flight, but has no per-client
   limit and never prunes its disk cache.
 - **No video yet.** The submission's 30-second recording is not made; the eight slides are.
 - **Cosmic rays look like transients.** They are single-frame, sharp, and common. The ones
@@ -577,9 +583,14 @@ of the image and read the verdict: one visit, named by SkyBoT as the asteroid.
 | --- | --- |
 | Images | NASA/JPL-Caltech · SPHEREx · IPAC/IRSA Data Release 1 and Quick Release 3, via the AWS Open Data mirror `nasa-irsa-spherex` |
 | Frame index | IRSA Simple Image Access v2 (`irsa.ipac.caltech.edu/SIA`) |
-| Known solar-system objects | SkyBoT, IMCCE / Observatoire de Paris |
-| Object names | SIMBAD / Sesame, CDS Strasbourg |
-| What a marked source is, and the Gaia / WISE overlay | AllWISE, Gaia DR3, 2MASS and VSX through VizieR TAP, CDS Strasbourg |
+| Known solar-system objects | NASA/JPL Small-Body Identification API (`ssd-api.jpl.nasa.gov/sb_ident.api`), through the relay; SkyBoT, IMCCE / Observatoire de Paris, from the browser. Both asked, merged by number or name |
+| What a marked source is, and the Gaia / WISE overlay | Gaia DR3, AllWISE, CatWISE2020 and 2MASS through IRSA TAP (`irsa.ipac.caltech.edu/TAP`), via the relay. Gaia DR3, AllWISE and 2MASS are also asked of VizieR TAP, CDS Strasbourg, and the first answer is used, so either archive being down leaves the other |
+| Variable stars | AAVSO VSX through VizieR TAP, CDS Strasbourg; no NASA equivalent |
+| Object names | SIMBAD / Sesame, CDS Strasbourg; no NASA equivalent |
+
+Each catalogue is asked on its own: one that does not answer leaves the rest of a
+marked source's card standing, and the card names the one that did not. The overlay's
+legend says which archive answered, NASA IRSA or CDS VizieR.
 
 Muninn is not affiliated with NASA, and it adds nothing to the data it shows.
 
@@ -593,7 +604,7 @@ sources, listed under "Data and services" above.
 ## Layout
 
 ```
-server.js                 static host (compressed, with the security headers) + the one IRSA relay + disk cache
+server.js                 static host (compressed, with the security headers) + the IRSA and JPL relays + disk cache
 public/
   index.html
   css/tokens.css          the design system: colour, type, space, motion
@@ -609,7 +620,10 @@ public/
   js/sectors.js           the 5 × 4 sector scores
   js/release.js           which SPHEREx release (IRSA collections) is read
   js/net.js               a deadline for every request the page makes
-  js/catalog.js           SIA, SkyBoT, SIMBAD, coordinate parsing
+  js/catalog.js           SIA, the catalogues (IRSA and VizieR), SkyBoT and JPL, SIMBAD, coordinate parsing
+  js/overlay.js           the catalogue templates for both archives, overlay arithmetic, row parsers
+  js/sbident.js           the JPL small-body question and the reading of its answer
+  js/csv.js               TAP CSV answers as rows of text
   js/votable.js           just enough IVOA VOTable for both services
   js/i18n.js              English and Russian
   js/app.js               state, wiring, the loading choreography
@@ -630,7 +644,8 @@ and the pixels come straight from the CORS-enabled AWS mirror, so the ten ready
 fields work on any static host — GitHub Pages, Netlify, Cloudflare Pages — with no
 server at all. Searching an arbitrary position is the one thing that needs
 `server.js`, because IRSA's index sends no CORS headers; without the relay the page
-says so plainly instead of failing silently.
+says so plainly instead of failing silently. The catalogues and known asteroids work
+there too, from VizieR and SkyBoT; the NASA routes to them (IRSA TAP, JPL) need the relay.
 
 One place it will *not* work is a sandbox with a strict content-security policy that
 blocks cross-origin `fetch` — the whole design depends on reading byte ranges from

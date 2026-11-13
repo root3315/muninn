@@ -54,6 +54,31 @@ test('search: absent coordinates are an error, a baked field answers offline', a
   assert.ok(body.frames.length > 10);
 });
 
+test('catalogue relay: only a named template, a real position and a radius are asked', async () => {
+  for (const path of [
+    '/api/tap?ra=269.45&dec=4.69&r=0.01',
+    '/api/tap?cat=simbad&ra=269.45&dec=4.69&r=0.01',
+    '/api/tap?cat=__proto__&ra=269.45&dec=4.69&r=0.01',
+    "/api/tap?cat=gaia';DROP&ra=269.45&dec=4.69&r=0.01",
+    '/api/tap?cat=gaia&ra=&dec=4.69&r=0.01',
+    '/api/tap?cat=gaia&ra=400&dec=4.69&r=0.01',
+    '/api/tap?cat=gaia&ra=269.45&dec=4.69',
+    '/api/tap?cat=gaia&ra=269.45&dec=4.69&r=wide',
+  ]) {
+    const res = await get(path);
+    assert.equal(res.status, 400, path);
+    assert.equal((await res.json()).ok, false);
+  }
+});
+
+test('small-body relay: refuses a time that is not UTC to the second', async () => {
+  for (const time of ['', 'now', '2025-08-15', '2025-13-45T99:00:00', '1850-08-15T12:00:00']) {
+    const res = await get(`/api/sbident?ra=330&dec=-12&r=0.3&time=${encodeURIComponent(time)}`);
+    assert.equal(res.status, 400, time);
+  }
+  assert.equal((await get('/api/sbident?ra=330&dec=95&time=2025-08-15T12:00:00')).status, 400);
+});
+
 test('a malformed request line is a 400, and the server is still there', async () => {
   const status = await new Promise((resolve, reject) => {
     const req = request({ host: '127.0.0.1', port: PORT, path: '//' }, (res) => { res.resume(); resolve(res.statusCode); });

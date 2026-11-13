@@ -1,19 +1,37 @@
 /**
  * catalog.js — everything that answers "what is at this position".
  *
- * Four services, four different reasons:
- *   · IRSA SIA2  — which SPHEREx frames cover the field. Proxied through the
- *                  local server, because IRSA sends no CORS headers.
- *   · SIMBAD     — turns "M51" into a position, and names what sits at a
- *                  marked spot. Called straight from the browser.
- *   · SkyBoT     — which solar-system objects were standing in the field at the
- *                  moment of a given exposure. Also called straight from the browser.
- *   · Gaia DR3   — through VizieR, for a marked source SIMBAD has no name for,
- *                  and with AllWISE for the catalogue overlay on the plate.
+ * NASA's own services first; each of the others is there for something NASA
+ * does not offer, or as a second answer so that one archive being down does
+ * not leave a question unanswered.
+ *
+ *   · IRSA SIA2    — which SPHEREx frames cover the field. Through the relay
+ *                    (server.js), because IRSA sends no CORS headers.
+ *   · IRSA TAP     — Gaia DR3, AllWISE, CatWISE2020 and 2MASS: what a marked
+ *                    source is, and the catalogue overlay on the plate. Also
+ *                    through the relay. Raced against VizieR, which holds the
+ *                    same Gaia, AllWISE and 2MASS; the first answer is used.
+ *   · VizieR (CDS) — the second home of those three catalogues, and the only
+ *                    one of VSX, the variable-star index. Called straight from
+ *                    the browser.
+ *   · SIMBAD (CDS) — turns "M51" into a position (Sesame), names what sits at
+ *                    a marked spot, and the famous things worth labelling.
+ *                    Straight from the browser; NASA has no equivalent.
+ *   · SkyBoT       — which solar-system objects stood in the field at the
+ *                    moment of an exposure. IMCCE, straight from the browser.
+ *   · JPL sb_ident — the same question asked of NASA/JPL, through the relay;
+ *                    merged with SkyBoT, and the whole answer when IMCCE is down.
+ *
+ * Every catalogue answer stands on its own: one service failing never holds
+ * up or empties the others, and the page says which did not answer.
  */
 
-import { deadline, CATALOG_DEADLINE_MS, SEARCH_DEADLINE_MS } from './net.js';
-import { gaiaQuery, wiseQuery, parseGaiaRow, parseWiseRow, cutToCap } from './overlay.js';
+import { deadline, CATALOG_DEADLINE_MS, RELAY_DEADLINE_MS, SEARCH_DEADLINE_MS } from './net.js';
+import {
+  CATALOGUES, ROW_CAP, coneQuery, parseGaiaRow, parseWiseRow, parseCatwiseRow, measuredMotion, cutToCap,
+} from './overlay.js';
+import { parseCsv } from './csv.js';
+import { mergeBodies } from './sbident.js';
 import { parseVOTable } from './votable.js';
 import { deltaRA } from './wcs.js';
 
@@ -248,10 +266,49 @@ export async function skybotCone({ ra, dec, radiusDeg, iso }, { signal, magLimit
       // How far SkyBoT's own position may be off, in arcsec; widens the match.
       err: Number(r.ErrPos),
       link: r.ExternalLink,
+      source: 'SkyBoT',
     }))
     .filter((o) => Number.isFinite(o.ra) && Number.isFinite(o.dec) && (!Number.isFinite(o.mag) || o.mag <= magLimit))
     .sort((a, b) => (a.mag || 99) - (b.mag || 99))
     .slice(0, limit);
+}
+
+/** The same question asked of JPL, through the relay: JPL sends no CORS headers. */
+export async function jplBodies({ ra, dec, radiusDeg, iso }, { signal, magLimit = 20 } = {}) {
+  const query = `ra=${ra.toFixed(6)}&dec=${dec.toFixed(6)}&r=${Math.min(2, radiusDeg).toFixed(4)}`
+    + `&time=${encodeURIComponent(iso.slice(0, 19))}&mag=${magLimit}`;
+  const body = await fromRelay(`api/sbident?${query}`, signal, SEARCH_DEADLINE_MS);
+  return body.bodies;
+}
+
+/**
+ * How long a SkyBoT answer waits for JPL's. JPL takes 20–70 s for a new field,
+ * SkyBoT a few; waiting the whole time would hold every visit's marks back by
+ * a minute. JPL's answer is cached by the relay as it lands, so the next look
+ * at the field has both.
+ */
+const JPL_GRACE_MS = 3000;
+
+/**
+ * Known solar-system objects in the field at a moment, from SkyBoT and JPL
+ * together, each object once (see mergeBodies). Either service alone is enough:
+ * when SkyBoT fails, JPL's answer is waited for in full and is the answer.
+ */
+export async function knownBodies(field, { signal, magLimit = 20, limit = 40 } = {}) {
+  const jpl = jplBodies(field, { signal, magLimit }).catch(() => null);
+  let skybot;
+  try {
+    skybot = await skybotCone(field, { signal, magLimit, limit });
+  } catch (err) {
+    const fromJpl = await jpl;
+    if (!fromJpl) throw err;
+    return mergeBodies([], fromJpl).slice(0, limit);
+  }
+  let timer;
+  const grace = new Promise((resolve) => { timer = setTimeout(() => resolve(null), JPL_GRACE_MS); });
+  const fromJpl = await Promise.race([jpl, grace]);
+  clearTimeout(timer);
+  return mergeBodies(skybot, fromJpl ?? []).slice(0, limit);
 }
 
 /* ------------------------------------------------------------- fixed sources */
@@ -291,31 +348,45 @@ export function simbadFamily(otype) {
 }
 
 /**
- * VizieR's CSV, as rows of named fields. Quoted fields come padded to the
- * column width, and a name may carry a comma, so this reads quotes properly
- * rather than splitting on every comma.
+ * A JSON answer from the relay. A static host has no relay, and answers with
+ * a 404 or its own page; either is a failure here, and the race goes to VizieR.
  */
-function parseCsv(text) {
-  const rows = [];
-  let row = [];
-  let field = '';
-  let quoted = false;
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i];
-    if (quoted) {
-      if (ch === '"' && text[i + 1] === '"') { field += '"'; i++; } else if (ch === '"') quoted = false; else field += ch;
-    } else if (ch === '"') quoted = true;
-    else if (ch === ',') { row.push(field.trim()); field = ''; }
-    else if (ch === '\n' || ch === '\r') {
-      if (ch === '\r' && text[i + 1] === '\n') i++;
-      row.push(field.trim()); field = '';
-      if (row.some((f) => f !== '')) rows.push(row);
-      row = [];
-    } else field += ch;
+async function fromRelay(path, signal, ms) {
+  const res = await fetch(path, { signal: deadline(signal, ms) });
+  if (!(res.headers.get('content-type') ?? '').includes('json')) throw new Error(`relay: HTTP ${res.status}`);
+  const body = await res.json();
+  if (!body.ok) throw new Error(body.error ?? `relay: HTTP ${res.status}`);
+  return body;
+}
+
+/** One catalogue's rows in a circle from IRSA, through the relay. */
+async function irsaRows(kind, { ra, dec, radiusDeg, limit = null, top }, signal) {
+  const mag = limit === null ? '' : `&mag=${limit.toFixed(2)}`;
+  const body = await fromRelay(
+    `api/tap?cat=${kind}&ra=${ra.toFixed(6)}&dec=${dec.toFixed(6)}&r=${radiusDeg.toFixed(6)}&top=${top}${mag}`,
+    signal, RELAY_DEADLINE_MS,
+  );
+  return body.rows;
+}
+
+/**
+ * One catalogue's rows in a circle, under the shared column names, from
+ * whichever archive answers first: IRSA through the relay, or VizieR straight
+ * from the browser. Usually VizieR is quicker and IRSA is there for the days
+ * CDS is down; on a static host, with no relay, VizieR is the only route.
+ * `via` says which answered.
+ */
+export async function catalogueRows(kind, field, { signal } = {}) {
+  const { vizier } = CATALOGUES[kind];
+  const asks = [irsaRows(kind, field, signal).then((rows) => ({ rows, via: 'IRSA' }))];
+  if (vizier) {
+    asks.push(tap(VIZIER_TAP, coneQuery(vizier, field), 'csv', signal).then((text) => ({ rows: parseCsv(text), via: 'VizieR' })));
   }
-  if (field !== '' || row.length) { row.push(field.trim()); if (row.some((f) => f !== '')) rows.push(row); }
-  const [head, ...body] = rows;
-  return (body ?? []).map((r) => Object.fromEntries((head ?? []).map((h, k) => [h, r[k] ?? ''])));
+  try {
+    return await Promise.any(asks);
+  } catch (err) {
+    throw err.errors?.[0] ?? err;
+  }
 }
 
 const num = (v) => (v === '' || v == null ? null : Number.isFinite(Number(v)) ? Number(v) : null);
@@ -340,29 +411,55 @@ async function askSimbad(ra, dec, signal) {
   return best ? { ...best, family: simbadFamily(best.otype) } : null;
 }
 
-// Gaia source ids are 64-bit integers and do not survive a trip through a JSON
-// number, so every VizieR table is read as text.
+/** Angular distance in arcsec, by the haversine: exact at the few-arcsec scale. */
+export function arcsecBetween(ra1, dec1, ra2, dec2) {
+  const r = Math.PI / 180;
+  const s = Math.sin(((dec2 - dec1) * r) / 2) ** 2
+    + Math.cos(dec1 * r) * Math.cos(dec2 * r) * Math.sin(((ra2 - ra1) * r) / 2) ** 2;
+  return (2 * Math.asin(Math.min(1, Math.sqrt(s)))) / r * 3600;
+}
+
+/** How far a marked source is looked around in each catalogue: one SPHEREx pixel. */
+const NEAR_ARCSEC = 6;
+
+/**
+ * One catalogue's rows around a marked spot, each with its distance from it
+ * (`sep`) and the archive that answered (`via`). The distance is worked out
+ * here, so IRSA and VizieR need ask nothing different.
+ */
+async function nearby(kind, ra, dec, signal, [raCol, decCol]) {
+  const { rows, via } = await catalogueRows(kind, { ra, dec, radiusDeg: NEAR_ARCSEC / 3600, top: 8 }, { signal });
+  return rows.map((r) => ({ r, via, sep: arcsecBetween(ra, dec, num(r[raCol]) ?? NaN, num(r[decCol]) ?? NaN) }));
+}
+
 async function askGaia(ra, dec, signal) {
-  const rows = parseCsv(await tap(VIZIER_TAP, `SELECT TOP 8 Source, Gmag, VarFlag, PQSO, PGal, PSS, Plx, e_Plx, ${sepCol('RA_ICRS', 'DE_ICRS', ra, dec)}
-    FROM "I/355/gaiadr3" WHERE ${cone('RA_ICRS', 'DE_ICRS', ra, dec, 6)}`, 'csv', signal))
-    .map((r) => ({
-      id: r.Source, mag: num(r.Gmag), sep: num(r.sep), variable: /VARIABLE/.test(r.VarFlag),
-      pStar: num(r.PSS), pGalaxy: num(r.PGal), pQuasar: num(r.PQSO), plx: num(r.Plx), plxErr: num(r.e_Plx),
-    }));
+  const rows = (await nearby('gaia', ra, dec, signal, ['RA_ICRS', 'DE_ICRS'])).map(({ r, via, sep }) => ({
+    id: r.Source, mag: num(r.Gmag), sep, via, variable: /^VARIABLE/.test(r.VarFlag),
+    pStar: num(r.PSS), pGalaxy: num(r.PGal), pQuasar: num(r.PQSO), plx: num(r.Plx), plxErr: num(r.e_Plx),
+  }));
   return brightest(rows, 'mag');
 }
 
 async function askTwoMass(ra, dec, signal) {
-  const rows = parseCsv(await tap(VIZIER_TAP, `SELECT TOP 8 "2MASS", Jmag, Hmag, Kmag, ${sepCol('RAJ2000', 'DEJ2000', ra, dec)}
-    FROM "II/246/out" WHERE ${cone('RAJ2000', 'DEJ2000', ra, dec, 6)}`, 'csv', signal))
-    .map((r) => ({ id: r['2MASS'], j: num(r.Jmag), h: num(r.Hmag), k: num(r.Kmag), sep: num(r.sep) }));
+  const rows = (await nearby('twomass', ra, dec, signal, ['RAJ2000', 'DEJ2000'])).map(({ r, via, sep }) => ({
+    id: r['2MASS'], j: num(r.Jmag), h: num(r.Hmag), k: num(r.Kmag), sep, via,
+  }));
   return brightest(rows, 'j');
 }
 
 async function askWise(ra, dec, signal) {
-  const rows = parseCsv(await tap(VIZIER_TAP, `SELECT TOP 8 AllWISE, W1mag, W2mag, ${sepCol('RAJ2000', 'DEJ2000', ra, dec)}
-    FROM "II/328/allwise" WHERE ${cone('RAJ2000', 'DEJ2000', ra, dec, 6)}`, 'csv', signal))
-    .map((r) => ({ id: r.AllWISE, w1: num(r.W1mag), w2: num(r.W2mag), sep: num(r.sep) }));
+  const rows = (await nearby('wise', ra, dec, signal, ['RAJ2000', 'DEJ2000'])).map(({ r, via, sep }) => ({
+    id: r.AllWISE, w1: num(r.W1mag), w2: num(r.W2mag), sep, via,
+  }));
+  return brightest(rows, 'w1');
+}
+
+/** CatWISE2020: whether the source moves, measured over ten years of WISE. */
+async function askCatwise(ra, dec, signal) {
+  const rows = (await nearby('catwise', ra, dec, signal, ['ra_pm', 'dec_pm'])).map(({ r, via, sep }) => {
+    const row = parseCatwiseRow(r);
+    return row && { id: row.id, w1: row.mag, w2: row.w2, pm: measuredMotion(row), sep, via };
+  }).filter(Boolean);
   return brightest(rows, 'w1');
 }
 
@@ -382,6 +479,8 @@ async function askVsx(ra, dec, signal) {
  *              how sure it is of star against galaxy, and a parallax;
  *   2MASS      J, H and K — the near infrared SPHEREx itself works in;
  *   AllWISE    3.4 and 4.6 µm, the red end of SPHEREx's range;
+ *   CatWISE2020  whether it moves: proper motions from ten years of WISE,
+ *              said only when measured at five times their error;
  *   VSX        the variable-star index: for a source that comes and goes,
  *              the first question is whether it is simply known to vary.
  *
@@ -390,7 +489,7 @@ async function askVsx(ra, dec, signal) {
  * on its own: one service down leaves the others standing, and says so.
  */
 export async function identifySource({ ra, dec }, { signal } = {}) {
-  const asks = { simbad: askSimbad, gaia: askGaia, tmass: askTwoMass, wise: askWise, vsx: askVsx };
+  const asks = { simbad: askSimbad, gaia: askGaia, tmass: askTwoMass, wise: askWise, catwise: askCatwise, vsx: askVsx };
   const keys = Object.keys(asks);
   const settled = await Promise.allSettled(keys.map((k) => asks[k](ra, dec, signal)));
   const out = { failed: [] };
@@ -403,21 +502,23 @@ export async function identifySource({ ra, dec }, { signal } = {}) {
   return out;
 }
 
-const SURVEYS = {
-  gaia: { query: gaiaQuery, parse: parseGaiaRow },
-  wise: { query: wiseQuery, parse: parseWiseRow },
-};
+const SURVEY_PARSERS = { gaia: parseGaiaRow, wise: parseWiseRow };
 
 /**
- * Every source one survey (`gaia` or `wise`) has in a circle, down to `limit`
- * magnitudes, for laying over the plate. Asked once for a field: the answer
- * holds for every visit, since it is the page that carries Gaia's positions
- * to each visit's date. Returns `{ rows, cut, reached }` (see cutToCap).
+ * Every source one survey (`gaia` or `wise`) has in a circle,
+ * down to `limit` magnitudes, for laying over the plate. Asked once for a
+ * field: the answer holds for every visit, since it is the page that carries
+ * positions to each visit's date. Returns `{ rows, cut, reached, via }` (see
+ * cutToCap; `via` is the archive that answered).
+ *
+ * One row more than the cap is asked for, brightest first: the extra row is
+ * how a cut list is told from a complete one, and brightest first means a cut
+ * list loses its faint end and nothing else.
  */
 export async function surveySources(kind, { ra, dec, radiusDeg, limit }, { signal } = {}) {
-  const { query, parse } = SURVEYS[kind];
-  const text = await tap(VIZIER_TAP, query({ ra, dec, radiusDeg, limit }), 'csv', signal);
-  return cutToCap(parseCsv(text).map(parse).filter(Boolean), limit);
+  const parse = SURVEY_PARSERS[kind];
+  const { rows, via } = await catalogueRows(kind, { ra, dec, radiusDeg, limit, top: ROW_CAP + 1 }, { signal });
+  return { ...cutToCap(rows.map(parse).filter(Boolean), limit), via };
 }
 
 /**
