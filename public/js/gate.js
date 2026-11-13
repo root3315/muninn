@@ -161,10 +161,12 @@ export class Gate {
     /** Where the camera looks, and how wide. Starts on the galactic centre. */
     this.cam = { ra: 266, dec: -12, fov: FOV_WIDE };
     /** The sweep: a slow turn with a gentle nod across the plane. */
-    this.glide = { rate: 0.8, nod: 13, period: 110, phase: 0 };
+    this.glide = { rate: 0.8, nod: 13, period: 110, phase: 0, speed: 1 };
 
     this.pointer = null;
     this.hit = null;
+    /** What the open card is about. The sky holds still and marks it. */
+    this.selected = null;
     this.drag = null;
     /** Live pointers, so two of them can pinch. */
     this.touches = new Map();
@@ -845,6 +847,7 @@ export class Gate {
     // they would slide across it rather than through it.
     if (!f) {
       this.drawTargets(ctx);
+      this.drawSelected(ctx);
       this.drawHit(ctx);
     }
     this.drawArrival(ctx);
@@ -958,9 +961,82 @@ export class Gate {
     }
   }
 
+  /** Mark what the card is about, or let it go with `null`. */
+  select(hit) {
+    this.selected = hit ? { ra: hit.ra, dec: hit.dec, since: performance.now() } : null;
+    this.draw();
+  }
+
+  /**
+   * The selected object: a reticle that closes in once and then breathes
+   * slowly, so it reads as "this one" without flashing at you.
+   */
+  drawSelected(ctx) {
+    const s = this.selected;
+    if (!s) return;
+    const p = this.projectV(direction(s.ra, s.dec));
+    if (!p) return;
+    const { dpr } = this.box;
+    const age = (performance.now() - s.since) / 1000;
+    const settle = Math.min(1, age / 0.45);
+    const ease = 1 - (1 - settle) ** 3;
+    const breath = 0.5 + 0.5 * Math.sin(age * (2 * Math.PI / 2.8));
+    const r = (34 - 12 * ease) * dpr;
+
+    // A small glow on the object itself, not a wash over the sky around it.
+    const glow = ctx.createRadialGradient(p[0], p[1], 0, p[0], p[1], r * 0.7);
+    glow.addColorStop(0, this.tint(this.paint.accent, 0.3 + 0.15 * breath));
+    glow.addColorStop(1, this.tint(this.paint.accent, 0));
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.fillStyle = glow;
+    ctx.fillRect(p[0] - r, p[1] - r, r * 2, r * 2);
+    ctx.globalCompositeOperation = 'source-over';
+
+    // Four ticks outside the ring, like the crosshair of a finder.
+    const a = r + 4 * dpr;
+    const b = r + 12 * dpr;
+    const reticle = () => {
+      ctx.beginPath();
+      ctx.arc(p[0], p[1], r, 0, Math.PI * 2);
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        ctx.moveTo(p[0] + dx * a, p[1] + dy * a);
+        ctx.lineTo(p[0] + dx * b, p[1] + dy * b);
+      }
+      ctx.stroke();
+    };
+    // Drawn twice: a dark edge first, so it reads over the bright band of the
+    // Milky Way as well as over black sky.
+    ctx.globalAlpha = ease * 0.5;
+    ctx.strokeStyle = this.paint.well;
+    ctx.lineWidth = 3.5 * dpr;
+    reticle();
+    ctx.globalAlpha = ease * (0.8 + 0.2 * breath);
+    ctx.strokeStyle = this.paint.ink;
+    ctx.lineWidth = 1.5 * dpr;
+    reticle();
+    ctx.globalAlpha = 1;
+  }
+
+  /** A CSS colour with its alpha replaced; the palette is hex or rgb(). */
+  tint(color, alpha) {
+    const hex = /^#([0-9a-f]{6})$/i.exec(color);
+    if (hex) {
+      const n = parseInt(hex[1], 16);
+      return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${alpha})`;
+    }
+    const rgb = /rgba?\(([^)]+)\)/.exec(color);
+    if (rgb) {
+      const [r, g, b] = rgb[1].split(/[\s,/]+/).map(Number);
+      return `rgba(${r},${g},${b},${alpha})`;
+    }
+    return `rgba(108,196,240,${alpha})`;
+  }
+
   /** A ring around whatever the pointer is nearest to. */
   drawHit(ctx) {
     if (!this.hit) return;
+    const s = this.selected;
+    if (s && Math.abs(s.ra - this.hit.ra) < 1e-6 && Math.abs(s.dec - this.hit.dec) < 1e-6) return;
     const p = this.projectV(direction(this.hit.ra, this.hit.dec));
     if (!p) return;
     ctx.strokeStyle = this.paint.ink;
@@ -1248,20 +1324,29 @@ export class Gate {
     const tick = (now) => {
       if (!this.running) return;
       if (this.flight) { this.raf = requestAnimationFrame(tick); return; }
-      // The sweep turns the camera by a hundredth of a degree a frame at
-      // display rate, which is a fraction of a pixel. Thirty frames a second
-      // is indistinguishable from sixty here and costs half as much; a drag or
-      // a dive drives its own frames and is not throttled.
-      if (!this.drag && now - last < 32) { this.raf = requestAnimationFrame(tick); return; }
+      const g = this.glide;
+      // A sky that is not moving and has nothing breathing on it only needs
+      // redrawing now and then; a moving one gets every display frame, since
+      // thirty a second is where a slow pan starts to judder.
+      const still = g.speed < 0.002 && !this.selected && !this.drag;
+      if (still && now - last < 100) { this.raf = requestAnimationFrame(tick); return; }
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
       // The sweep: a slow turn with a gentle nod, the way an instrument in
-      // orbit crosses the sky. It holds still while you are reading it.
-      if (!this.pointer && !this.drag) {
-        this.glide.phase += dt;
-        this.cam.ra = (this.cam.ra + this.glide.rate * dt) % 360;
-        this.cam.dec = this.glide.nod
-          * Math.sin(((2 * Math.PI) / this.glide.period) * this.glide.phase) - 6;
+      // orbit crosses the sky. It holds still while you are reading it or
+      // looking at something you picked, and eases in and out of the stop
+      // rather than snapping.
+      const hold = this.pointer || this.drag || this.selected;
+      g.speed += ((hold ? 0 : 1) - g.speed) * (1 - Math.exp(-dt / (hold ? 0.35 : 1.2)));
+      if (!this.drag && g.speed > 0.0005) {
+        const w = (2 * Math.PI) / g.period;
+        const step = dt * g.speed;
+        // The nod is added as a change, not set as a position, so the sky
+        // goes on from wherever a drag left it instead of jumping back.
+        this.cam.ra = (this.cam.ra + g.rate * step) % 360;
+        this.cam.dec = Math.max(-80, Math.min(80,
+          this.cam.dec + g.nod * w * Math.cos(w * g.phase) * step));
+        g.phase += step;
       }
 
       const t0 = performance.now();
