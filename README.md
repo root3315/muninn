@@ -34,7 +34,8 @@ Three things it shows on real data:
 
 Against the challenge: all five named test targets open in one press · WISE and Gaia identify a
 marked source by catalogue, and their catalogue positions can be overlaid on the plate, Gaia's
-moved to the date of each visit (no image panel yet) · a marked source gets a spectrum on demand, one
+moved to the date of each visit · Gaia has no images, so the wipe can put a model drawn from its
+catalogue beside the frame, labelled as one · a marked source gets a spectrum on demand, one
 point per band at the wavelength the file gives for its detector pixel.
 
 ---
@@ -136,6 +137,19 @@ reads the same file and sends the same policy, so the rule is written once.
   gets; ← → steps from season to season. Each visit is first put on the same sky level:
   the zodiacal background changes between visits by more than the noise, and left in,
   "drop the brightest" dropped the visit with the brightest sky instead of the cosmic ray.
+- **Put another survey beside the frame**, as B of the wipe: the AllWISE picture of 2010, or
+  a Gaia sky. Gaia publishes a catalogue, not images, so that one is a model and says so
+  ("Gaia DR3 — drawn from the catalogue, not an image"): every Gaia DR3 source of the field
+  down to the overlay's G limit (G 18.5 for a 9′ field, brighter for wider ones), carried by
+  proper motion to the date of visit A, drawn as a Gaussian as wide as SPHEREx's own blur in
+  that band, with a relative brightness of 10^(−0.4 G) on an empty sky. What is on the left of
+  the divider and missing on the right is what Gaia does not account for: an asteroid, a brown
+  dwarf too cold and faint for Gaia, a transient. G is optical, so red stars are brighter on the
+  SPHEREx side; no calibrated flux is claimed. The widths are the median second-moment FWHM of
+  unsaturated stars on the detector pixels of the Atala field, every DR1 and QR3 visit
+  (`tools/sharpness-calibrate.mjs`): D1 6.6″, D2 6.9″, D3 7.0″, D4 8.9″, D5 9.1″, D6 9.9″,
+  about a pixel and a bit; approximate, since an undersampled star's moments depend on where it
+  fell in its pixel.
 - **Mark a spot** by clicking it. Muninn re-measures that exact sky position in every
   loaded visit — position, AB magnitude, a bar per visit — classifies what it finds
   (fixed · intermittent · moving · present once),
@@ -207,7 +221,7 @@ candidate for it.
 | AllWISE W1/W2 | NASA WISE, through IRSA TAP (`allwise_p3as_psd`), raced against CDS VizieR | identifying a marked source at 3.4 and 4.6 µm; an overlay of AllWISE positions on the plate (epoch about 2010.5, not moved) |
 | CatWISE2020 | NASA WISE and NEOWISE, through IRSA TAP (`catwise_2020`) | whether a marked source moves: a proper motion from ten years of WISE, said only at five times its error. It measures the coldest brown dwarfs Gaia cannot see; WISE 0855−0714 itself was found by Luhman (2014) in WISE/NEOWISE multi-epoch data, and CatWISE2020 splits it into several short-baseline entries |
 | 2MASS | NASA/IPAC 2MASS Point Source Catalog, through IRSA TAP (`fp_psc`), raced against CDS VizieR | J, H and K of a marked source, the near infrared SPHEREx works in |
-| Gaia DR3 | ESA Gaia, through IRSA TAP (`gaia_dr3_source`), raced against CDS VizieR | identifying a faint marked star, and whether Gaia saw it vary; an overlay of Gaia positions on the plate, carried by proper motion from J2016.0 to the date of the visit |
+| Gaia DR3 | ESA Gaia, through IRSA TAP (`gaia_dr3_source`), raced against CDS VizieR | identifying a faint marked star, and whether Gaia saw it vary; an overlay of Gaia positions on the plate, carried by proper motion from J2016.0 to the date of the visit; and the Gaia model beside the frame, the same rows drawn as SPHEREx would blur them (a model, not an image: Gaia publishes none) |
 | Known solar-system objects | NASA/JPL Small-Body Identification (`sb_ident`), merged with SkyBoT (IMCCE) | naming asteroids and comets at the moment of each exposure; either service alone is enough |
 | Gaia DR3, one marked star | NASA MAST (STScI), the Gaia archive the challenge's Resources tab names, through `/api/tap` | what a marked star is, in one or two seconds; IRSA's TAP (ten to fifty seconds) stands behind it |
 | Other telescopes of the field | Canadian Astronomy Data Centre, CAOM index (Argus TAP), through `/api/archives` | how many science observations HST, JWST, TESS, Chandra, Gemini, CFHT, JCMT, SDSS, VLASS and the CSA's NEOSSat hold of the field, and over which years; Barnard's Star, for one, has 572 NEOSSat frames from 2019 |
@@ -626,6 +640,22 @@ Atala's own pixels on 25 Dec carry only `OUTLIER`, and spread over the point-spr
 function the way a real source does. With the flags read, 6 July is background like the
 rest.
 
+**And the hits the pipeline did not flag.** The telescope spreads every real source over
+several 6.15″ pixels; a cosmic ray or a hot pixel puts its signal in one. So a one-visit
+flash is also read on the detector's own pixels, before resampling, for the share of its
+3 × 3 light that sits in the brightest pixel (`public/js/sharpness.js`). Measured over every
+DR1 and QR3 visit of this field with `tools/sharpness-calibrate.mjs`: 932 unflagged maxima
+above 15σ in D1 and D2, stars, never put more than 0.87 of it in one pixel (0.86 in D2, at
+130σ); the pipeline's own flagged hits, read with the mask lifted, sit at 0.93–1.0 above
+100σ, and the 6 July pixel at 1.00, its neighbours at the background. Atala on 25 Dec: 0.42.
+A star cannot leave less than about 15 % of its peak in the eight pixels around it, so a flash
+is called *too sharp for a star: likely a cosmic ray or hot pixel* when its neighbours fall
+three noise widths short of that — which needs about 57σ before anything is said; fainter
+flashes are left unjudged. In D6 the same scan finds unflagged one-pixel spikes the pipeline
+let through, up to 855σ at 0.99, in one visit each and in none of the others; in D2, the
+Barnard's Star field has one on 21 Aug 2025 at 549σ, 1.00. Such flashes
+stay on the page, with the measured share beside the bar, and are never ranked as candidates.
+
 That is the kind of thing this tool exists to settle. Open (152) Atala, click the centre
 of the image and read the verdict: one visit, named by SkyBoT as the asteroid.
 
@@ -666,8 +696,11 @@ of the image and read the verdict: one visit, named by SkyBoT as the asteroid.
 - **Video.** A 30-second demo and a two-minute walkthrough exist in English and Russian; they
   are linked from the project page rather than kept in the repository.
 - **Cosmic rays look like transients.** They are single-frame, sharp, and common. The ones
-  the pipeline caught are masked through `FLAGS`; the ones it missed are not. Anything
-  seen exactly once still deserves that explanation first.
+  the pipeline caught are masked through `FLAGS`. The ones it missed are now partly handled:
+  a flash with its light in one detector pixel is labelled as a likely cosmic ray or hot pixel
+  and kept out of the candidates. Partly, because the test needs about 57σ to say anything, and a
+  hit that lands on a pixel corner splits its charge and can pass for a star. Anything seen
+  exactly once still deserves that explanation first.
 
 ---
 
