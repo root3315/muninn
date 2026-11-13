@@ -1156,3 +1156,6 @@ body { font-size: var(--text-base); line-height: 1.5; }
 }
 @keyframes undo-runs-out { to { transform: scaleX(0); } }
 @media (prefers-reduced-motion: reduce) { .marks-clear[data-undo="true"]::after { animation: none; } }
+
+/* The brightness choice names itself, so it does not read as a star filter. */
+.scaling .segments__k { cursor: help; }

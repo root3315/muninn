@@ -308,10 +308,10 @@
         <input type="range" id="rate" class="range" min="1" max="6" step="1" value="2">
       </label>
 
-      <fieldset class="segments segments--tiny">
-        <legend class="vh" data-i18n="render.scaling"></legend>
-        <label class="segment"><input type="radio" name="scaling" value="frame" checked><span data-i18n="render.perFrame"></span></label>
-        <label class="segment"><input type="radio" name="scaling" value="shared"><span data-i18n="render.shared"></span></label>
+      <fieldset class="segments segments--tiny scaling" data-i18n-title="render.scalingWhat">
+        <legend class="segments__k" data-i18n="render.scaling"></legend>
+        <label class="segment" data-i18n-title="render.perFrameHint"><input type="radio" name="scaling" value="frame" checked><span data-i18n="render.perFrame"></span></label>
+        <label class="segment" data-i18n-title="render.sharedHint"><input type="radio" name="scaling" value="shared"><span data-i18n="render.shared"></span></label>
       </fieldset>
 
       <div class="pills" role="group" aria-labelledby="overlay-label">
