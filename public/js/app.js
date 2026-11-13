@@ -1738,6 +1738,27 @@ const skybotTone = (verdict) => {
 /* ------------------------------------------------------------------- marks */
 
 /** A new mark, remembering which visit was on screen when it was dropped. */
+/** The marks just cleared, kept for a few seconds so the press can be taken back. */
+let marksUndo = null;
+const MARKS_UNDO_MS = 5000;
+
+function dropMarksUndo() {
+  if (!marksUndo) return;
+  clearTimeout(marksUndo.timer);
+  marksUndo = null;
+  showMarksUndo(false);
+}
+
+/** The clear button turns into its own undo, and back. */
+function showMarksUndo(on) {
+  const button = $('clear-marks');
+  button.dataset.undo = String(on);
+  const key = on ? 'mark.undo' : 'mark.clear';
+  $('clear-marks-label').dataset.i18n = key;
+  $('clear-marks-label').textContent = t(key);
+  button.title = on ? t('mark.cleared') : '';
+}
+
 function addMark(ra, dec) {
   sky.marks.push({ ra, dec, obsId: sky.current?.frame.obsId ?? null, track: [], analysis: null, known: null });
 }
@@ -2296,7 +2317,9 @@ function renderMarks() {
   const empty = sky.marks.length === 0;
   const canDemo = empty && sky.visits.length > 0;
   $('marks-count').textContent = empty ? '' : String(sky.marks.length);
-  $('clear-marks').hidden = empty;
+  // A new mark after clearing is a fresh start: the cleared ones stay gone.
+  if (!empty && marksUndo) dropMarksUndo();
+  $('clear-marks').hidden = empty && !marksUndo;
   $('mark-help').hidden = !empty;
   $('mark-centre').hidden = !canDemo;
 
@@ -3111,6 +3134,7 @@ function retryUnread() {
 }
 
 async function openField({ ra, dec, label = '', band = null, target, pm, marks = [], visit = null }) {
+  dropMarksUndo();
   fieldSeq += 1;
   const gen = fieldSeq;
   state.abort?.abort();
@@ -4724,8 +4748,12 @@ function wire() {
   }
 
   $('clear-marks').addEventListener('click', () => {
-    sky.marks = [];
-    sky.link = null;
+    const undo = marksUndo;
+    if (undo) dropMarksUndo();
+    else marksUndo = { marks: sky.marks, link: sky.link, timer: setTimeout(() => { dropMarksUndo(); renderMarks(); }, MARKS_UNDO_MS) };
+    sky.marks = undo ? undo.marks : [];
+    sky.link = undo ? undo.link : null;
+    showMarksUndo(Boolean(marksUndo));
     sky.draw();
     renderMarks();
     writeHash();

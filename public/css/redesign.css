@@ -1127,3 +1127,32 @@ body { font-size: var(--text-base); line-height: 1.5; }
   .suggest__pos { min-inline-size: 0; }
 }
 .suggest__hint { padding: var(--space-2xs) var(--space-sm); font-size: var(--text-xs); line-height: 1.4; color: var(--color-neutral); }
+
+/* Clearing the marks: a pill with its sign, at the head of the section beside
+   the count. For a few seconds after, it is the way back, and a thin line
+   inside it runs out with the time left. */
+.part__head .marks-clear { align-self: center; margin-inline-start: var(--space-2xs); }
+.part__count:empty + .marks-clear { margin-inline-start: auto; }
+.marks-clear {
+  position: relative; overflow: hidden;
+  display: inline-flex; align-items: center; gap: var(--space-3xs);
+  min-block-size: 28px; padding: 0 var(--space-sm) 0 var(--space-xs);
+  border: 0; border-radius: var(--radius-round);
+  background: var(--color-paper-3); color: var(--color-muted);
+  font: inherit; font-size: var(--text-xs); font-weight: 500; white-space: nowrap; cursor: pointer;
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-short) var(--ease-out),
+              transform var(--dur-short) var(--ease-out);
+}
+.marks-clear[hidden] { display: none; }
+.marks-clear svg { inline-size: 14px; block-size: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.marks-clear:hover { background: var(--color-paper-4); color: var(--color-ink); }
+.marks-clear:active { transform: scale(0.97); }
+.marks-clear[data-undo="false"] .marks-clear__back, .marks-clear[data-undo="true"] .marks-clear__x { display: none; }
+.marks-clear[data-undo="true"] { background: var(--color-accent-wash); color: var(--color-accent); }
+.marks-clear[data-undo="true"]::after {
+  content: ""; position: absolute; inset-inline: var(--space-sm); inset-block-end: 3px; block-size: 1.5px;
+  border-radius: 1px; background: currentColor; opacity: 0.55; transform-origin: left;
+  animation: undo-runs-out 5s linear forwards;
+}
+@keyframes undo-runs-out { to { transform: scaleX(0); } }
+@media (prefers-reduced-motion: reduce) { .marks-clear[data-undo="true"]::after { animation: none; } }

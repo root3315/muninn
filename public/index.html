@@ -399,11 +399,17 @@
       <header class="part__head">
         <h2 class="part__k" data-i18n="sec.marks"></h2>
         <span class="part__count num" id="marks-count"></span>
+        <!-- Clearing is one press and comes back with one more: for a few
+             seconds after, the same button puts the marks back. -->
+        <button type="button" class="marks-clear" id="clear-marks" data-undo="false" hidden>
+          <svg class="marks-clear__x" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7 7 17"/></svg>
+          <svg class="marks-clear__back" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+          <span id="clear-marks-label" data-i18n="mark.clear"></span>
+        </button>
       </header>
       <p class="note note--dim" id="mark-help" data-i18n="mark.help"></p>
       <button type="button" class="btn btn--quiet" id="mark-centre" data-i18n="mark.centre"></button>
       <ul class="marks" id="marks"></ul>
-      <button type="button" class="link" id="clear-marks" data-i18n="mark.clear" hidden></button>
     </section>
 
     <!-- Which other telescopes have looked here, from CADC's common index. -->
