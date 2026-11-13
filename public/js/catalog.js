@@ -448,7 +448,7 @@ async function askSimbad(ra, dec, signal, arcsec = 8) {
   const body = await simbadTap(`SELECT TOP 8 main_id, otype, ${sepCol('ra', 'dec', ra, dec)}, allfluxes.J AS j, allfluxes.V AS v, allfluxes.G AS g
     FROM basic LEFT JOIN allfluxes ON oid = allfluxes.oidref WHERE ${cone('ra', 'dec', ra, dec, arcsec)}`, 'json', signal);
   const rows = (body.data ?? []).map(([name, otype, sep, j, v, g]) => ({
-    name: String(name).trim().replace(/\s+/g, ' '), otype: String(otype ?? '').trim(), sep: Number(sep),
+    name: String(name).trim().replace(/\s+/g, ' ').replace(/^NAME /, ''), otype: String(otype ?? '').trim(), sep: Number(sep),
     mag: j ?? v ?? g ?? null, magBand: j != null ? 'J' : v != null ? 'V' : g != null ? 'G' : null,
   }));
   const best = brightest(rows, 'mag');
@@ -758,7 +758,7 @@ export async function fieldObjects({ ra, dec, radiusDeg }, { signal, limit = 25 
   return (body.data ?? []).map(([name, otype, ora, odec, refs, j, v, pmra, pmdec]) => {
     const kind = String(otype ?? '').trim();
     return {
-      name: String(name).trim().replace(/\s+/g, ' '), otype: kind, family: simbadFamily(kind),
+      name: String(name).trim().replace(/\s+/g, ' ').replace(/^NAME /, ''), otype: kind, family: simbadFamily(kind),
       ra: Number(ora), dec: Number(odec), refs: Number(refs) || 0,
       mag: j ?? v ?? null, magBand: j != null ? 'J' : v != null ? 'V' : null,
       // SIMBAD's positions are for J2000; the motion carries a fast star to
