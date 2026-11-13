@@ -120,7 +120,7 @@ const STRINGS = {
     'depth.target': 'Planet X',
     'depth.scale': 'Reached {mag} AB; Planet X is predicted at {lo}–{hi}',
     'hunt.rerun': 'Search again',
-    'hunt.waiting': 'Starts once every visit is in.',
+    'hunt.waiting': 'Starts on the visits in hand after {s} s, or once every visit is in.',
     'hunt.count': '{n} of {checked} moving',
     'facts.visits': 'Visits',
     'facts.visitsV': '{n} over {days} d',
@@ -502,6 +502,27 @@ const STRINGS = {
     'foot.credit': 'Data: NASA/JPL-Caltech · SPHEREx · IPAC/IRSA Quick Release. Known solar-system objects: SkyBoT, IMCCE / Observatoire de Paris. Name resolution: SIMBAD/Sesame, CDS Strasbourg. What a marked source is: Gaia DR3 (ESA), 2MASS, AllWISE and VSX through VizieR, CDS. The Moon in the change to night: Lunar Reconnaissance Orbiter mosaic, NASA/GSFC/Arizona State University. Muninn is not affiliated with NASA and adds nothing to the data it shows.',
     'foot.team': 'Built by team Yggdrasil for the 2026 NASA Space Apps Challenge — Planet X and SPHEREx.',
     'foot.short': 'NASA/JPL-Caltech · SPHEREx · IPAC/IRSA · AllWISE · Gaia DR3 (MAST, IRSA) · JPL SSD · SkyBoT/IMCCE · SIMBAD/CDS · CADC',
+
+    // Loading, visit counts and the catalogue checks that run alongside.
+    'verdict.flashesOpen': 'Nothing moved between visits; {n} single-visit {n:flash|flashes} still to be named.',
+    'hunt.fromSoFar': 'From {used} of {total} visits; it runs again when the rest are in.',
+    'hunt.from': 'From {used} of {total} visits; the rest did not arrive.',
+    'facts.visitsOf': '{n} of {total} · {days} d',
+    'visits.all': 'Load all {n}',
+    'facts.visitsLoading': 'loaded {n} of {total} · {days} d',
+    'hunt.updating': 'Updating with new visits…',
+    'run.legendSome': 'Visits to this field: {n} of {total}',
+    'card.loaded': 'Loaded',
+    'card.opensAll': '{shown} at once, the other {rest} in the background',
+    'card.loadedValue': '{n} of {total}',
+    'facts.bodiesChecking': '{n} so far · {done} of {total} visits checked',
+    'facts.bodiesUnanswered': '{n} · no answer for {k} {k:visit|visits}: {dates}',
+    'mark.measuring': 'Measuring…',
+    'mark.measuringWhy': 'Kept from before; measured again once this field’s visits are in.',
+    'mark.whoSlow': 'Still asking SIMBAD, Gaia and IRSA — catalogue relays can take a minute…',
+    'mark.whoTimeout': 'No answer from SIMBAD, Gaia or IRSA within {s} s',
+    'card.opens': 'Loading',
+    'card.opensValue': '{shown} at once, then up to {cap} of {n} in the background',
   },
 
   ru: {
@@ -618,7 +639,7 @@ const STRINGS = {
     'depth.target': 'Планета X',
     'depth.scale': 'Дошли до {mag} AB; Планета X предсказана на {lo}–{hi}',
     'hunt.rerun': 'Проверить ещё раз',
-    'hunt.waiting': 'Начнётся, когда придут все заходы.',
+    'hunt.waiting': 'Начнётся по пришедшим заходам через {s} с или когда придут все.',
     'hunt.count': 'движется {n} из {checked}',
     'facts.visits': 'Заходы',
     'facts.visitsV': '{n} за {days} дн.',
@@ -1000,6 +1021,27 @@ const STRINGS = {
     'foot.credit': 'Данные: NASA/JPL-Caltech · SPHEREx · IPAC/IRSA Quick Release. Известные тела Солнечной системы: SkyBoT, IMCCE / Парижская обсерватория. Разбор названий: SIMBAD/Sesame, CDS Страсбург. Опознание отмеченного источника: Gaia DR3 (ESA), 2MASS, AllWISE и VSX через VizieR, CDS. Луна в переходе к ночи: мозаика Lunar Reconnaissance Orbiter, NASA/GSFC/Arizona State University. Muninn не связан с NASA и ничего не добавляет к данным, которые показывает.',
     'foot.team': 'Сделано командой Yggdrasil для NASA Space Apps Challenge 2026 — Planet X and SPHEREx.',
     'foot.short': 'NASA/JPL-Caltech · SPHEREx · IPAC/IRSA · AllWISE · Gaia DR3 (MAST, IRSA) · JPL SSD · SkyBoT/IMCCE · SIMBAD/CDS · CADC',
+
+    // Загрузка, число заходов и сверка с каталогами, которая идёт параллельно.
+    'verdict.flashesOpen': 'Между заходами ничего не сдвинулось; {n} {n:вспышка|вспышки|вспышек} в одном заходе — ещё сверяю с каталогом.',
+    'hunt.fromSoFar': 'По {used} из {total} заходов; когда придут остальные, поиск пройдёт заново.',
+    'hunt.from': 'По {used} из {total} заходов; остальные не пришли.',
+    'facts.visitsOf': '{n} из {total} · {days} дн.',
+    'visits.all': 'Загрузить все {n}',
+    'facts.visitsLoading': 'загружено {n} из {total} · {days} дн.',
+    'hunt.updating': 'Обновляю по новым заходам…',
+    'run.legendSome': 'Заходы в это поле: {n} из {total}',
+    'card.loaded': 'Загружено',
+    'card.opensAll': '{shown} сразу, остальные {rest} — в фоне',
+    'card.loadedValue': '{n} из {total}',
+    'facts.bodiesChecking': '{n} пока · проверено {done} из {total} заходов',
+    'facts.bodiesUnanswered': '{n} · нет ответа по {k} {k:заходу|заходам|заходам}: {dates}',
+    'mark.measuring': 'Измеряю…',
+    'mark.measuringWhy': 'Метка сохранена; измерю заново, когда придут заходы этого поля.',
+    'mark.whoSlow': 'Всё ещё спрашиваю SIMBAD, Gaia и IRSA — каталоги иногда отвечают минуту…',
+    'mark.whoTimeout': 'SIMBAD, Gaia и IRSA не ответили за {s} с',
+    'card.opens': 'Загрузка',
+    'card.opensValue': '{shown} сразу, затем до {cap} из {n} в фоне',
   },
 };
 
@@ -1058,24 +1100,44 @@ export const fmt = (n, digits = 2) => (n == null || !Number.isFinite(n)
   ? '—'
   : n.toLocaleString(locale(), { minimumFractionDigits: digits, maximumFractionDigits: digits }));
 
+/**
+ * Month names for dates, one set per language and used everywhere a date is
+ * written. The browser's own short months differ from one engine to the next
+ * ("Sep" in one place, "Sept" in another, "февр." in a third), and one date
+ * written two ways on one screen reads as two dates. Russian takes the
+ * genitive, because here the month is always part of a date.
+ */
+const MONTHS = {
+  en: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
+  ru: ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'],
+};
+
+/**
+ * A UTC date as "21 Aug", "21 Aug 2025" or "21 Aug ’25": the one formatter
+ * behind every date on the page and along the run.
+ */
+export function formatDay(date, { year = false, lang = current } = {}) {
+  const months = MONTHS[lang] ?? MONTHS.en;
+  const head = `${date.getUTCDate()} ${months[date.getUTCMonth()]}`;
+  if (year === 'short') return `${head} ’${String(date.getUTCFullYear()).slice(-2)}`;
+  return year ? `${head} ${date.getUTCFullYear()}` : head;
+}
+
+const isoDate = (iso) => new Date(iso.endsWith('Z') ? iso : `${iso}Z`);
+
 export const fmtDate = (iso) => {
   if (!iso) return '—';
-  const d = new Date(iso.endsWith('Z') ? iso : `${iso}Z`);
+  const d = isoDate(iso);
   if (Number.isNaN(d.getTime())) return iso;
-  // Russian appends "г." to a year; the plate's own date does not, and one
-  // date written two ways on one screen reads as two dates.
-  return d.toLocaleDateString(locale(), { year: 'numeric', month: 'short', day: '2-digit', timeZone: 'UTC' })
-    .replace(/\s*г\.$/, '');
+  return formatDay(d, { year: true });
 };
 
 /** Day and month, no year: for a step that goes one visit either way. */
 export const fmtDay = (iso) => {
   if (!iso) return '';
-  const d = new Date(iso.endsWith('Z') ? iso : `${iso}Z`);
+  const d = isoDate(iso);
   if (Number.isNaN(d.getTime())) return '';
-  // Without the abbreviation's full stop, to match the dates along the run.
-  return d.toLocaleDateString(locale(), { month: 'short', day: 'numeric', timeZone: 'UTC' })
-    .replace(/\.$/, '').replace('февр', 'фев');
+  return formatDay(d);
 };
 
 export const fmtTime = (iso) => {

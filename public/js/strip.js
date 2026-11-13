@@ -31,6 +31,8 @@
  * its place. Press a frame to go to it. There is nothing else to learn.
  */
 
+import { formatDay } from './i18n.js';
+
 /** The sector grid, as the brief specifies it. */
 const COLS = 5;
 const ROWS = 4;
@@ -40,8 +42,6 @@ const TOP = 12;
 /** A cell is lit, and can be pressed, from here: the bar standouts() uses. */
 const LIT = 4;
 
-/** Under a frame the month is part of a date, so Russian takes the genitive. */
-const DATE_MONTHS_RU = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 /** On the lane the month stands alone, so it is named as itself. */
 const LANE_MONTHS_RU = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 const MONTHS_EN = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -61,7 +61,7 @@ const toMjd = (date) => date.getTime() / 86400000 + MJD_UNIX;
  * @returns {{x:number, y:number, w:number, h:number, i:number}[]}
  */
 export function drawStrip(canvas, {
-  slots, sectors, index, hover = -1, lang = 'ru', paint, now = 0, motion = true,
+  slots, sectors, index, hover = -1, lang = 'ru', paint, now = 0, motion = true, bands = false,
 }) {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const cssW = canvas.clientWidth || 1;
@@ -83,7 +83,9 @@ export function drawStrip(canvas, {
 
   const inner = Math.max(120, cssW - padX * 2);
   const slot = inner / n;
-  const thumbW = Math.max(26, Math.min(96, slot - 8));
+  // Ten visits get a gutter between frames; sixty, loaded in the background,
+  // get narrower frames that still do not overlap.
+  const thumbW = Math.max(Math.min(26, slot - 2), Math.min(96, slot - 8));
   // Keep the frames' own proportions; a field is rarely square.
   const src = slots.find((s) => s.visit?.canvas)?.visit.canvas;
   const aspect = src ? src.height / src.width : 0.66;
@@ -122,7 +124,6 @@ export function drawStrip(canvas, {
 
   /* ---- the lane: the months it crosses, then the line itself ----------- */
   const laneMonths = lang === 'ru' ? LANE_MONTHS_RU : MONTHS_EN;
-  const dateMonths = lang === 'ru' ? DATE_MONTHS_RU : MONTHS_EN;
   ctx.font = '10px "IBM Plex Mono", ui-monospace, monospace';
   ctx.textBaseline = 'alphabetic';
 
@@ -325,10 +326,37 @@ export function drawStrip(canvas, {
     }
   }
 
+  /* ---- the band of each frame, where the run mixes them ---------------- */
+  // In "All bands" each visit is whichever band covered the field that day,
+  // and the side label names only the one on screen. Each frame names its own,
+  // in the corner, on a backing of the well so it reads over a bright star.
+  if (bands && !skeleton) {
+    ctx.font = '9px "IBM Plex Mono", ui-monospace, monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    for (let i = 0; i < n; i++) {
+      const band = slots[i].frame?.band;
+      if (!band) continue;
+      const x = atSlot(i);
+      const w = ctx.measureText(band).width + 4;
+      if (w > thumbW - 2) continue;
+      ctx.globalAlpha = 0.78;
+      ctx.fillStyle = P.well;
+      ctx.fillRect(x + 1, thumbY + 1, w, 11);
+      ctx.globalAlpha = slots[i].visit ? 1 : 0.6;
+      ctx.fillStyle = i === liveSlot ? P.ink : (P.label ?? P.faint);
+      ctx.fillText(band, x + 3, thumbY + 2);
+    }
+    ctx.globalAlpha = 1;
+    ctx.textBaseline = 'alphabetic';
+  }
+
   /* ---- the signature: this visit's twenty sectors, in their own shape -- */
   const cw = Math.max(2, Math.floor((thumbW - (COLS - 1)) / COLS));
+  // Too narrow for five cells a row: the sectors are left to the picture.
+  const signatures = cw * COLS + COLS - 1 <= thumbW + 1;
   const ch = 6;
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < n && signatures; i++) {
     const at = slots[i].at;
     const x0 = atSlot(i) + Math.max(0, (thumbW - (cw * COLS + COLS - 1)) / 2);
     for (let s = 0; s < COLS * ROWS; s++) {
@@ -355,23 +383,28 @@ export function drawStrip(canvas, {
   /* ---- the dates ------------------------------------------------------- */
   ctx.font = '10px "IBM Plex Mono", ui-monospace, monospace';
   ctx.textAlign = 'center';
-  // Every date if they fit, otherwise every other one — a row of overlapping
-  // dates is a grey smear, not a scale.
-  const every = thumbW < 46 ? 2 : 1;
+  // A run that crosses a new year carries the year on every date: "21 Aug"
+  // under two frames a year apart read as one day shown twice.
+  const years = skeleton ? 1 : new Set(slots.map((s) => toDate(s.frame.mjd).getUTCFullYear())).size;
+  const label = (i) => formatDay(toDate(slots[i].frame.mjd), { year: years > 1 ? 'short' : false, lang });
+  // Every date if they fit, otherwise every second or third one — a row of
+  // overlapping dates is a grey smear, not a scale.
+  const widest = skeleton ? 0 : Math.max(...slots.map((_, i) => ctx.measureText(label(i)).width));
+  const every = Math.max(1, Math.ceil((widest + 6) / slot));
   for (let i = 0; i < n && !skeleton; i++) {
     if (i % every && i !== liveSlot) continue;
     // The date of the frame on screen is always written; where only every
     // other date fits, the one beside it gives way rather than run into it.
-    if (every > 1 && i !== liveSlot && Math.abs(i - liveSlot) === 1) continue;
+    if (every > 1 && i !== liveSlot && Math.abs(i - liveSlot) < every) continue;
     // From the MJD, which is UTC by definition; the ISO string carries no zone
     // and would be read as local time.
-    const d = toDate(slots[i].frame.mjd);
     ctx.fillStyle = i === liveSlot ? P.ink : (P.label ?? P.faint);
     ctx.globalAlpha = slots[i].visit ? 1 : 0.55;
-    ctx.fillText(
-      `${d.getUTCDate()} ${dateMonths[d.getUTCMonth()]}`,
-      atSlot(i) + thumbW / 2, dateY + 10,
-    );
+    // Kept inside the run at its ends, where a centred date ran off the edge.
+    const text = label(i);
+    const half = ctx.measureText(text).width / 2;
+    const cx = Math.min(cssW - half - 1, Math.max(half + 1, atSlot(i) + thumbW / 2));
+    ctx.fillText(text, cx, dateY + 10);
   }
   ctx.globalAlpha = 1;
 
