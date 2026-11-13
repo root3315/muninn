@@ -339,7 +339,7 @@ a { color: inherit; }
 }
 .slide[data-on] .targets li { animation: rise 520ms var(--ease-out) calc(560ms + var(--i, 0) * 110ms) backwards; }
 .targets__frame {
-  position: relative; display: block; aspect-ratio: 1; inline-size: min(100%, 28vh); margin-block-end: 0.4rem;
+  position: relative; display: block; aspect-ratio: 1; inline-size: min(100%, 26vh); margin-block-end: 0.4rem;
   border-radius: var(--radius-md); overflow: hidden; background: var(--color-well);
 }
 .targets__shot {
