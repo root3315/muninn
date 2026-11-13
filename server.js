@@ -354,22 +354,42 @@ async function handleTap(url, res) {
   if (field.limit !== null) field.limit = Math.round(field.limit * 2) / 2;
   field.radiusDeg = Math.max(1 / 3600, Number(field.radiusDeg.toPrecision(2)));
   const key = safeKey(`tap_${cat}_${field.ra.toFixed(4)}_${field.dec.toFixed(4)}_${field.radiusDeg}_${field.top}_${field.limit ?? 'all'}`);
-  // A star's own lookup is a few arcseconds, and both archives are asked for
-  // it at once: either can take twenty seconds on a bad day, and rarely both.
+  // A star's own lookup is a few arcseconds: MAST usually answers in one or
+  // two, and IRSA is asked as well only once MAST is late or has failed —
+  // either can take twenty seconds on a bad day, rarely both, and asking IRSA
+  // every time would double the queue the mark's other catalogues wait in.
   // A field's worth is megabytes at MAST, so the overlays stay with IRSA.
   const viaMast = cat === 'gaia' && field.radiusDeg <= MAST_MAX_DEG;
   return relay(res, key, () => (viaMast
-    ? firstOf([askMastGaia(field, key), askIrsaTap(archive, field, key)])
+    ? hedged(() => askMastGaia(field, key), () => askIrsaTap(archive, field, key), MAST_HEDGE_MS)
     : askIrsaTap(archive, field, key)));
 }
 
-/** The first of several asks to succeed; the first failure if none does. */
-async function firstOf(asks) {
-  try {
-    return await Promise.any(asks);
-  } catch (err) {
-    throw err.errors?.[0] ?? err;
-  }
+/**
+ * The first answer of two: `first` asked now, `second` once `first` has
+ * failed or taken `ms` without answering. The first failure if neither answers.
+ */
+function hedged(first, second, ms) {
+  return new Promise((resolve, reject) => {
+    const errors = [];
+    let started = 1;
+    let timer = null;
+    const fail = (err) => {
+      errors.push(err);
+      if (errors.length === started) {
+        if (started === 1) startSecond();
+        else reject(errors[0]);
+      }
+    };
+    const startSecond = () => {
+      if (started === 2) return;
+      clearTimeout(timer);
+      started = 2;
+      second().then(resolve, fail);
+    };
+    first().then((value) => { clearTimeout(timer); resolve(value); }, fail);
+    timer = setTimeout(startSecond, ms);
+  });
 }
 
 /* ------------------------------------------------------- Gaia DR3 at MAST */
@@ -378,6 +398,8 @@ async function firstOf(asks) {
 const MAST_INVOKE = 'https://mast.stsci.edu/api/v0/invoke';
 const MAST_MAX_DEG = 0.04;
 const MAST_TIMEOUT_MS = 40_000;
+/** How long MAST has before IRSA is asked too. */
+const MAST_HEDGE_MS = 3_000;
 
 /**
  * A small Gaia DR3 cone from MAST, under the shared (VizieR) column names.
