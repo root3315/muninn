@@ -195,7 +195,7 @@ function sourceBounds(wcs, grid) {
  * Fetch and resample one epoch.
  * Returns null when the frame does not actually overlap the requested field.
  */
-export async function loadStamp(url, grid, { signal, minCoverage = 0.15 } = {}) {
+export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = true } = {}) {
   const hdu = await readImageHDU(url, signal);
   const cards = hdu.cards;
   const wcs = new WCS(cards);
@@ -233,8 +233,9 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15 } = {}) 
   // A pixel the pipeline has already called bad is a hole here too — filled
   // from its good neighbours below — instead of a bright point waiting to be
   // "found".
+  // `mask: false` is for the tools that calibrate against a flagged pixel.
   const read = await flagsRead;
-  const flagged = read ? maskFlagged(plane, read) : null;
+  const flagged = read && mask ? maskFlagged(plane, read) : null;
   const flagRows = read?.values ?? null;
 
   // The sky noise of the detector's own pixels, over the columns the field
@@ -309,6 +310,11 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15 } = {}) 
     height: gh,
     coverage,
     wcs,
+    // The detector's own pixels under the field, kept for the one test that
+    // must not be read through the resampling: whether a flash is a star's
+    // shape or a single pixel (sharpness.js). A fraction of the visit's own
+    // bytes: the grid is cut a few times finer than the detector.
+    detector: { data: patch, width: colTo - colFrom + 1, height: rows, x0: colFrom + 1, y0: rowFrom, wcs },
     meta: {
       obsId: String(cards.get('OBSID') ?? '').trim(),
       dateObs: String(cards.get('DATE-OBS') ?? '').trim(),
