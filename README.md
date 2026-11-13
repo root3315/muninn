@@ -5,8 +5,18 @@
 NASA Space Apps Challenge 2026 — *Planet X and SPHEREx* · team **Yggdrasil**
 
 **Live: <https://muninn.mydevbox.xyz>** · open *(152) Atala* under the search and press Space.
-**The talk, seventeen slides: <https://muninn.mydevbox.xyz/talk.html>** — its first slide reads real frames
-from the archive as you watch.
+**The talk, ten slides and an appendix: <https://muninn.mydevbox.xyz/talk.html>** — its second slide reads real
+frames from the archive as you watch. PDF copies: [English](https://muninn.mydevbox.xyz/talk.pdf),
+[Russian](https://muninn.mydevbox.xyz/talk.ru.pdf).
+
+## Team Yggdrasil
+
+- Khurshiddinov Timur Khurshiddinovich (team owner)
+- Stepan Ionichev
+- Muhammadyusuf Bahtiyarov
+- Edem
+- Temur Kholjigitov
+- Khamidkhodjayeva Fayziya
 
 Three things it shows on real data:
 
@@ -56,6 +66,8 @@ npm test                # 79 offline tests: a synthetic FITS through the whole p
 npm run bake            # refresh the pre-resolved opening fields (optional)
 npm run probe           # check the WCS round-trip against a live SPHEREx header
 node tools/verify-mover.mjs 13.4194 3.8459 0.15   # the photometry check below
+node tools/talk-pdf.mjs 9222 http://127.0.0.1:8080 # talk.pdf and talk.ru.pdf, with the server and a
+                                                   # headless Chrome (--remote-debugging-port=9222) running
 ```
 
 ### Showing it to someone, right now
@@ -643,7 +655,7 @@ of the image and read the verdict: one visit, named by SkyBoT as the asteroid.
   not an orbit fit.
 - **The relay is not hardened for abuse.** It caps twelve lookups in flight, but has no per-client
   limit and never prunes its disk cache.
-- **No video yet.** The submission's 30-second recording is not made; the seventeen slides are.
+- **No video yet.** The submission's 30-second recording is not made; the ten slides and their appendix are.
 - **Cosmic rays look like transients.** They are single-frame, sharp, and common. The ones
   the pipeline caught are masked through `FLAGS`; the ones it missed are not. Anything
   seen exactly once still deserves that explanation first.
@@ -700,7 +712,7 @@ public/
   js/votable.js           just enough IVOA VOTable for both services
   js/i18n.js              English and Russian
   js/app.js               state, wiring, the loading choreography
-  js/talk.js              the seventeen slides at talk.html; slide 1 reads frames live
+  js/talk.js              the talk at talk.html: ten slides, then an appendix; slide 2 reads frames live
   data/targets.json       the ten opening fields, with counts from the archive
   data/fields/*.json      their frame indexes, pre-resolved so they open in ~80 ms
 tools/                    the scripts that verified all of the above

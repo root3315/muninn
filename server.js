@@ -77,6 +77,7 @@ const TYPES = {
   '.txt': 'text/plain; charset=utf-8',
   '.ico': 'image/x-icon',
   '.webmanifest': 'application/manifest+json',
+  '.pdf': 'application/pdf',
 };
 
 /**
