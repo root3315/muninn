@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import { request } from 'node:http';
 import { fileURLToPath } from 'node:url';
 
-const PORT = 5199;
+const PORT = Number(process.env.TEST_PORT) || 5199;
 const BASE = `http://127.0.0.1:${PORT}`;
 let child;
 
