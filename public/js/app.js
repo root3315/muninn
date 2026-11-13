@@ -32,6 +32,7 @@ import { spectrumBlock } from './spectrum-view.js';
 import { trackCSV } from './export.js';
 import { SkyView, shortName } from './sky.js';
 import { loadWise, WISE_BANDS } from './wise.js';
+import { fieldArchives, CADC_SEARCH } from './archives.js';
 import {
   searchFrames, NoRelayError, UpstreamError, groupVisits, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, identifySource, fieldObjects, toS3, surveySources,
@@ -2296,6 +2297,8 @@ async function openField({ ra, dec, label = '', band = null }) {
   renderWhen();
   sky.setCatalog([]);
   resetSurveys();
+  archives = null;
+  renderArchives();
   showTip(null);
   skybot = { asking: new Set(), failed: new Set() };
   stackPlanned = [];
@@ -2424,6 +2427,7 @@ async function openField({ ra, dec, label = '', band = null }) {
   refreshKnownObjects();
   prefetchKnownObjects(ctrl.signal);
   loadFieldCatalog(ctrl.signal);
+  loadArchives(ctrl.signal);
   applySurvey();
 
   // The headline number of this whole approach: how little of the archive we touched.
@@ -3462,6 +3466,51 @@ function syncLambda() {
   }
 }
 
+/* ------------------------------------------------ the field in other archives */
+
+/** What CADC said about the open field: null, 'asking', 'failed' or a list. */
+let archives = null;
+
+async function loadArchives(signal) {
+  const at = { ra: state.ra, dec: state.dec };
+  archives = 'asking';
+  renderArchives();
+  try {
+    const list = await fieldArchives({ ...at, radiusDeg: Math.min(0.3, sky.grid.spanDeg / 2) }, { signal });
+    if (signal?.aborted || state.ra !== at.ra || state.dec !== at.dec) return;
+    archives = list;
+  } catch {
+    if (signal?.aborted) return;
+    archives = 'failed';
+  }
+  renderArchives();
+}
+
+/** Up to eight archives by size, each with its count and its years. */
+function renderArchives() {
+  const box = $('archives');
+  if (!box) return;
+  box.hidden = archives === null;
+  const list = Array.isArray(archives) ? archives : [];
+  $('archives-count').textContent = list.length ? String(list.length) : '';
+  $('archives-note').textContent = archives === 'asking' ? t('archives.asking')
+    : archives === 'failed' ? t('archives.failed')
+      : list.length ? t('archives.lede') : t('archives.none');
+  $('archives-list').replaceChildren(...list.slice(0, 8).map((a) => {
+    const row = document.createElement('div');
+    const dt = document.createElement('dt');
+    dt.textContent = a.name;
+    const dd = document.createElement('dd');
+    const years = a.from && a.to ? (a.from === a.to ? ` · ${a.from}` : ` · ${a.from}–${a.to}`) : '';
+    dd.textContent = `${fmt(a.n, 0)}${years}`;
+    row.append(dt, dd);
+    return row;
+  }));
+  const link = $('archives-link');
+  link.hidden = !list.length;
+  link.href = CADC_SEARCH;
+}
+
 /* ------------------------------------------------- AllWISE beside the frame */
 
 /** Where the AllWISE picture for the open field stands: asking, ok or failed. */
@@ -3832,6 +3881,7 @@ function relabel() {
   $('cursor-hint').textContent = t(matchMedia('(pointer: coarse)').matches
     ? 'readout.hintTouch' : 'readout.hint');
   renderPresets();
+  renderArchives();
   // Where the sky in the entry screen comes from, with the other credits.
   const skyCredit = [
     state.skyLayers.stars && t('credit.stars'), state.skyLayers.deep && t('credit.deep'), t('gate.modelled'),

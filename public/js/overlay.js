@@ -164,6 +164,19 @@ export function renameRow(row, columns) {
   return Object.fromEntries(Object.entries(columns).map(([name, col]) => [name, row[col] ?? '']));
 }
 
+/** MAST rows → the shared names, cut and ordered the way the ADQL would. */
+export function mastGaiaRows(data, { limit = null, top }) {
+  const { columns } = CATALOGUES.gaia.irsa;
+  return data
+    .map((row) => ({
+      ...renameRow(row, columns),
+      Source: String(row.designation ?? '').replace(/^Gaia DR3\s+/, '') || String(row.source_id ?? ''),
+    }))
+    .filter((row) => row.Gmag !== '' && row.Gmag != null && (limit === null || Number(row.Gmag) <= limit))
+    .sort((a, b) => Number(a.Gmag) - Number(b.Gmag))
+    .slice(0, top);
+}
+
 /** `''` and anything that is not a number → null. */
 const num = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
 

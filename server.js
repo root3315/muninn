@@ -30,8 +30,9 @@ import { parseVOTable } from './public/js/votable.js';
 import { frameFromRow } from './public/js/catalog.js';
 import { COLLECTIONS } from './public/js/release.js';
 import { parseCsv } from './public/js/csv.js';
-import { CATALOGUES, ROW_CAP, coneQuery, renameRow } from './public/js/overlay.js';
+import { CATALOGUES, ROW_CAP, coneQuery, renameRow, mastGaiaRows } from './public/js/overlay.js';
 import { sbIdentUrl, parseSbIdent } from './public/js/sbident.js';
+import { archivesQuery, ARCHIVE_RADIUS } from './public/js/archives.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
@@ -344,7 +345,46 @@ async function handleTap(url, res) {
     limit: Number.isFinite(param(url, 'mag')) ? clamp(param(url, 'mag'), -2, 30) : null,
   };
   const key = safeKey(`tap_${cat}_${field.ra.toFixed(5)}_${field.dec.toFixed(5)}_${field.radiusDeg.toFixed(5)}_${field.top}_${field.limit ?? 'all'}`);
-  return relay(res, key, () => askIrsaTap(archive, field, key));
+  // A star's own lookup is a few arcseconds: MAST answers that in a second or
+  // two, where IRSA's TAP takes ten to fifty. A field's worth is megabytes at
+  // MAST, so the overlays stay with IRSA.
+  const viaMast = cat === 'gaia' && field.radiusDeg <= MAST_MAX_DEG;
+  return relay(res, key, () => (viaMast
+    ? askMastGaia(field, key).catch(() => askIrsaTap(archive, field, key))
+    : askIrsaTap(archive, field, key)));
+}
+
+/* ------------------------------------------------------- Gaia DR3 at MAST */
+
+/** The Gaia DR3 the challenge's resources point to: MAST, at STScI. */
+const MAST_INVOKE = 'https://mast.stsci.edu/api/v0/invoke';
+const MAST_MAX_DEG = 0.02;
+const MAST_TIMEOUT_MS = 30_000;
+
+/**
+ * A small Gaia DR3 cone from MAST, under the shared (VizieR) column names.
+ * MAST's JSON carries the 64-bit source_id as a bare number, which a
+ * JavaScript parser rounds; the designation keeps it exact.
+ */
+async function askMastGaia(field, key) {
+  const request = {
+    service: 'Mast.Catalogs.GaiaDR3.Cone', format: 'json', pagesize: 500, page: 1,
+    params: { ra: field.ra, dec: field.dec, radius: field.radiusDeg },
+  };
+  const res = await fetch(MAST_INVOKE, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded', 'user-agent': 'Muninn/1.0 (NASA Space Apps 2026)' },
+    body: new URLSearchParams({ request: JSON.stringify(request) }),
+    signal: AbortSignal.timeout(MAST_TIMEOUT_MS),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok || body?.status !== 'COMPLETE' || !Array.isArray(body.data)) {
+    throw new Error(`MAST: ${body?.msg || `HTTP ${res.status}`}`);
+  }
+  const rows = mastGaiaRows(body.data, field);
+  const payload = { rows, via: 'MAST', table: 'gaiadr3' };
+  await writeCache(key, payload);
+  return { ok: true, cached: false, ...payload };
 }
 
 async function askIrsaTap(archive, field, key) {
@@ -491,6 +531,32 @@ function binFits(buf, maxSide) {
 }
 
 const sendFits = (res, body) => send(res, 200, body, { 'content-type': 'application/fits' });
+
+/* ------------------------------------------------ other archives, at CADC */
+
+/** CADC's TAP over its common observation index (CAOM), Argus. */
+const CADC_TAP = 'https://ws.cadc-ccda.hia-iha.nrc-cnrc.gc.ca/argus/sync';
+const CADC_TIMEOUT_MS = 60_000;
+
+/** How many science observations each archive CADC indexes holds of a circle. */
+async function handleArchives(url, res) {
+  const at = position(url);
+  if (!at) return json(res, 400, BAD_POSITION);
+  const radiusDeg = clamp(param(url, 'r') || 0.1, ARCHIVE_RADIUS.min, ARCHIVE_RADIUS.max);
+  const key = safeKey(`cadc_${at.ra.toFixed(4)}_${at.dec.toFixed(4)}_${radiusDeg.toFixed(4)}`);
+  return relay(res, key, () => askCadc({ ...at, radiusDeg }, key));
+}
+
+async function askCadc(field, key) {
+  const query = new URLSearchParams({ REQUEST: 'doQuery', LANG: 'ADQL', FORMAT: 'csv', QUERY: archivesQuery(field) });
+  // A sync query is answered by a redirect to its result; fetch follows it.
+  const res = await withTimeout(`${CADC_TAP}?${query}`, CADC_TIMEOUT_MS);
+  const text = await res.text();
+  if (!res.ok || !text.startsWith('collection,')) throw new Error(`CADC: HTTP ${res.status}`);
+  const payload = { rows: parseCsv(text), via: 'CADC' };
+  await writeCache(key, payload);
+  return { ok: true, cached: false, ...payload };
+}
 
 /* ---------------------------------------------------- small bodies at JPL */
 
@@ -676,6 +742,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/tap') return await handleTap(url, res);
     if (url.pathname === '/api/sbident') return await handleSbIdent(url, res);
     if (url.pathname === '/api/wise') return await handleWise(url, res);
+    if (url.pathname === '/api/archives') return await handleArchives(url, res);
     if (url.pathname === '/api/targets') {
       const body = await readFile(join(PUBLIC, 'data', 'targets.json'));
       return send(res, 200, body, { 'content-type': TYPES['.json'] });

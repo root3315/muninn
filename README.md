@@ -176,6 +176,20 @@ reason the threshold is stated. It crosses the pixel once the baseline passes 21
 | Gaia DR3 | ESA Gaia, through IRSA TAP (`gaia_dr3_source`), raced against CDS VizieR | identifying a faint marked star, and whether Gaia saw it vary; an overlay of Gaia positions on the plate, carried by proper motion from J2016.0 to the date of the visit |
 | Known solar-system objects | NASA/JPL Small-Body Identification (`sb_ident`), merged with SkyBoT (IMCCE) | naming asteroids and comets at the moment of each exposure; either service alone is enough |
 
+| Gaia DR3, one marked star | NASA MAST (STScI), the Gaia archive the challenge's Resources tab names, through `/api/tap` | what a marked star is, in one or two seconds; IRSA's TAP (ten to fifty seconds) stands behind it |
+| Other telescopes of the field | Canadian Astronomy Data Centre, CAOM index (Argus TAP), through `/api/archives` | how many science observations HST, JWST, TESS, Chandra, Gemini, CFHT, JCMT, SDSS, VLASS and the CSA's NEOSSat hold of the field, and over which years; Barnard's Star, for one, has 572 NEOSSat frames from 2019 |
+
+### The challenge's Resources tab, and what became of each
+
+| resource | how Muninn uses it |
+| --- | --- |
+| NASA/IPAC IRSA, SPHEREx | every pixel (DR1 and QR3 Level-2 images), the frame index, the FLAGS plane; also AllWISE, CatWISE2020, 2MASS and Gaia DR3 catalogues and AllWISE Atlas images. IRSA's SPHEREx cutout service was measured and not used: 4 MB and 13–21 s a frame, against 1–3 MB in a few seconds by byte range from the S3 mirror |
+| SPHEREx Tutorial Notebooks | the reference for the DR1 file layout: the IMAGE, FLAGS (Rice-compressed from DR1 on) and WCS-WAVE extensions read in `stamp.js` |
+| WiseView | the model for the wipe between a SPHEREx visit and the AllWISE picture of the same field |
+| Gaia mission data (DR3) | Gaia DR3 from MAST for a marked star, and from IRSA or VizieR for the overlay, carried by proper motion to the date of each visit |
+| CADC (CSA partner) | the "In other archives" panel; NEOSSat observations of a field are counted there |
+| NEOSSat pages, tutorial and dataset | reached through CADC, where the NEOSSat observations are indexed |
+
 ### When a new SPHEREx release lands
 
 SPHEREx data arrive in releases, each published by IRSA as a new SIA collection on the

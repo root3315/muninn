@@ -366,7 +366,7 @@ async function irsaRows(kind, { ra, dec, radiusDeg, limit = null, top }, signal)
     `api/tap?cat=${kind}&ra=${ra.toFixed(6)}&dec=${dec.toFixed(6)}&r=${radiusDeg.toFixed(6)}&top=${top}${mag}`,
     signal, RELAY_DEADLINE_MS,
   );
-  return body.rows;
+  return { rows: body.rows, via: body.via ?? 'IRSA' };
 }
 
 /**
@@ -378,7 +378,7 @@ async function irsaRows(kind, { ra, dec, radiusDeg, limit = null, top }, signal)
  */
 export async function catalogueRows(kind, field, { signal } = {}) {
   const { vizier } = CATALOGUES[kind];
-  const asks = [irsaRows(kind, field, signal).then((rows) => ({ rows, via: 'IRSA' }))];
+  const asks = [irsaRows(kind, field, signal)];
   if (vizier) {
     asks.push(tap(VIZIER_TAP, coneQuery(vizier, field), 'csv', signal).then((text) => ({ rows: parseCsv(text), via: 'VizieR' })));
   }
