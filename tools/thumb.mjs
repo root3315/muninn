@@ -17,9 +17,11 @@ export function seenFraction(stamp) {
 
 /** One reprojected frame as PNG bytes, on its own black and white point. */
 export function toPNG(stamp) {
-  const rgba = { data: new Uint8ClampedArray(SIZE * SIZE * 4) };
+  const rgba = { data: new Uint8ClampedArray(SIZE * SIZE * 4), width: SIZE, height: SIZE };
   const { lo, hi } = limitsFromSorted(sortedFinite(stamp.data));
-  paint(rgba, stamp.data, GREY, { lo, hi, stretch: 'asinh', blank: GREY.slice(0, 3), blankAlpha: 255 });
+  paint(rgba, stamp.data, GREY, {
+    lo, hi, stretch: 'asinh', blank: GREY.slice(0, 3), blankAlpha: 255, quality: stamp.quality,
+  });
   const rgb = new Uint8Array(SIZE * SIZE * 3);
   for (let i = 0, p = 0; i < rgb.length; i += 3, p += 4) {
     rgb[i] = rgba.data[p]; rgb[i + 1] = rgba.data[p + 1]; rgb[i + 2] = rgba.data[p + 2];
