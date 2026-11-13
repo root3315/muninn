@@ -1,5 +1,6 @@
 /**
- * spectrum.js — one marked source across SPHEREx's six bands.
+ * spectrum.js — one marked source across SPHEREx's six bands, from every
+ * exposure that saw it.
  *
  * SPHEREx has no filter wheel. Each detector sits behind a linear variable
  * filter, so the wavelength a source is seen at depends on which detector row
@@ -8,13 +9,19 @@
  * WCS-WAVE, is a small lookup table of central wavelength and bandwidth over
  * the detector (the `-TAB` form of FITS WCS, alternate axis "W").
  *
+ * So every exposure is a point at its own wavelength. Read enough of them and
+ * the six bands fill in towards the instrument's 102 channels, and the
+ * exposures that happen to share a wavelength say whether the source changed.
+ *
  * Everything here is arithmetic on values already in hand — which exposures to
- * read, what the table says at a pixel, what an aperture sum is in millijansky.
+ * read, what the table says at a pixel, what an aperture sum is in millijansky,
+ * which visits share a wavelength and what they say about a change.
  * The reading itself lives in stamp.js and app.js.
  */
 
 import { readHeader } from './fits.js';
 import { PIXEL_SR, APERTURE_PX } from './depth.js';
+import { deltaRA } from './wcs.js';
 
 export const BANDS = ['D1', 'D2', 'D3', 'D4', 'D5', 'D6'];
 
@@ -24,25 +31,334 @@ export const WAVE_RANGE = [0.75, 5.0];
 /** A non-detection is drawn at this many sigma, the threshold `measure` detects at. */
 export const LIMIT_SIGMA = 5;
 
-/* ------------------------------------------------------- which exposures */
+/**
+ * Resolving power λ/Δλ of each band, as published for the instrument
+ * (Crill et al. 2020, Proc. SPIE 11443, 114430I). The files agree: the
+ * bandwidth column of WCS-WAVE gives 37–43 in D1–D4 and 108–134 in D5–D6.
+ * Used only where a file's own bandwidth is missing.
+ */
+export const RESOLVING_POWER = { D1: 39, D2: 41, D3: 41, D4: 35, D5: 112, D6: 128 };
+
+/** How many exposures have their wavelength looked up, and how many of those are measured. */
+export const MAX_POOL = 160;
+export const MAX_MEASURED = 60;
 
 /**
- * For every band, its exposures ordered by how far in time they are from the
- * visit on the plate, nearest first.
- *
- * The nearest is the one to read. The ones after it are there for a position
- * the nearest exposure turns out not to cover — the six detectors do not see
- * the same patch of sky at once, so a band's nearest frame can miss a source
- * near the edge of the field.
+ * A source that moves is only looked for close in time to where it was
+ * measured: SPHEREx takes a field in runs of exposures about two minutes
+ * apart, and a main-belt asteroid crosses a 6.15″ pixel in some twenty.
  */
-export function nearestExposures(frames, mjd, { perBand = 3 } = {}) {
-  return BANDS.map((band) => ({
-    band,
-    frames: frames
-      .filter((f) => f.band === band && Number.isFinite(f.mjd))
-      .sort((a, b) => Math.abs(a.mjd - mjd) - Math.abs(b.mjd - mjd))
-      .slice(0, perBand),
-  }));
+export const SAME_RUN_DAYS = 10 / 1440;
+
+/* ------------------------------------------------------- which exposures */
+
+/** `n` of a list, spread evenly from its first item to its last. */
+export function spreadPick(items, n) {
+  if (n <= 0) return [];
+  if (items.length <= n) return items.slice();
+  if (n === 1) return [items[Math.floor((items.length - 1) / 2)]];
+  const picked = new Set();
+  for (let k = 0; k < n; k++) picked.add(Math.round((k * (items.length - 1)) / (n - 1)));
+  return [...picked].map((i) => items[i]);
+}
+
+/**
+ * Where to look for a marked source at a given date, and over which dates.
+ *
+ * A source that stays put is looked for at the same place in every exposure.
+ * One that moved through the loaded visits is followed along the straight
+ * line fitted to its positions, and only over the dates it was measured,
+ * give or take the time it takes to cross one detector pixel. One seen in a
+ * single visit, with no motion known, is looked for in the exposures of that
+ * same run only. Returns `{ at(mjd), from, to, kind }`.
+ */
+export function motionOf(mark, { pixelArcsec = 6.15 } = {}) {
+  const track = (mark.track ?? []).filter((p) => Number.isFinite(p.mjd) && Number.isFinite(p.ra));
+  const kind = mark.analysis?.kind ?? 'none';
+  if (kind === 'moving' && track.length >= 2) {
+    const t0 = track[0].mjd;
+    const cosd = Math.cos((track[0].dec * Math.PI) / 180);
+    const ra = track.map((p) => deltaRA(p.ra, track[0].ra) * cosd);
+    const dec = track.map((p) => p.dec - track[0].dec);
+    const dt = track.map((p) => p.mjd - t0);
+    const line = (ys) => {
+      const n = ys.length;
+      const mx = dt.reduce((s, v) => s + v, 0) / n;
+      const my = ys.reduce((s, v) => s + v, 0) / n;
+      const sxx = dt.reduce((s, v) => s + (v - mx) ** 2, 0);
+      const slope = sxx > 0 ? dt.reduce((s, v, i) => s + (v - mx) * (ys[i] - my), 0) / sxx : 0;
+      return { slope, at: (t) => my + slope * (t - mx) };
+    };
+    const fRa = line(ra);
+    const fDec = line(dec);
+    const degPerDay = Math.hypot(fRa.slope, fDec.slope);
+    const pad = degPerDay > 0 ? pixelArcsec / 3600 / degPerDay : SAME_RUN_DAYS;
+    const mjds = track.map((p) => p.mjd);
+    return {
+      kind: 'moving',
+      from: Math.min(...mjds) - pad,
+      to: Math.max(...mjds) + pad,
+      at: (mjd) => ({
+        ra: (((track[0].ra + fRa.at(mjd - t0) / cosd) % 360) + 360) % 360,
+        dec: track[0].dec + fDec.at(mjd - t0),
+      }),
+    };
+  }
+  if (kind === 'transient' && track.length) {
+    const seen = track[0];
+    return {
+      kind: 'run', from: seen.mjd - SAME_RUN_DAYS, to: seen.mjd + SAME_RUN_DAYS, at: () => ({ ra: seen.ra, dec: seen.dec }),
+    };
+  }
+  // Still, or nothing seen at all: the same place throughout. Where it was
+  // measured, the middle of those positions; otherwise where the click fell.
+  const median = (vs) => vs.slice().sort((a, b) => a - b)[Math.floor(vs.length / 2)];
+  const still = track.length
+    ? { ra: (((track[0].ra + median(track.map((p) => deltaRA(p.ra, track[0].ra)))) % 360) + 360) % 360, dec: median(track.map((p) => p.dec)) }
+    : { ra: mark.ra, dec: mark.dec };
+  return { kind: 'still', from: -Infinity, to: Infinity, at: () => still };
+}
+
+/**
+ * The exposures worth asking the wavelength of: every one already on the
+ * plate, then the rest shared out between the bands as evenly as they allow,
+ * each band's share spread over its whole time span. Only dates the motion
+ * allows; one entry per file.
+ */
+export function visitPool(frames, { from = -Infinity, to = Infinity, loaded = new Set(), limit = MAX_POOL } = {}) {
+  const seen = new Set();
+  const usable = [];
+  for (const f of frames) {
+    if (!f?.url || seen.has(f.url) || !Number.isFinite(f.mjd) || f.mjd < from || f.mjd > to) continue;
+    seen.add(f.url);
+    usable.push(f);
+  }
+  const onPlate = usable.filter((f) => loaded.has(f.url));
+  const rest = usable.filter((f) => !loaded.has(f.url));
+  const picked = shareBetweenBands(rest, Math.max(0, limit - onPlate.length), (f) => f.band, (f) => f.mjd);
+  return [...onPlate, ...picked].sort((a, b) => a.mjd - b.mjd);
+}
+
+/**
+ * `n` items shared between the bands as evenly as they allow — one more for
+ * each band that still has some, round after round — and each band's share
+ * spread evenly along `order` (time, or wavelength).
+ */
+function shareBetweenBands(items, n, bandOf, order) {
+  const byBand = new Map();
+  for (const item of items) {
+    const band = bandOf(item);
+    if (!byBand.has(band)) byBand.set(band, []);
+    byBand.get(band).push(item);
+  }
+  const share = new Map([...byBand.keys()].map((b) => [b, 0]));
+  let left = n;
+  while (left > 0) {
+    let gave = false;
+    for (const [band, list] of byBand) {
+      if (left > 0 && share.get(band) < list.length) { share.set(band, share.get(band) + 1); left -= 1; gave = true; }
+    }
+    if (!gave) break;
+  }
+  return [...byBand].flatMap(([band, list]) => spreadPick(list.sort((a, b) => order(a) - order(b)), share.get(band)));
+}
+
+/* --------------------------------------------------- one wavelength, many */
+
+/**
+ * The width of one resolution element at a point, in micrometres: the
+ * bandwidth the file gives at that pixel, or λ/R where it gives none.
+ */
+export function resolutionWidth(point) {
+  if (point.width > 0) return point.width;
+  const R = RESOLVING_POWER[point.band];
+  return R && point.um > 0 ? point.um / R : null;
+}
+
+const medianOf = (values) => {
+  const s = values.slice().sort((a, b) => a - b);
+  const m = s.length >> 1;
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+/**
+ * The wavelengths seen most often: windows one resolution element wide
+ * (±half of it about a centre), each inside one band, that hold the most
+ * points. A point is `{ band, um, width? }` with a wavelength read from the
+ * file — an unread one has no place in a window. Each window is centred on
+ * the median of what fell in it, and no two overlap. Most populated first.
+ */
+export function wavelengthWindows(points, { max = 3, minCount = 3 } = {}) {
+  const placed = points.filter((p) => p.um > 0 && p.measured !== false && resolutionWidth(p));
+  const membersOf = (band, um, half) => placed.filter((p) => p.band === band && Math.abs(p.um - um) <= half + 1e-12);
+  const candidates = placed.map((c) => {
+    const half = resolutionWidth(c) / 2;
+    const first = membersOf(c.band, c.um, half);
+    const um = medianOf(first.map((p) => p.um));
+    const members = membersOf(c.band, um, half);
+    const spread = members.reduce((s, p) => s + Math.abs(p.um - um), 0) / members.length;
+    return { band: c.band, um, half, members, spread };
+  });
+  candidates.sort((a, b) => b.members.length - a.members.length || a.spread - b.spread || a.um - b.um);
+  const chosen = [];
+  for (const c of candidates) {
+    if (chosen.length >= max || c.members.length < minCount) break;
+    if (chosen.some((o) => o.band === c.band && Math.abs(o.um - c.um) < o.half + c.half)) continue;
+    chosen.push(c);
+  }
+  return chosen.map(({ band, um, half, members }) => ({ band, um, half, members }));
+}
+
+/**
+ * Which of the pool to measure, at most `limit`: every exposure on the plate,
+ * then the best-populated wavelengths in full (spread over time) so that
+ * brightness can be compared at one wavelength, then the rest spread across
+ * the wavelengths for the shape of the spectrum. A pool item is
+ * `{ frame, place, loaded }`; only items with a place are considered.
+ */
+export function chooseMeasured(pool, limit = MAX_MEASURED) {
+  const usable = pool.filter((p) => p.place);
+  const chosen = new Set(usable.filter((p) => p.loaded).slice(0, limit));
+  const add = (items, cap) => {
+    for (const item of items) {
+      if (chosen.size >= limit || cap <= 0) return;
+      if (!chosen.has(item)) { chosen.add(item); cap -= 1; }
+    }
+  };
+  const points = usable.map((item) => ({ ...item.place, band: item.frame.band, item }));
+  const caps = [Math.ceil(limit * 0.4), Math.ceil(limit * 0.15), Math.ceil(limit * 0.15)];
+  wavelengthWindows(points, { max: caps.length, minCount: 2 }).forEach((w, k) => {
+    const items = w.members.map((m) => m.item).sort((a, b) => a.frame.mjd - b.frame.mjd);
+    const fresh = items.filter((i) => !chosen.has(i));
+    const room = caps[k] - (items.length - fresh.length);
+    add(spreadPick(fresh, room), room);
+  });
+  const rest = usable.filter((i) => !chosen.has(i));
+  add(shareBetweenBands(rest, limit - chosen.size, (i) => i.frame.band, (i) => i.place.um), limit);
+  return [...chosen].sort((a, b) => a.frame.mjd - b.frame.mjd);
+}
+
+/**
+ * The shape under the scatter: the median flux of the detections in bins a
+ * four resolution elements wide (Δλ/λ = 4/R, about a tenth in D1–D4),
+ * band by band. Sixty exposures spread over about a hundred resolution
+ * elements leave most single-element bins with one point or none; four
+ * gather enough for a median and still follow the shape.
+ * Upper limits and saturated points are left out of it; a bin needs two
+ * detections to have a median at all. Sorted by wavelength.
+ */
+export const BIN_ELEMENTS = 4;
+
+export function medianLine(points) {
+  const bins = new Map();
+  for (const p of points) {
+    const R = RESOLVING_POWER[p.band];
+    if (p.kind !== 'detection' || !(p.um > 0) || p.measured === false || !R) continue;
+    const key = `${p.band}:${Math.floor(Math.log(p.um) / (BIN_ELEMENTS / R))}`;
+    if (!bins.has(key)) bins.set(key, []);
+    bins.get(key).push(p);
+  }
+  return [...bins.values()]
+    .filter((members) => members.length >= 2)
+    .map((members) => ({
+      band: members[0].band,
+      um: medianOf(members.map((p) => p.um)),
+      mJy: medianOf(members.map((p) => p.mJy)),
+      n: members.length,
+    }))
+    .sort((a, b) => a.um - b.um);
+}
+
+/**
+ * The bands where a source is saturated in most of its exposures. Whether
+ * one exposure saturates depends on where the undersampled image falls on
+ * the pixels as much as on the source, so the exposures in such a band that
+ * did not saturate saw a star at the edge of it — and one that lost part of
+ * its core to the pipeline's blanking. Their fluxes are not to be trusted.
+ */
+export function nearSaturation(points) {
+  const bands = new Set();
+  for (const band of BANDS) {
+    const mine = points.filter((p) => p.band === band);
+    const saturated = mine.filter((p) => p.kind === 'saturated').length;
+    if (mine.length && saturated * 2 > mine.length) bands.add(band);
+  }
+  return bands;
+}
+
+/**
+ * The detections centred somewhere else. The search box is two detector
+ * pixels wide, so where two sources lie close together, one exposure can
+ * lock onto one of them and the next onto its neighbour — and a steady pair
+ * reads as a source that changes. Each detection's offset from where it was
+ * looked for (`at`) is compared with the median offset of all of them; one
+ * more than a pixel from that is a different source. Points carry
+ * `{ key, kind, ra, dec, at: { ra, dec } }`; returns the keys of the strays.
+ */
+export function strayDetections(points, { pixelArcsec = 6.15 } = {}) {
+  const found = points.filter((p) => p.kind === 'detection' && Number.isFinite(p.ra) && p.at);
+  if (found.length < 3) return new Set();
+  const offsets = found.map((p) => {
+    const cosd = Math.cos((p.at.dec * Math.PI) / 180);
+    return { key: p.key, x: deltaRA(p.ra, p.at.ra) * cosd * 3600, y: (p.dec - p.at.dec) * 3600 };
+  });
+  const mx = medianOf(offsets.map((o) => o.x));
+  const my = medianOf(offsets.map((o) => o.y));
+  return new Set(offsets.filter((o) => Math.hypot(o.x - mx, o.y - my) > pixelArcsec).map((o) => o.key));
+}
+
+/* ------------------------------------------------------------ variability */
+
+/** AB magnitude of a flux density in mJy, and the magnitude error of its 1σ. */
+export const magOfMJy = (mJy) => -2.5 * Math.log10(mJy / 3631e3);
+export const magErrOf = (mJy, err) => (2.5 / Math.LN10) * (err / mJy);
+
+/** How far apart, in sigma, two magnitudes must be to call it a change. */
+export const VARIES_SIGMA = 3;
+
+/**
+ * What the visits at one wavelength say about a change in brightness.
+ *
+ * Saturated in more than half of them: nothing, and it says so. Otherwise
+ * the brightest and the faintest detection give the peak-to-peak change and
+ * its error (the two 1σ errors in quadrature). A non-detection deeper than
+ * every detection, and well clear of the brightest, widens that: the source
+ * was fainter than its 5σ limit, so the change is at least the distance to
+ * that limit. A change of more
+ * than three sigma is a change; anything less is "steady within" half of
+ * whichever is larger, the change or three sigma — the most these visits
+ * could have missed.
+ */
+export function variability(points) {
+  const saturated = points.filter((p) => p.kind === 'saturated').length;
+  const detections = points.filter((p) => p.kind === 'detection' && p.mJy > 0 && p.err > 0);
+  const limits = points.filter((p) => p.kind === 'limit' && p.mJy > 0);
+  const base = { n: points.length, saturated, detections: detections.length, limits: limits.length };
+  if (saturated * 2 > points.length) return { ...base, state: 'saturated' };
+  if (detections.length < 2) return { ...base, state: 'few' };
+
+  const mags = detections.map((p) => ({ p, m: magOfMJy(p.mJy), e: magErrOf(p.mJy, p.err) }));
+  const bright = mags.reduce((a, b) => (b.m < a.m ? b : a));
+  const faint = mags.reduce((a, b) => (b.m > a.m ? b : a));
+  const amp = faint.m - bright.m;
+  const ampErr = Math.hypot(bright.e, faint.e);
+
+  // A limit only counts where the brightest detection clears it by three
+  // sigma of the two together: a source a little above 5σ is missed now and
+  // then by the noise alone, and that is not a change.
+  const clear = limits.filter((l) => l.mJy < faint.p.mJy
+    && bright.p.mJy - l.mJy > VARIES_SIGMA * Math.hypot(bright.p.err, l.err ?? l.mJy / LIMIT_SIGMA));
+  const deepest = clear.reduce((a, b) => (!a || b.mJy < a.mJy ? b : a), null);
+  if (deepest) {
+    const atLeast = magOfMJy(deepest.mJy) - bright.m;
+    return {
+      ...base, state: 'varies', amp: atLeast, ampErr: bright.e, lowerBound: true, bright: bright.p, faint: deepest,
+    };
+  }
+  if (amp > VARIES_SIGMA * ampErr) return { ...base, state: 'varies', amp, ampErr, lowerBound: false, bright: bright.p, faint: faint.p };
+  return {
+    ...base, state: 'steady', amp, ampErr, within: Math.max(amp, VARIES_SIGMA * ampErr) / 2, bright: bright.p, faint: faint.p,
+  };
 }
 
 /* ----------------------------------------------------------- wavelength */
@@ -135,9 +451,9 @@ export function placeInBand(frame, wave) {
   const inBand = wave && wave.um >= frame.emMin - 0.05 && wave.um <= frame.emMax + 0.05;
   if (inBand) {
     const half = (wave.width ?? 0) / 2;
-    return { um: wave.um, from: wave.um - half, to: wave.um + half, measured: true };
+    return { um: wave.um, width: wave.width ?? null, from: wave.um - half, to: wave.um + half, measured: true };
   }
-  return { um: (frame.emMin + frame.emMax) / 2, from: frame.emMin, to: frame.emMax, measured: false };
+  return { um: (frame.emMin + frame.emMax) / 2, width: null, from: frame.emMin, to: frame.emMax, measured: false };
 }
 
 /* ------------------------------------------------------------------ flux */
@@ -167,6 +483,16 @@ export function fluxPoint(measurement) {
   if (measurement.flux == null) return null;
   if (!(measurement.flux > 0)) return { kind: 'limit', mJy: LIMIT_SIGMA * err, err };
   return { kind: 'detection', mJy: apertureMJy(measurement.flux), err };
+}
+
+/**
+ * The same, for a visit that may be saturated. A core past the detector's
+ * well, or an aperture touching one, holds no brightness: it is kept as a
+ * saturated point — the visit happened and saw the source — with no flux.
+ */
+export function visitPoint(measurement) {
+  if (measurement?.saturated) return { kind: 'saturated' };
+  return fluxPoint(measurement);
 }
 
 /* ----------------------------------------------------------------- dates */
