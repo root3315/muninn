@@ -1,5 +1,5 @@
 {
-  "generated": "2026-11-11",
+  "generated": "2026-11-13",
   "note": "Visit counts come from IRSA SIA2 on the generated date. Frame indexes for these fields live in data/fields/ and are served without a round trip.",
   "targets": [
     {
@@ -28,8 +28,8 @@
         "en": "The most-visited patch of sky there is.",
         "ru": "Самый посещаемый кусок неба."
       },
-      "visits": 157,
-      "spanDays": 449,
+      "visits": 158,
+      "spanDays": 522,
       "truncated": true
     },
     {
@@ -43,8 +43,8 @@
         "en": "The southern deep field, same cadence.",
         "ru": "Южное глубокое поле, тот же темп."
       },
-      "visits": 174,
-      "spanDays": 449,
+      "visits": 222,
+      "spanDays": 528,
       "truncated": true
     },
     {
@@ -52,7 +52,7 @@
       "name": "M51 · Whirlpool",
       "ra": 202.4696,
       "dec": 47.1953,
-      "fov": 0.45,
+      "fov": 0.3,
       "band": "all",
       "why": {
         "en": "A control field — nothing here should move.",
@@ -67,14 +67,14 @@
       "name": "M42 · Orion Nebula",
       "ra": 83.8221,
       "dec": -5.3911,
-      "fov": 0.45,
+      "fov": 0.3,
       "band": "all",
       "why": {
         "en": "Bright and structured. Lower the white point.",
         "ru": "Ярко и структурно. Опустите точку белого."
       },
-      "visits": 27,
-      "spanDays": 193,
+      "visits": 45,
+      "spanDays": 394,
       "truncated": false
     },
     {
@@ -89,8 +89,8 @@
         "en": "The fastest star in the sky, 10.3″ a year — about one detector pixel across this baseline.",
         "ru": "Самая быстрая звезда неба, 10,3″ в год — около одного пикселя детектора за этот срок."
       },
-      "visits": 10,
-      "spanDays": 212,
+      "visits": 17,
+      "spanDays": 397,
       "truncated": false
     },
     {
@@ -105,8 +105,8 @@
         "en": "A pair of brown dwarfs; their star, ε Indi A, is in the same field.",
         "ru": "Пара коричневых карликов; их звезда ε Indi A в том же поле."
       },
-      "visits": 22,
-      "spanDays": 371,
+      "visits": 29,
+      "spanDays": 526,
       "truncated": false
     },
     {
@@ -137,8 +137,8 @@
         "en": "A young variable star. Use shared scaling: per-visit stretching hides a brightness change.",
         "ru": "Молодая переменная звезда. Включите общую шкалу: своя шкала у каждого кадра прячет изменение яркости."
       },
-      "visits": 10,
-      "spanDays": 182,
+      "visits": 16,
+      "spanDays": 372,
       "truncated": false
     },
     {
@@ -153,8 +153,8 @@
         "en": "A Mira variable near the north ecliptic pole, seen on more dates than almost anything.",
         "ru": "Мирида у северного полюса эклиптики: снята в большем числе дат, чем почти что угодно."
       },
-      "visits": 63,
-      "spanDays": 392,
+      "visits": 55,
+      "spanDays": 414,
       "truncated": true
     }
   ]

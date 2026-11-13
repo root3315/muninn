@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Muninn — the talk</title>
-<meta name="description" content="Muninn in seven slides: what it does, the evidence from real SPHEREx frames, and what it cannot find.">
+<meta name="description" content="Muninn in eight slides: what it does, the evidence from real SPHEREx frames, and what it cannot find.">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#171721">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23171721'/%3E%3Ccircle cx='11' cy='13' r='2.5' fill='%23e6f0f7'/%3E%3Ccircle cx='21' cy='19' r='2.5' fill='%2356c1f5'/%3E%3C/svg%3E">
@@ -115,20 +115,20 @@
       <div class="verdicts">
         <div class="verdicts__one">
           <p class="verdicts__k" data-t="s4.before"></p>
-          <p class="verdicts__v verdicts__v--alarm num" data-n="206" data-digits="0"></p>
+          <p class="verdicts__v verdicts__v--alarm num" data-n="192" data-digits="0"></p>
           <p class="verdicts__say" data-t="s4.beforeSay"></p>
         </div>
         <div class="verdicts__one">
           <p class="verdicts__k" data-t="s4.after"></p>
-          <p class="verdicts__v num" data-n="1.4" data-digits="1"></p>
+          <p class="verdicts__v num" data-n="1.6" data-digits="1"></p>
           <p class="verdicts__say" data-t="s4.afterSay"></p>
         </div>
       </div>
       <dl class="flags num">
-        <div><dt>FLAGS</dt><dd>0x80005</dd></div>
+        <div><dt>FLAGS</dt><dd>0x45</dd></div>
         <div><dt>bit 0</dt><dd>TRANSIENT</dd></div>
         <div><dt>bit 2</dt><dd>SUR_ERROR</dd></div>
-        <div><dt>bit 19</dt><dd>OUTLIER</dd></div>
+        <div><dt>bit 6</dt><dd>NONFUNC</dd></div>
       </dl>
       <p class="exhibit__note" data-t="s4.note"></p>
     </figure>
@@ -161,7 +161,28 @@
     </figure>
   </section>
 
-  <!-- 7 · what is left, said plainly -->
+  <!-- 7 · where every pixel and every name comes from -->
+  <section class="slide slide--sources" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="src.claim"></h2>
+      <p class="slide__say" data-t="src.say"></p>
+      <p class="slide__src" data-t="src.src"></p>
+    </div>
+    <figure class="exhibit">
+      <div class="sources">
+        <div>
+          <p class="exhibit__k" data-t="src.nasa"></p>
+          <dl class="sources__list" id="sources-nasa"></dl>
+        </div>
+        <div>
+          <p class="exhibit__k" data-t="src.partners"></p>
+          <dl class="sources__list" id="sources-partners"></dl>
+        </div>
+      </div>
+    </figure>
+  </section>
+
+  <!-- 8 · what is left, said plainly -->
   <section class="slide slide--ledger" data-slide>
     <div class="slide__text">
       <h2 class="slide__claim" data-t="s7.claim"></h2>

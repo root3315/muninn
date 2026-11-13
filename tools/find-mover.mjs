@@ -26,7 +26,7 @@ function eclipticToEquatorial(lonDeg) {
 }
 
 async function siaFrames(ra, dec, radius) {
-  const url = `${SIA}?COLLECTION=spherex_qr2&POS=${encodeURIComponent(`circle ${ra} ${dec} ${radius}`)}`;
+  const url = `${SIA}?COLLECTION=spherex_dr1&POS=${encodeURIComponent(`circle ${ra} ${dec} ${radius}`)}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 60_000);
   try {

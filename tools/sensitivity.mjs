@@ -21,11 +21,11 @@
  *   node tools/sensitivity.mjs [ra] [dec]
  */
 
-import { parseVOTable } from '../public/js/votable.js';
 import { frameFromRow, groupVisits, toS3 } from '../public/js/catalog.js';
 import { TangentGrid } from '../public/js/wcs.js';
 import { loadStamp } from '../public/js/stamp.js';
 import { limitAB } from '../public/js/depth.js';
+import { siaRows } from './sia.mjs';
 
 const RA = Number(process.argv[2] ?? 13.4194);
 const DEC = Number(process.argv[3] ?? 3.8459);
@@ -34,8 +34,7 @@ const FOV = 0.2;
 
 const median = (a) => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]; };
 
-const sia = `https://irsa.ipac.caltech.edu/SIA?COLLECTION=spherex_qr2&POS=${encodeURIComponent(`circle ${RA} ${DEC} 0.006`)}&MAXREC=500`;
-const { rows } = parseVOTable(await (await fetch(sia)).text());
+const rows = await siaRows(RA, DEC);
 const frames = rows.filter((r) => r.dataproduct_subtype === 'science').map(frameFromRow).filter(Boolean);
 
 console.log(`field ${RA} ${DEC} — ${frames.length} frames in the index\n`);

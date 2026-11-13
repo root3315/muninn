@@ -284,7 +284,20 @@ a { color: inherit; }
 .reach__rows dd { text-align: end; }
 .reach__rows .is-first { color: var(--color-accent); }
 
-/* ------------------------------------------------------------- 7 · the ledger */
+/* ------------------------------------------------------------ 7 · the sources */
+
+.sources { display: grid; grid-template-columns: 1.15fr 1fr; gap: var(--space-lg); }
+.sources > div { display: grid; gap: var(--space-sm); align-content: start; }
+.sources > div:first-child .exhibit__k { color: var(--color-accent); }
+.sources > div + div .exhibit__k { color: var(--color-neutral); }
+.sources__list { display: grid; gap: var(--space-sm); }
+.sources__row { display: grid; gap: 0.15rem; padding-block-start: var(--space-xs); border-block-start: 1px solid color-mix(in oklab, var(--color-ink) 12%, transparent); }
+.sources__row dt { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-xs); font-size: var(--text-sm); font-weight: 500; color: var(--color-ink); }
+.sources__row dt span { font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 400; color: var(--color-neutral); }
+.sources__row dd { font-size: var(--text-xs); line-height: 1.4; color: var(--color-muted); }
+.slide[data-on] .sources__row { animation: rise 420ms var(--ease-out) calc(500ms + var(--l, 0) * 90ms) backwards; }
+
+/* ------------------------------------------------------------- 8 · the ledger */
 
 .ledger { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-lg); }
 .ledger > div { display: grid; gap: var(--space-sm); align-content: start; }
@@ -439,7 +452,10 @@ a { color: inherit; }
 .slide--reach .reach__rows dt { grid-row: 1; font-size: var(--text-sm); }
 .slide--reach .reach__rows dd { grid-row: 2; text-align: start; font-family: var(--font-display); font-size: clamp(1.25rem, 2.2vw, 2.25rem); letter-spacing: -0.02em; }
 
-/* 7 · what it does, what it does not, and where to go. */
+/* 7 · the sources take the width: two columns of short rows. */
+.slide--sources { grid-template-columns: minmax(0, 3fr) minmax(0, 7fr); }
+
+/* 8 · what it does, what it does not, and where to go. */
 .slide--ledger { grid-template-columns: minmax(0, 4fr) minmax(0, 6fr); }
 .slide--ledger .ledger li { font-size: var(--text-base); }
 .slide--ledger .exhibit__k { font-family: var(--font-display); font-size: var(--text-md); font-weight: 500; color: var(--color-ink); }
@@ -453,7 +469,7 @@ a { color: inherit; }
 /* ------------------------------------------------------------- small rooms */
 
 @media (max-width: 60rem), (max-height: 34rem) {
-  .slide, .slide--live, .slide--ledger { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; align-items: start; align-content: start; gap: var(--space-lg); }
+  .slide, .slide--live, .slide--ledger, .slide--sources { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; align-items: start; align-content: start; gap: var(--space-lg); }
   .slide .slide__text { grid-template-columns: minmax(0, 1fr); }
   .slide .slide__claim { grid-row: auto; max-inline-size: none; }
   .slide--live .exhibit--plate { grid-template-columns: minmax(0, 1fr); }
@@ -473,7 +489,7 @@ a { color: inherit; }
 @media (max-width: 40rem) {
   .exhibit--plate { grid-template-columns: minmax(0, 1fr); }
   .plate { max-inline-size: 100%; }
-  .verdicts, .ledger { grid-template-columns: minmax(0, 1fr); }
+  .verdicts, .ledger, .sources { grid-template-columns: minmax(0, 1fr); }
   .flags { grid-template-columns: repeat(2, auto); }
   .targets a { grid-template-columns: minmax(0, 1fr) auto; }
   .targets__why { grid-column: 1 / -1; grid-row: 2; }

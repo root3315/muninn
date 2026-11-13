@@ -10,18 +10,17 @@
  *   node tools/verify-mover.mjs <ra> <dec> [fov]
  */
 
-import { parseVOTable } from '../public/js/votable.js';
 import { frameFromRow, groupVisits, toS3 } from '../public/js/catalog.js';
 import { TangentGrid } from '../public/js/wcs.js';
 import { loadStamp } from '../public/js/stamp.js';
+import { siaRows } from './sia.mjs';
 
 const RA = Number(process.argv[2] ?? 13.4194);
 const DEC = Number(process.argv[3] ?? 3.8459);
 const FOV = Number(process.argv[4] ?? 0.15);
 const SIZE = 192;
 
-const sia = `https://irsa.ipac.caltech.edu/SIA?COLLECTION=spherex_qr2&POS=${encodeURIComponent(`circle ${RA} ${DEC} 0.006`)}&MAXREC=500`;
-const { rows } = parseVOTable(await (await fetch(sia)).text());
+const rows = await siaRows(RA, DEC);
 const frames = rows.filter((r) => r.dataproduct_subtype === 'science').map(frameFromRow).filter(Boolean);
 const visits = groupVisits(frames, { ra: RA, dec: DEC, band: 'D2' });
 

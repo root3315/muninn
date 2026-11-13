@@ -308,7 +308,7 @@ function updateIdentity() {
     if (!total) {
       cue.textContent = state.ra == null ? t('app.lede')
         : state.failed ? t('epochs.cueFailed')
-        : state.frames.length ? t('epochs.none') : t('epochs.searching');
+        : state.searched ? t('epochs.none') : t('epochs.searching');
     } else {
       cue.textContent = settled >= total
         ? t(state.visits.some((v) => v.status === 'failed') ? 'epochs.unread' : 'epochs.none')
@@ -2306,6 +2306,7 @@ async function openField({ ra, dec, label = '', band = null }) {
   renderVerdict();
   state.bytes = 0;
   renderBytes();
+  state.searched = false;
   setPlateState(t('epochs.searching'), { progress: 0 });
   drawAxis();
 
@@ -2330,6 +2331,7 @@ async function openField({ ra, dec, label = '', band = null }) {
   if (ctrl.signal.aborted) return;
 
   state.frames = frames;
+  state.searched = true;
   state.truncated = truncated;
   state.partial = partial;
   populateBands();
