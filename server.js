@@ -195,9 +195,9 @@ function findBaked(ra, dec) {
 
 /* -------------------------------------------------------------------- search */
 
-async function queryCollectionOnce(collection, ra, dec, radius) {
+async function queryCollectionOnce(collection, ra, dec, radius, ms = UPSTREAM_TIMEOUT_MS) {
   const pos = encodeURIComponent(`circle ${ra} ${dec} ${radius}`);
-  const res = await withTimeout(`${SIA}?COLLECTION=${collection}&POS=${pos}&MAXREC=${MAXREC}`, UPSTREAM_TIMEOUT_MS);
+  const res = await withTimeout(`${SIA}?COLLECTION=${collection}&POS=${pos}&MAXREC=${MAXREC}`, ms);
   if (!res.ok) throw Object.assign(new Error(`IRSA ${collection}: HTTP ${res.status}`), { answered: true });
   const { status, message, rows } = parseVOTable(await res.text());
   if (status === 'ERROR') throw Object.assign(new Error(`IRSA ${collection}: ${message}`), { answered: true });
@@ -219,7 +219,19 @@ async function queryCollection(collection, ra, dec, radius) {
     // again would double a wait that was already too long.
     if (err.answered || Date.now() - started > 30_000) throw err;
     await new Promise((r) => { setTimeout(r, 800); });
-    return queryCollectionOnce(collection, ra, dec, radius);
+    // The second ask gets what is left of the first one's time, so the two
+    // together end before the page stops waiting.
+    return queryCollectionOnce(collection, ra, dec, radius, UPSTREAM_TIMEOUT_MS - (Date.now() - started));
+  }
+}
+
+/** Whether an address an archive's answer named is IRSA's own, over https. */
+function isIrsaUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && u.hostname === 'irsa.ipac.caltech.edu';
+  } catch {
+    return false;
   }
 }
 
@@ -503,6 +515,8 @@ async function cutWise({ ra, dec }, band, size, file) {
     .map((r) => ({ url: r.access_url, d: Math.hypot((Number(r.s_ra) - ra) * Math.cos(dec * Math.PI / 180), Number(r.s_dec) - dec) }))
     .sort((a, b) => a.d - b.d);
   if (!tiles.length) throw new Error('AllWISE has no tile here');
+  // The cutout's address comes from IRSA's answer: fetched only if it is IRSA's.
+  if (!isIrsaUrl(tiles[0].url)) throw new Error('AllWISE: the cutout address is not at IRSA');
   const cut = await withTimeout(`${tiles[0].url}?center=${ra.toFixed(5)},${dec.toFixed(5)}&size=${size.toFixed(3)}deg`, left());
   if (!cut.ok) throw new Error(`IRSA cutout: HTTP ${cut.status}`);
   let body = Buffer.from(await cut.arrayBuffer());
@@ -796,8 +810,16 @@ const IMMUTABLE = 'public, max-age=31536000, immutable';
 let versionTag = null;
 
 /** A short hash of the code as deployed: every file's path, size and date. */
+let versionCheckedAt = 0;
+const VERSION_RECHECK_MS = 30_000;
+
 async function codeVersion() {
-  if (versionTag) return versionTag;
+  // Re-read now and then, so code copied in without a restart is not sent
+  // under the old tag as immutable; a new tag drops the files compressed
+  // under the old one.
+  if (versionTag && Date.now() - versionCheckedAt < VERSION_RECHECK_MS) return versionTag;
+  versionCheckedAt = Date.now();
+  const before = versionTag;
   const hash = createHash('sha1');
   for (const dir of ['js', 'css']) {
     for (const name of (await readdir(join(PUBLIC, dir))).sort()) {
@@ -806,6 +828,7 @@ async function codeVersion() {
     }
   }
   versionTag = hash.digest('hex').slice(0, 10);
+  if (before && before !== versionTag) staticCache.clear();
   return versionTag;
 }
 
