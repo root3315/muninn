@@ -1,12 +1,13 @@
 /**
- * talk.js — Muninn in seventeen slides.
+ * talk.js — Muninn in ten slides for the jury, then an appendix.
  *
- * The first slide is not a screenshot. It reads four visits of the Atala field
- * from the archive with the same modules the tool uses, and blinks them; the
- * fifth reports what that read actually cost. The second runs the tool's own
- * sky. The pictures on the feature slides are crops of the running tool, and
- * every other figure is one the README derives and the tools in tools/
- * reproduce, or one computed on the slide by the module the tool uses.
+ * The main deck runs problem, evidence, limits, what is next. Its second slide
+ * is not a screenshot: it reads four visits of the Atala field from the
+ * archive with the same modules the tool uses, and blinks them; an appendix
+ * slide reports what that read actually cost, and another runs the tool's own
+ * sky. The pictures are crops of the running tool, and every other figure is
+ * one the README derives and the tools in tools/ reproduce, or one computed on
+ * the slide by the module the tool uses.
  */
 
 import { loadStamp } from './stamp.js';
@@ -22,6 +23,8 @@ import { rateAtAU } from './hunt.js';
 import { trackCSV } from './export.js';
 
 const $ = (id) => document.getElementById(id);
+/** How much larger than a 16-pixel root the deck is set: charts scale their offsets by it. */
+const remScale = () => (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16) / 16;
 
 /* ------------------------------------------------------------------ words */
 
@@ -29,11 +32,25 @@ const WORDS = {
   en: {
     event: 'NASA Space Apps 2026 · Planet X and SPHEREx · team Yggdrasil',
     openTool: 'Open the tool',
+    pdf: 'PDF',
     prev: 'Previous slide',
     next: 'Next slide',
     langOther: 'RU',
+    'p.claim': 'Find what moves in the SPHEREx sky.',
+    'p.say': 'Planet X is a giant planet predicted far beyond Neptune and never seen. Between two pictures of the same sky stars stay put; anything bound to the Sun does not. Muninn turns SPHEREx visits into that comparison, in a browser.',
+    'p.src': 'From the NASA Space Apps 2026 challenge “Planet X and SPHEREx”.',
+    'p.f1': 'The whole sky',
+    'p.f1v': 'every six months',
+    'p.f2': '102 bands',
+    'p.f2v': '0.75–5 µm, the near infrared',
+    'p.f3': 'Since May 2025',
+    'p.f3v': 'surveying, release after release',
+    'p.for': 'Who it is for',
+    'p.for1': 'The public: one link, nothing to install',
+    'p.for2': 'Volunteers in the Backyard Worlds style, blinking for movers',
+    'p.for3': 'Teachers: real NASA frames in class',
     's1.claim': 'See what changed between two SPHEREx visits.',
-    's1.say': 'SPHEREx images the whole sky about twice a year. Stars stay put; anything bound to the Sun does not. Muninn puts the visits on one grid and blinks them.',
+    's1.say': 'Muninn puts the visits of one field on one grid and blinks them: stars hold still, a mover jumps.',
     's1.src': 'These frames are being read from the NASA archive right now, in this browser.',
     's1.alt': 'Four SPHEREx visits of one field, blinking. One dot is present on 25 Dec 2025 only.',
     's1.wait': 'Reading the archive…',
@@ -42,11 +59,11 @@ const WORDS = {
     's1.play': 'Blink the visits',
     's1.failed': 'The archive did not answer. The tool itself is one click away.',
     's2.claim': 'A 65 MB file, read a megabyte or two at a time.',
-    's2.say': 'The browser asks the public AWS mirror for byte ranges: the header, then only the detector rows this field lands on, then the pipeline’s quality flags for the same rows. No pixels pass through our server.',
-    's2.src': 'File size 65.4 MB per Level-2 frame; bytes read are measured on slide 1, as it reads.',
-    's2.head': 'What the four frames on slide 1 cost',
+    's2.say': 'The browser asks the public AWS mirror for byte ranges: the header, the detector rows the field covers, and their flags. No pixels pass through our server.',
+    's2.src': '65.4 MB per Level-2 frame; bytes measured on slide 2, as it reads.',
+    's2.head': 'What the four frames on slide 2 cost',
     's2.sum': 'Read {read} MB of {total} MB held at the archive: {pct} %',
-    's2.pending': 'Measured once slide 1 has finished reading.',
+    's2.pending': 'Measured once slide 2 has finished reading.',
     's2.share': 'of each file is read',
     's2.size1': '64 KB',
     's2.size2': '1–3 MB',
@@ -54,26 +71,26 @@ const WORDS = {
     's2.step2': 'only the detector rows the field covers',
     's2.step3': 'the same rows of the FLAGS plane',
     's3.claim': 'It finds a mover, and names it.',
-    's3.say': 'All fifteen D2 visits of one spot over 369 days, read by tools/verify-mover.mjs; the tool itself blinks up to ten. Fourteen are background, SNR 0.5 to 2.4. On 25 Dec 2025 it is 374, and SkyBoT places asteroid (152) Atala, V 13.8, 2.3″ from the centre at that exposure’s own timestamp.',
-    's3.src': 'tools/verify-mover.mjs 13.4194 3.8459 0.15: brightest pixel against the noise of the ring around it, never below the detector’s own pixel noise, on SPHEREx DR1 and QR3 with the pipeline flags applied. SkyBoT, IMCCE.',
+    's3.say': 'Fifteen D2 visits of one spot. Fourteen are background, SNR 0.5 to 2.4. On 25 Dec 2025 it is 374, and SkyBoT places asteroid (152) Atala, V 13.8, 2.3″ from the centre at that exposure’s own time.',
+    's3.src': '15 D2 visits over 369 days; SkyBoT, IMCCE.',
     's3.head': 'Signal-to-noise at the field centre, visit by visit',
     's4.claim': 'It refuses a false discovery.',
-    's4.say': 'On 6 Jul 2025 the same spot flashed at SNR 140 and no catalogue explained it. It was one detector pixel, and the SPHEREx pipeline had already said what: a cosmic-ray hit. Muninn reads those flags and masks the pixel before anything is measured.',
+    's4.say': 'On 6 Jul 2025 the same spot flashed at SNR 140, and no catalogue explained it. It was one detector pixel the SPHEREx pipeline had already flagged as a cosmic-ray hit. Muninn reads those flags and masks it before measuring.',
     's4.src': 'Atala’s own pixels on 25 Dec carry only OUTLIER, and spread like a real source.',
     's4.head': '6 Jul 2025, the centre of the Atala field',
     's4.before': 'SNR without the flags',
     's4.beforeSay': 'one pixel at 11× its neighbours',
     's4.after': 'SNR with the flags read',
     's4.afterSay': 'background, like the other visits',
-    's4.note': 'A jump in the up-the-ramp samples, caught during readout. The pipeline marked it; a viewer that ignores FLAGS collects cosmic rays. From DR1 on, FLAGS is stored Rice-compressed, and Muninn decodes it in the browser. Masked: TRANSIENT, SUR_ERROR, NONFUNC, MISSING_DATA, HOT, COLD, PERSIST, STREAK, SNOWBALL.',
-    's5.claim': 'The challenge’s five test targets open in one press.',
-    's5.say': 'Each opens in the band that suits it, from a frame index that ships with the page. Press a row to open it in the tool.',
-    's5.src': 'Visit counts from IRSA SIA, SPHEREx DR1 and QR3, at bake time, 13 Nov 2026.',
+    's5.claim': 'The challenge’s five test targets, one press each.',
+    's5.say': 'Each opens in the band that suits it. The crosshair marks the target on a real SPHEREx frame.',
+    's5.src': 'Visit counts from NASA IRSA, SPHEREx DR1 and QR3, 13 Nov 2026.',
     's5.head': 'Five targets named by the challenge',
     's5.visits': '{n} visits · {days} d',
     's6.claim': 'Even 200 visits added would leave SPHEREx 2.1 to 3.8 magnitudes short of Planet X.',
-    's6.say': 'We measured the depth from delivered detector pixels instead of quoting a mission page: 17.61 AB for one visit, 5.0 to 6.7 magnitudes short of the prediction. Two hundred visits, extrapolated as √N from the same field, reach 20.48: still 2.1 to 3.8 short, and 1.2 short even of the bright 21.7 case. The page says so on screen.',
-    's6.src': 'tools/sensitivity.mjs, Atala field, D2: 5σ point source inside a 3×3-pixel aperture, no aperture correction. Prediction: Linder & Mordasini 2016, A&A 589, A134, V 22.6–24.3 near aphelion; 21.7 for their 10 M⊕ at 700 AU.',
+    's6.say': 'Measured from delivered detector pixels: 17.61 AB for one visit, 5.0 to 6.7 magnitudes short. Two hundred visits, extrapolated as √N, reach 20.48: still short, and 1.2 short even of the bright 21.7 case.',
+    's6.src': 'Prediction: Linder & Mordasini 2016, A&A 589, A134, V 22.6–24.3 near aphelion.',
+    's6.assume': 'Assumed: the V-band prediction against SPHEREx AB depth at 1.1–1.6 µm, a fair best case for a sunlike reflector.',
     's6.head': 'Faintest point source at 5σ, AB magnitudes',
     's6.alt': 'A scale from 14 to 26 magnitudes: SPHEREx reaches 17.61 in one visit and 20.48 for two hundred, extrapolated; Planet X is predicted between 22.6 and 24.3, and 21.7 in the bright case.',
     's6.here': 'SPHEREx',
@@ -82,68 +99,74 @@ const WORDS = {
     's6.one': 'one visit, measured',
     's6.deep': '200 visits, extrapolated as √N',
     's6.short': 'short by 2.1–3.8 mag',
-    'src.claim': 'Every pixel and every name has a source.',
-    'src.say': 'The pixels come from NASA, read where NASA keeps them. Names and catalogue positions come from NASA first and from partner archives beside it, each asked in parallel, so one service being down costs one line of the answer, not the answer.',
-    'src.src': 'Every service here is asked live, by the page or by its relay. Only the bright-star map is copied into the site, and the paper is a paper.',
-    'src.nasa': 'NASA',
-    'src.partners': 'Partner archives',
-    's7.claim': 'What Muninn searches today, and where it stops.',
-    's7.say': 'Slow movers brighter than 17.6 AB per visit, season stacks, and a stated depth for every field examined. A null result at a known depth is a constraint.',
-    's7.link': 'muninn.mydevbox.xyz',
+    'src.claim': 'Built on the challenge’s resources, each one named.',
+    'src.src': 'Every service is asked live; the page stores no pixels. Muninn is not affiliated with NASA.',
+    'src.nasa': 'Challenge resources · NASA',
+    'src.csa': 'Challenge resources · CSA',
+    'src.also': 'Also used',
+    'end.claim': 'Open it and blink a field yourself.',
+    'end.live': 'Live',
+    'end.repo': 'Code',
+    'end.team': 'Team Yggdrasil · Uzbekistan',
+    'end.owner': '(team owner)',
+    'end.nextK': 'Next:',
+    'end.next': 'the full 102-channel spectrum, and the season link run on every Hunter X candidate at once.',
     's7.does': 'Does today',
     's7.does1': 'Blink, wipe, difference and season stack on one north-up grid',
-    's7.does2': 'Measures a marked spot in every visit: position, AB magnitude, verdict',
-    's7.does3': 'Names known asteroids at each exposure, identifies stars through Gaia and WISE catalogues and lays their positions over the frame; puts the AllWISE picture of 2010 under the wipe, beside a SPHEREx visit',
-    's7.does4': 'Reports the depth each search worked at',
-    's7.does5': 'Reads a spectrum of a marked source: one point per band, at the wavelength the file gives for its pixel',
-    's7.not': 'Does not yet',
-    's7.not1': 'Show a Gaia picture: Gaia is a catalogue of positions, and those are what is overlaid',
-    's7.not2': 'Link a slow mover from one season to the next',
-    's7.not3': 'Compare brightness at one wavelength: it differs by visit inside a band',
-    's7.credit': 'Data: NASA/JPL-Caltech · SPHEREx · IPAC/IRSA. SkyBoT, IMCCE. SIMBAD and VizieR, CDS. Muninn is not affiliated with NASA.',
+    's7.does2': 'Measures a marked spot in every visit, and links it across seasons',
+    's7.does3': 'Names known asteroids; lays Gaia and WISE over the frame',
+    's7.does4': 'States the depth every search worked at',
+    's7.not': 'Does not',
+    's7.not1': 'Reach Planet X: 2.1–3.8 mag short even with 200 visits',
+    's7.not2': 'Show a Gaia picture: Gaia is a catalogue of positions',
+    's7.not3': 'Compare brightness at one wavelength across visits',
+    'app.claim': 'Appendix',
+    'app.say': 'How each part works, for questions.',
     'sky.claim': 'Enter through the real sky.',
-    'sky.say': 'The first screen is the sky itself: 15 568 catalogued stars at their own positions, turning slowly. Press a star or a marker and a finder reticle closes on it; a card brings a real SPHEREx frame of that place. Only the card’s button dives into the field.',
+    'sky.say': 'The first screen is the sky: 15 568 catalogued stars, turning. Press a star and a reticle closes on it; a card brings a real SPHEREx frame of that place.',
     'sky.beat1': 'The sky turns',
     'sky.beat2': 'A press: the reticle closes',
     'sky.beat3': 'The card: a real SPHEREx frame',
     'sky.beat4': 'The dive into the field',
-    'sky.src': 'Drawn here by the tool’s own sky code. Stars: Bright Star Catalogue and Hipparcos. 311 stars and Messier objects carry a stored frame; the ten ready fields carry their whole frame index.',
+    'sky.src': 'Drawn by the tool’s own sky code. Bright Star Catalogue and Hipparcos.',
     'sky.open': 'Open the field',
     'sky.visits': '{n} visits, {d} d',
     'modes.claim': 'Five ways to compare one patch of sky.',
-    'modes.say': 'Every visit is resampled onto one north-up grid, so each view is the same sky, pixel for pixel. Here A is 25 Dec 2025, with (152) Atala ringed at the centre, and B is 1 Jan 2026, when it has gone.',
-    'modes.src': 'Frames as the tool draws them: the Atala field, D2, 9′ on the short side. Rings and dashed tracks are the asteroids SkyBoT places at each exposure.',
+    'modes.say': 'Every visit is resampled onto one north-up grid. A is 25 Dec 2025 with (152) Atala ringed; B is 1 Jan 2026, when it has gone.',
+    'modes.src': 'The Atala field, D2, as the tool draws it.',
     'modes.season': 'December season, D2',
     'bands.claim': 'Six bands, any field size, one link.',
-    'bands.say': 'SPHEREx splits the near infrared into six bands, D1 to D6, and the page takes the hue of the band in the beam. The field’s short side runs from 6′ to 36′, and the address carries the place, the size, the band and the language, so a view can be sent or embedded as it is.',
-    'bands.src': 'Band edges read from the Atala field’s frame index: the shortest and the longest wavelength of any frame in each band.',
+    'bands.say': 'Six bands, D1 to D6, and the page takes the hue of the band in the beam. The field runs 6′ to 36′; the address carries place, size, band and language.',
+    'bands.src': 'Band edges read from the Atala field’s frame index.',
     'bands.head': 'Wavelength, µm',
     'bands.width': 'Field size, short side',
     'bands.link': 'The address',
     'mark.claim': 'Click a spot: it is measured in every visit.',
-    'mark.say': 'Position, AB magnitude in a 3×3-pixel aperture, a verdict, and what the catalogues know of it. The numbers save as CSV, one row a visit. One more press reads a spectrum: one exposure per band, each point at the wavelength the file gives for that pixel.',
-    'mark.src': 'A star in the Atala field, marked in the tool. The spectrum reads six exposures, 1–3 MB each.',
+    'mark.say': 'Position, AB magnitude in a 3×3-pixel aperture, a verdict and what catalogues know, saved as CSV. One more press reads a spectrum: one point per band.',
+    'mark.src': 'A star in the Atala field, marked in the tool.',
     'mark.csv': 'CSV columns',
     'ov.claim': 'Gaia and WISE, laid over the frame.',
-    'ov.say': 'Gaia DR3 positions are carried by proper motion from 2016 to the date of the visit; AllWISE positions stay where WISE saw them in 2010. A marked source is looked up in several archives at once, and one that does not answer costs one line.',
-    'ov.src': 'Barnard’s Star, D2, 12′ × 9′, as the tool draws it. Its bright core is masked by the pipeline’s own flags.',
-    'ov.gaia': 'Gaia DR3 (ESA): moved from 2016 to the date of this visit',
-    'ov.wise': 'AllWISE (NASA WISE): where they were in 2010, not moved',
+    'ov.say': 'Gaia DR3 positions are moved from 2016 to the date of the visit; AllWISE positions stay where WISE saw them in 2010.',
+    'ov.src': 'Barnard’s Star, D2, 12′ × 9′; its core masked by the pipeline’s flags.',
+    'ov.gaia': 'Gaia DR3 (ESA): moved to the date of this visit',
+    'ov.wise': 'AllWISE (NASA WISE): where they were in 2010',
     'ov.head': 'Asked for a marked source',
-    'wise.claim': 'The WISE picture of 2010 beside a SPHEREx visit.',
-    'wise.say': 'B of the wipe can be WISE at 3.4 or 4.6 µm instead of another visit: IRSA cuts the field out of the AllWISE Atlas and the page puts it on the same grid. Fifteen years apart, Barnard’s Star is not where it was.',
-    'wise.src': 'AllWISE Atlas through IRSA SIA and IBE, relayed by /api/wise. The idea is WiseView’s, the blink tool the challenge names as a model.',
+    'wise.claim': 'Fifteen years on, Barnard’s Star is not where WISE saw it.',
+    'wise.say': 'B of the wipe can be the AllWISE picture at 3.4 or 4.6 µm, on the same grid as a SPHEREx visit. The idea is WiseView’s, the blink tool the challenge names.',
+    'wise.src': 'AllWISE Atlas through NASA IRSA. Markers: the star’s peak on each picture.',
+    'wise.tagA': 'SPHEREx 2025',
+    'wise.tagB': 'WISE 2010',
     'wise.a': 'SPHEREx, D2, 21 Aug 2025',
-    'wise.b': 'AllWISE W1, 3.4 µm, coadded 2010–2011',
+    'wise.b': 'AllWISE W1, 3.4 µm, 2010–2011',
     'wise.f1': 'WISE peak from the star’s 2016 place',
     'wise.f1v': '56″',
     'wise.f2': 'from Gaia carried back to 2010',
     'wise.f2v': '2.5″',
     'wise.f3': 'Barnard’s Star’s proper motion',
     'wise.f3v': '10.3″ a year',
-    'hunt.claim': 'Hunter X reads a distance out of slowness.',
-    'hunt.say': 'When the last visit is in, it measures up to twelve places that stand out in every visit, keeps what moves and sorts it by slowness: seen from the Earth, slow means far. Known asteroids are named at each exposure by SkyBoT and JPL.',
-    'hunt.src': 'The curve is hunt.js, computed on this slide: the fastest a body at that distance can move, at opposition. Planet X at 400–800 AU tops out at 0.18–0.35″ an hour, and SPHEREx sees it near quadrature, at about 0.006–0.02″. Within one season Hunter X needs three pixels in eleven days, 0.07″ an hour: at those distances the motion test is blind.',
+    'hunt.claim': 'At 400–800 AU the motion test within a season is blind; the season link checks the parallax arc.',
+    'hunt.say': 'Inside one season Hunter X needs three pixels in eleven days, 0.07″ an hour. SPHEREx sees Planet X near quadrature, at about 0.006–0.02″ an hour: it would read as fixed.',
+    'hunt.src': 'Curve computed on this slide: the fastest a body at that distance moves, at opposition.',
     'hunt.head': 'Apparent rate against distance from the Sun',
     'hunt.alt': 'Apparent motion falls from arcseconds an hour in the asteroid belt to a third of an arcsecond an hour at 400 AU.',
     'hunt.axisX': 'distance, AU',
@@ -151,33 +174,49 @@ const WORDS = {
     'hunt.px': 'Planet X',
     'hunt.perHour': '″/h',
     'hunt.floor': 'three pixels in one season',
-    'hunt.quad': 'near quadrature, where SPHEREx looks',
-    'hunt.g1': 'The motion has to beat three times the scatter of the fit, or the rate is zero.',
-    'hunt.g2': 'Four detections at least: two always fit a line.',
-    'hunt.g3': 'A candidate is ranked only past three detector pixels, 18.45″.',
+    'hunt.quad': 'near quadrature',
+    'link.head': 'The season link, one season to the next',
+    'link.s1': 'A body is put on the mark’s line of sight at each distance from 30 to 2000 AU.',
+    'link.s2': 'The Earth’s move across the Sun throws it along an arc in the next season: 13.6′ at 500 AU.',
+    'link.s3': 'A source on the arc counts only if that spot was empty in every visit of the first season.',
+    'link.test': 'On a synthetic two-season sky, a source placed at 300 AU links at 300 AU, range 269–321.',
     'arc.claim': 'Which other telescopes looked at the same field.',
-    'arc.say': 'For every field the page asks the Canadian Astronomy Data Centre’s common index how many science observations each archive holds. Barnard’s Star has been watched from the ground, from orbit, and by NEOSSat, the Canadian Space Agency’s asteroid satellite.',
-    'arc.src': 'CADC CAOM through Argus TAP, relayed by /api/archives. Distinct science observations within 0.1° of Barnard’s Star; the scale is logarithmic.',
+    'arc.say': 'For every field the page asks the Canadian Astronomy Data Centre how many science observations each archive holds, and shows NEOSSat’s newest raw frame of it.',
+    'arc.src': 'CADC, within 0.1° of Barnard’s Star; log scale.',
     'arc.head': 'In other archives: Barnard’s Star',
-    'arc.note': 'The same index covers JWST, Chandra, JCMT and VLASS; a field shows whichever of them looked.',
     'rel.claim': 'A new SPHEREx release is one line.',
-    'rel.say': 'IRSA publishes each release as its own collection on the same S3 mirror, and the page names them in one list that the relay, the edge function and the bake script all read. On 13 Nov 2026 that line moved from Quick Release 2 to DR1 and QR3.',
-    'rel.src': 'Nothing in the page stores pixels, so new data need no rebuild of the tool.',
+    'rel.say': 'IRSA publishes each release as its own collection, and the page names them in one list. On 13 Nov 2026 it moved from Quick Release 2 to DR1 and QR3.',
+    'rel.src': 'The page stores no pixels, so new data need no rebuild.',
     'rel.when': '13 Nov 2026',
     'rel.step1': 'the list of collections changes',
-    'rel.step2': 'the ten ready fields get their new frame indexes',
-    'rel.step3': 'the pipeline is checked offline, then deployed',
+    'rel.step2': 'the ten ready fields get new frame indexes',
+    'rel.step3': 'checked offline, then deployed',
     read: 'reading', queued: 'queued', failed: 'not read', mb: '{mb} MB',
     at: '{n} / {total}',
+    atApp: 'Appendix {n} / {total}',
   },
   ru: {
     event: 'NASA Space Apps 2026 · Planet X and SPHEREx · команда Yggdrasil',
     openTool: 'Открыть инструмент',
+    pdf: 'PDF',
     prev: 'Предыдущий слайд',
     next: 'Следующий слайд',
     langOther: 'EN',
+    'p.claim': 'Найти то, что движется на небе SPHEREx.',
+    'p.say': 'Планета X — планета-гигант, предсказанная далеко за Нептуном и никем не виденная. Между двумя снимками одного неба звёзды стоят на месте, а тела, связанные с Солнцем, сдвигаются. Muninn превращает заходы SPHEREx в такое сравнение прямо в браузере.',
+    'p.src': 'Из задания NASA Space Apps 2026 «Planet X and SPHEREx».',
+    'p.f1': 'Всё небо',
+    'p.f1v': 'каждые полгода',
+    'p.f2': '102 полосы',
+    'p.f2v': '0,75–5 мкм, ближний инфракрасный',
+    'p.f3': 'С мая 2025',
+    'p.f3v': 'съёмка идёт, выпуск за выпуском',
+    'p.for': 'Для кого',
+    'p.for1': 'Публика: одна ссылка, ничего не ставить',
+    'p.for2': 'Волонтёры в духе Backyard Worlds, ищущие движущееся миганием',
+    'p.for3': 'Учителя: настоящие кадры NASA на уроке',
     's1.claim': 'Видно, что изменилось между двумя заходами SPHEREx.',
-    's1.say': 'SPHEREx снимает всё небо примерно дважды в год. Звёзды стоят на месте, тела Солнечной системы нет. Muninn приводит заходы к одной сетке и мигает ими.',
+    's1.say': 'Muninn приводит заходы одного поля к одной сетке и мигает ими: звёзды стоят, движущееся прыгает.',
     's1.src': 'Эти кадры читаются из архива NASA прямо сейчас, в этом браузере.',
     's1.alt': 'Четыре захода SPHEREx на одно поле, мигание. Одна точка есть только 25 декабря 2025.',
     's1.wait': 'Читаю архив…',
@@ -186,11 +225,11 @@ const WORDS = {
     's1.play': 'Мигать заходами',
     's1.failed': 'Архив не ответил. Сам инструмент открывается одним нажатием.',
     's2.claim': 'Файл в 65 МБ читается по мегабайту-два.',
-    's2.say': 'Браузер запрашивает у открытого зеркала AWS диапазоны байтов: заголовок, затем только строки детектора, на которые попадает поле, затем флаги качества для тех же строк. Через наш сервер пиксели не идут.',
-    's2.src': 'Размер кадра Level-2: 65,4 МБ; прочитанные байты измеряются на слайде 1, пока он читает.',
-    's2.head': 'Во что обошлись четыре кадра со слайда 1',
+    's2.say': 'Браузер запрашивает у открытого зеркала AWS диапазоны байтов: заголовок, строки детектора, которые покрывает поле, и их флаги. Через наш сервер пиксели не идут.',
+    's2.src': '65,4 МБ на кадр Level-2; байты измерены на слайде 2, пока он читает.',
+    's2.head': 'Во что обошлись четыре кадра со слайда 2',
     's2.sum': 'Прочитано {read} МБ из {total} МБ, лежащих в архиве: {pct} %',
-    's2.pending': 'Будет измерено, когда слайд 1 дочитает кадры.',
+    's2.pending': 'Будет измерено, когда слайд 2 дочитает кадры.',
     's2.share': 'от каждого файла читается',
     's2.size1': '64 КБ',
     's2.size2': '1–3 МБ',
@@ -198,26 +237,26 @@ const WORDS = {
     's2.step2': 'только строки детектора, которые покрывает поле',
     's2.step3': 'те же строки плоскости FLAGS',
     's3.claim': 'Находит движущееся тело и называет его.',
-    's3.say': 'Все пятнадцать заходов D2 в одну точку за 369 дней прочитаны tools/verify-mover.mjs; сам инструмент мигает до десяти. В четырнадцати только фон, SNR от 0,5 до 2,4. 25 декабря 2025 — 374, и SkyBoT ставит туда астероид (152) Atala, V 13,8, в 2,3″ от центра на момент самой экспозиции.',
-    's3.src': 'tools/verify-mover.mjs 13.4194 3.8459 0.15: самый яркий пиксель против шума кольца вокруг, но не ниже шума пикселей самого детектора, по SPHEREx DR1 и QR3 с учётом флагов конвейера. SkyBoT, IMCCE.',
+    's3.say': 'Пятнадцать заходов D2 в одну точку. В четырнадцати только фон, SNR от 0,5 до 2,4. 25 декабря 2025 — 374, и SkyBoT ставит туда астероид (152) Atala, V 13,8, в 2,3″ от центра на момент самой экспозиции.',
+    's3.src': '15 заходов D2 за 369 дней; SkyBoT, IMCCE.',
     's3.head': 'Сигнал/шум в центре поля, заход за заходом',
     's4.claim': 'Отказывается от ложного открытия.',
-    's4.say': '6 июля 2025 в той же точке была вспышка с SNR 140, и каталоги её не объясняли. Это один пиксель детектора, и конвейер SPHEREx уже сказал, что это: попадание космической частицы. Muninn читает эти флаги и маскирует пиксель до любых измерений.',
+    's4.say': '6 июля 2025 в той же точке была вспышка с SNR 140, и каталоги её не объясняли. Это один пиксель детектора, который конвейер SPHEREx уже пометил как попадание космической частицы. Muninn читает эти флаги и маскирует его до измерений.',
     's4.src': 'У пикселей самой Atala 25 декабря только OUTLIER, и они размыты как настоящий источник.',
     's4.head': '6 июля 2025, центр поля Atala',
     's4.before': 'SNR без флагов',
     's4.beforeSay': 'один пиксель в 11 раз ярче соседей',
     's4.after': 'SNR с прочитанными флагами',
     's4.afterSay': 'фон, как в остальных заходах',
-    's4.note': 'Скачок, пойманный при считывании. Конвейер его пометил; просмотрщик, который не читает FLAGS, собирает космические частицы. С DR1 плоскость FLAGS хранится в сжатии Rice, Muninn распаковывает её прямо в браузере. Маскируются TRANSIENT, SUR_ERROR, NONFUNC, MISSING_DATA, HOT, COLD, PERSIST, STREAK и SNOWBALL.',
-    's5.claim': 'Пять целей задания открываются одним нажатием.',
-    's5.say': 'Каждая открывается в подходящей полосе, а список кадров уже лежит в странице. Нажмите строку, чтобы открыть её в инструменте.',
-    's5.src': 'Число заходов: IRSA SIA, SPHEREx DR1 и QR3, на момент сборки, 13 ноября 2026.',
+    's5.claim': 'Пять целей задания — по одному нажатию.',
+    's5.say': 'Каждая открывается в подходящей полосе. Перекрестие отмечает цель на настоящем кадре SPHEREx.',
+    's5.src': 'Число заходов: NASA IRSA, SPHEREx DR1 и QR3, 13 ноября 2026.',
     's5.head': 'Пять целей из задания',
     's5.visits': 'заходов: {n} · {days} дн.',
     's6.claim': 'Даже 200 сложенных заходов не дотянули бы до Планеты X 2,1–3,8 величины.',
-    's6.say': 'Глубину мы измерили по настоящим пикселям детектора, а не взяли со страницы миссии: 17,61 AB за один заход, на 5,0–6,7 величины слабее нужного. Двести заходов, пересчитанные как √N по тому же полю, дают 20,48: всё ещё не хватает 2,1–3,8 величины, и даже до яркого случая 21,7 — 1,2. Страница говорит это прямо.',
-    's6.src': 'tools/sensitivity.mjs, поле Atala, D2: точечный источник 5σ в апертуре 3×3 пикселя, без поправки на апертуру. Предсказание: Linder, Mordasini, 2016, A&A 589, A134, V 22,6–24,3 вблизи афелия; 21,7 для их варианта 10 M⊕ на 700 а.е.',
+    's6.say': 'Измерено по настоящим пикселям детектора: 17,61 AB за один заход, не хватает 5,0–6,7 величины. Двести заходов, пересчитанные как √N, дают 20,48: всё ещё мало, и даже до яркого случая 21,7 не хватает 1,2.',
+    's6.src': 'Предсказание: Linder, Mordasini, 2016, A&A 589, A134, V 22,6–24,3 вблизи афелия.',
+    's6.assume': 'Допущение: предсказание в полосе V против глубины SPHEREx в AB на 1,1–1,6 мкм — честный лучший случай для отражателя солнечного типа.',
     's6.head': 'Слабейший точечный источник при 5σ, величины AB',
     's6.alt': 'Шкала от 14 до 26 величин: SPHEREx достаёт до 17,61 за заход и до 20,48 за двести по пересчёту; Планета X предсказана между 22,6 и 24,3, в ярком случае 21,7.',
     's6.here': 'SPHEREx',
@@ -226,68 +265,74 @@ const WORDS = {
     's6.one': 'один заход, измерено',
     's6.deep': '200 заходов, пересчёт как √N',
     's6.short': 'не хватает 2,1–3,8',
-    'src.claim': 'У каждого пикселя и каждого имени есть источник.',
-    'src.say': 'Пиксели берутся у NASA, прямо из его архива. Имена и положения из каталогов сначала у NASA, рядом у партнёрских архивов, все запросы идут параллельно: если один сервис лёг, теряется одна строка ответа, а не весь ответ.',
-    'src.src': 'Каждый сервис здесь спрашивается вживую, страницей или её сервером. В сайт скопирована только карта ярких звёзд, а статья остаётся статьёй.',
-    'src.nasa': 'NASA',
-    'src.partners': 'Партнёрские архивы',
-    's7.claim': 'Что Muninn ищет уже сейчас и где останавливается.',
-    's7.say': 'Медленные тела ярче 17,6 AB за заход, стек сезона и названная глубина для каждого просмотренного поля. Нулевой результат на известной глубине тоже ограничение.',
-    's7.link': 'muninn.mydevbox.xyz',
+    'src.claim': 'Построено на ресурсах задания, каждый назван.',
+    'src.src': 'Каждый сервис спрашивается вживую; страница не хранит пикселей. Muninn не связан с NASA.',
+    'src.nasa': 'Ресурсы задания · NASA',
+    'src.csa': 'Ресурсы задания · CSA',
+    'src.also': 'Также',
+    'end.claim': 'Откройте и сравните заходы сами.',
+    'end.live': 'Сайт',
+    'end.repo': 'Код',
+    'end.team': 'Команда Yggdrasil · Узбекистан',
+    'end.owner': '(руководитель команды)',
+    'end.nextK': 'Дальше:',
+    'end.next': 'полный спектр в 102 канала и связь сезонов для всех кандидатов Hunter X сразу.',
     's7.does': 'Умеет сейчас',
     's7.does1': 'Мигание, шторка, разность и стек сезона на одной сетке с севером вверх',
-    's7.does2': 'Измеряет отмеченную точку в каждом заходе: положение, величина AB, вердикт',
-    's7.does3': 'Называет известные астероиды на момент экспозиции, опознаёт звёзды по каталогам Gaia и WISE и накладывает их положения на кадр; ставит снимок AllWISE 2010 года под шторку рядом с заходом SPHEREx',
-    's7.does4': 'Сообщает глубину, на которой шёл поиск',
-    's7.does5': 'Снимает спектр отмеченного источника: по точке на полосу, на длине волны, которую файл даёт для его пикселя',
-    's7.not': 'Пока не умеет',
-    's7.not1': 'Показывать снимок Gaia: Gaia — каталог положений, и наложены именно они',
-    's7.not2': 'Связывать медленное тело между сезонами',
-    's7.not3': 'Сравнивать блеск на одной длине волны: внутри полосы она от захода к заходу разная',
-    's7.credit': 'Данные: NASA/JPL-Caltech · SPHEREx · IPAC/IRSA. SkyBoT, IMCCE. SIMBAD и VizieR, CDS. Muninn не связан с NASA.',
+    's7.does2': 'Измеряет отмеченную точку в каждом заходе и связывает её между сезонами',
+    's7.does3': 'Называет известные астероиды; кладёт Gaia и WISE поверх кадра',
+    's7.does4': 'Называет глубину, на которой шёл каждый поиск',
+    's7.not': 'Не умеет',
+    's7.not1': 'Достать Планету X: даже с 200 заходами не хватает 2,1–3,8 величины',
+    's7.not2': 'Показывать снимок Gaia: Gaia — каталог положений',
+    's7.not3': 'Сравнивать блеск на одной длине волны между заходами',
+    'app.claim': 'Приложение',
+    'app.say': 'Как устроена каждая часть — для вопросов.',
     'sky.claim': 'Вход — через настоящее небо.',
-    'sky.say': 'Первый экран — само небо: 15 568 звёзд из каталогов, каждая на своём месте, и оно медленно поворачивается. Нажмите звезду или метку — на ней сходится прицел искателя, а карточка показывает настоящий кадр SPHEREx этого места. В поле ныряет только кнопка карточки.',
+    'sky.say': 'Первый экран — само небо: 15 568 звёзд из каталогов, и оно поворачивается. Нажмите звезду — на ней сходится прицел, а карточка показывает настоящий кадр SPHEREx этого места.',
     'sky.beat1': 'Небо поворачивается',
     'sky.beat2': 'Нажатие: сходится прицел',
     'sky.beat3': 'Карточка: настоящий кадр SPHEREx',
     'sky.beat4': 'Нырок в поле',
-    'sky.src': 'Здесь его рисует тот же код неба, что и в инструменте. Звёзды: Bright Star Catalogue и Hipparcos. У 311 звёзд и объектов Мессье есть сохранённый кадр, у десяти готовых полей — весь список кадров.',
+    'sky.src': 'Рисует тот же код неба, что и в инструменте. Bright Star Catalogue и Hipparcos.',
     'sky.open': 'Открыть поле',
     'sky.visits': 'заходов: {n}, {d} дн.',
     'modes.claim': 'Пять способов сравнить один участок неба.',
-    'modes.say': 'Каждый заход пересчитан на одну сетку с севером вверх, поэтому любой вид — то же небо, пиксель в пиксель. Здесь A — 25 декабря 2025, (152) Atala в кольце в центре, а B — 1 января 2026, когда её там уже нет.',
-    'modes.src': 'Кадры в том виде, в каком их рисует инструмент: поле Atala, D2, 9′ по короткой стороне. Кольца и пунктирные треки — астероиды, которые SkyBoT ставит на момент каждой экспозиции.',
+    'modes.say': 'Каждый заход пересчитан на одну сетку с севером вверх. A — 25 декабря 2025, (152) Atala в кольце; B — 1 января 2026, когда её уже нет.',
+    'modes.src': 'Поле Atala, D2, как его рисует инструмент.',
     'modes.season': 'декабрьский сезон, D2',
     'bands.claim': 'Шесть полос, любой размер поля, одна ссылка.',
-    'bands.say': 'SPHEREx делит ближний инфракрасный диапазон на шесть полос, от D1 до D6, и страница принимает цвет той, что сейчас в луче. Короткая сторона поля — от 6′ до 36′, а адрес хранит место, размер, полосу и язык: вид можно отправить или встроить как есть.',
-    'bands.src': 'Границы полос взяты из списка кадров поля Atala: самая короткая и самая длинная длина волны среди кадров каждой полосы.',
+    'bands.say': 'Шесть полос, от D1 до D6, и страница принимает цвет той, что в луче. Поле — от 6′ до 36′; адрес хранит место, размер, полосу и язык.',
+    'bands.src': 'Границы полос — из списка кадров поля Atala.',
     'bands.head': 'Длина волны, мкм',
     'bands.width': 'Размер поля по короткой стороне',
     'bands.link': 'Адрес',
     'mark.claim': 'Щелчок по точке — и она измерена в каждом заходе.',
-    'mark.say': 'Положение, величина AB в апертуре 3×3 пикселя, вердикт и то, что о точке знают каталоги. Числа сохраняются в CSV, по строке на заход. Ещё одно нажатие снимает спектр: по экспозиции на полосу, и каждая точка стоит на длине волны, которую файл даёт для этого пикселя.',
-    'mark.src': 'Звезда в поле Atala, отмеченная в инструменте. Для спектра читаются шесть экспозиций, по 1–3 МБ.',
+    'mark.say': 'Положение, величина AB в апертуре 3×3 пикселя, вердикт и то, что знают каталоги, — всё в CSV. Ещё одно нажатие снимает спектр: по точке на полосу.',
+    'mark.src': 'Звезда в поле Atala, отмеченная в инструменте.',
     'mark.csv': 'Столбцы CSV',
     'ov.claim': 'Gaia и WISE поверх кадра.',
-    'ov.say': 'Положения Gaia DR3 перенесены по собственному движению с 2016 года на дату захода, положения AllWISE стоят там, где их видел WISE в 2010-м. Отмеченный источник ищется сразу в нескольких архивах, и если один не ответил, пропадает одна строка, а не ответ.',
-    'ov.src': 'Звезда Барнарда, D2, 12′ × 9′, как её рисует инструмент. Яркое ядро замаскировано по флагам самого конвейера.',
-    'ov.gaia': 'Gaia DR3 (ESA): сдвинуты с 2016 года на дату захода',
-    'ov.wise': 'AllWISE (NASA WISE): где были в 2010 году, не сдвинуты',
+    'ov.say': 'Положения Gaia DR3 перенесены с 2016 года на дату захода, положения AllWISE стоят там, где их видел WISE в 2010-м.',
+    'ov.src': 'Звезда Барнарда, D2, 12′ × 9′; ядро замаскировано флагами конвейера.',
+    'ov.gaia': 'Gaia DR3 (ESA): на дату захода',
+    'ov.wise': 'AllWISE (NASA WISE): где были в 2010 году',
     'ov.head': 'Кого спрашивают об отмеченном источнике',
-    'wise.claim': 'Снимок WISE 2010 года рядом с заходом SPHEREx.',
-    'wise.say': 'Вместо второго захода справа от шторки можно поставить WISE на 3,4 или 4,6 мкм: IRSA вырезает поле из атласа AllWISE, и страница кладёт его на ту же сетку. За пятнадцать лет звезда Барнарда ушла со своего места.',
-    'wise.src': 'Атлас AllWISE через IRSA SIA и IBE, через /api/wise. Идея взята у WiseView — мигалки, которую задание приводит как образец.',
+    'wise.claim': 'Через пятнадцать лет звезда Барнарда не там, где её видел WISE.',
+    'wise.say': 'Вместо второго захода под шторку можно поставить снимок AllWISE на 3,4 или 4,6 мкм, на той же сетке, что и заход SPHEREx. Идея взята у WiseView — мигалки, которую называет задание.',
+    'wise.src': 'Атлас AllWISE через NASA IRSA. Метки — пик звезды на каждом снимке.',
+    'wise.tagA': 'SPHEREx 2025',
+    'wise.tagB': 'WISE 2010',
     'wise.a': 'SPHEREx, D2, 21 августа 2025',
-    'wise.b': 'AllWISE W1, 3,4 мкм, сложено за 2010–2011',
+    'wise.b': 'AllWISE W1, 3,4 мкм, 2010–2011',
     'wise.f1': 'Пик WISE от места звезды в 2016 году',
     'wise.f1v': '56″',
     'wise.f2': 'от Gaia, перенесённой назад на 2010 год',
     'wise.f2v': '2,5″',
     'wise.f3': 'собственное движение звезды Барнарда',
     'wise.f3v': '10,3″ в год',
-    'hunt.claim': 'Hunter X узнаёт расстояние по медлительности.',
-    'hunt.say': 'Когда пришёл последний заход, он измеряет до двенадцати заметных мест во всех заходах, оставляет движущееся и сортирует его по медлительности: с Земли медленное значит далёкое. Известные астероиды на момент каждой экспозиции называют SkyBoT и JPL.',
-    'hunt.src': 'Кривая — hunt.js, посчитанный на слайде: предельная скорость тела на таком расстоянии, у противостояния. Планета X на 400–800 а.е. движется не быстрее 0,18–0,35″ в час, а у квадратуры, где её видит SPHEREx, около 0,006–0,02″. За сезон Hunter X нужны три пикселя за одиннадцать дней, 0,07″ в час: на таких расстояниях проверка движения слепа.',
+    'hunt.claim': 'На 400–800 а.е. проверка движения внутри сезона слепа; связь сезонов проверяет дугу параллакса.',
+    'hunt.say': 'Внутри сезона Hunter X нужны три пикселя за одиннадцать дней, 0,07″ в час. SPHEREx видит Планету X у квадратуры, около 0,006–0,02″ в час: она выглядела бы неподвижной.',
+    'hunt.src': 'Кривая посчитана на этом слайде: предельная скорость тела на таком расстоянии, у противостояния.',
     'hunt.head': 'Видимая скорость против расстояния от Солнца',
     'hunt.alt': 'Видимое движение падает с угловых секунд в час в поясе астероидов до трети секунды в час на 400 а.е.',
     'hunt.axisX': 'расстояние, а.е.',
@@ -295,24 +340,26 @@ const WORDS = {
     'hunt.px': 'Планета X',
     'hunt.perHour': '″/ч',
     'hunt.floor': 'три пикселя за один сезон',
-    'hunt.quad': 'у квадратуры, куда смотрит SPHEREx',
-    'hunt.g1': 'Сдвиг должен втрое превышать разброс подгонки, иначе скорость равна нулю.',
-    'hunt.g2': 'Не меньше четырёх обнаружений: через две точки прямая проходит всегда.',
-    'hunt.g3': 'Кандидат попадает в список, только сдвинувшись больше чем на три пикселя детектора, 18,45″.',
+    'hunt.quad': 'у квадратуры',
+    'link.head': 'Связь сезонов: от одного к следующему',
+    'link.s1': 'Тело ставится на луч зрения метки на каждом расстоянии от 30 до 2000 а.е.',
+    'link.s2': 'Переход Земли на другую сторону Солнца уводит его по дуге в следующем сезоне: 13,6′ на 500 а.е.',
+    'link.s3': 'Источник на дуге засчитывается, только если это место было пустым во всех заходах первого сезона.',
+    'link.test': 'На синтетическом небе из двух сезонов источник на 300 а.е. связывается на 300 а.е., диапазон 269–321.',
     'arc.claim': 'Какие ещё телескопы смотрели на это поле.',
-    'arc.say': 'Для каждого поля страница спрашивает общий индекс Канадского центра астрономических данных, сколько научных наблюдений есть в каждом архиве. Звезду Барнарда снимали с Земли, с орбиты и с NEOSSat — спутника Канадского космического агентства, который ищет астероиды.',
-    'arc.src': 'CADC CAOM через Argus TAP, через /api/archives. Отдельные научные наблюдения в пределах 0,1° от звезды Барнарда; шкала логарифмическая.',
+    'arc.say': 'Для каждого поля страница спрашивает Канадский центр астрономических данных, сколько научных наблюдений есть в каждом архиве, и показывает самый новый сырой кадр NEOSSat.',
+    'arc.src': 'CADC, в пределах 0,1° от звезды Барнарда; шкала логарифмическая.',
     'arc.head': 'В других архивах: звезда Барнарда',
-    'arc.note': 'Тот же индекс охватывает JWST, Chandra, JCMT и VLASS; у поля видны те из них, что на него смотрели.',
     'rel.claim': 'Новый выпуск SPHEREx — одна строка.',
-    'rel.say': 'IRSA публикует каждый выпуск отдельной коллекцией на том же зеркале S3, а страница перечисляет их в одном списке, который читают и сервер, и функция на краю сети, и скрипт сборки. 13 ноября 2026 эта строка перешла с Quick Release 2 на DR1 и QR3.',
-    'rel.src': 'Пикселей страница не хранит, поэтому для новых данных инструмент пересобирать не нужно.',
+    'rel.say': 'IRSA публикует каждый выпуск отдельной коллекцией, а страница перечисляет их в одном списке. 13 ноября 2026 он перешёл с Quick Release 2 на DR1 и QR3.',
+    'rel.src': 'Страница не хранит пикселей, поэтому для новых данных пересборка не нужна.',
     'rel.when': '13 ноября 2026',
     'rel.step1': 'меняется список коллекций',
     'rel.step2': 'десять готовых полей получают новые списки кадров',
-    'rel.step3': 'конвейер проверяется без сети, затем выкладка',
+    'rel.step3': 'проверка без сети, затем выкладка',
     read: 'читаю', queued: 'в очереди', failed: 'не прочитан', mb: '{mb} МБ',
     at: '{n} / {total}',
+    atApp: 'Приложение {n} / {total}',
   },
 };
 
@@ -355,68 +402,52 @@ function relabel() {
   renderReads();
   renderBytes();
   renderSources();
+  renderContents();
+  $('pdf').href = lang === 'ru' ? 'talk.ru.pdf' : 'talk.pdf';
   showSlide(current);
 }
 
-/* ------------------------------------------------------------ 7 · sources */
+/* ------------------------------------------------------------ 9 · sources */
 
 /**
- * Every outside service the page or its relay calls, with what it is used
- * for. NASA first: the challenge asks which NASA data a tool stands on.
+ * The challenge's Resources tab first, every item by name, NASA then CSA;
+ * then the other services the page or its relay asks.
  */
 const SOURCES = {
   nasa: [
-    { name: 'SPHEREx DR1 + QR3', host: 'NASA/JPL-Caltech · IPAC/IRSA · AWS Open Data',
-      en: 'Every pixel on screen: Level-2 spectral images, read by byte range from the public S3 mirror, with their FLAGS plane',
-      ru: 'Каждый пиксель на экране: спектральные снимки Level-2 и их плоскость FLAGS, читаются по диапазонам байтов с открытого зеркала S3' },
-    { name: 'IRSA SIA v2', host: 'irsa.ipac.caltech.edu',
-      en: 'Which frames cover a position, when, in which band and detector',
-      ru: 'Какие кадры покрывают точку, когда, в какой полосе и на каком детекторе' },
-    { name: 'Gaia DR3', host: 'MAST, STScI',
-      en: 'What a marked star is, in a second or two: the Gaia archive the challenge points to',
-      ru: 'Что за отмеченная звезда, за секунду-две: тот архив Gaia, на который указывает задание' },
-    { name: 'Gaia DR3 · AllWISE · CatWISE2020 · 2MASS', host: 'IRSA TAP',
-      en: 'What a marked source is, and how fast CatWISE sees it move; Gaia and AllWISE positions over the frame, Gaia carried to the date of the visit',
-      ru: 'Что за источник отмечен и как быстро он движется по CatWISE; положения Gaia и AllWISE поверх кадра, Gaia перенесена на дату захода' },
-    { name: 'AllWISE Atlas', host: 'IRSA IBE',
-      en: 'The WISE picture of the field from 2010, cut by the archive and laid beside a SPHEREx visit under the wipe',
-      ru: 'Снимок поля WISE 2010 года: архив вырезает его, и он ложится рядом с заходом SPHEREx под шторку' },
-    { name: 'Small-Body Identification', host: 'JPL SSD',
-      en: 'Known asteroids and comets in the field at the moment of each exposure, beside SkyBoT',
-      ru: 'Известные астероиды и кометы в поле на момент каждой экспозиции, вместе со SkyBoT' },
+    { name: 'NASA IRSA · SPHEREx', en: 'Every pixel, DR1 and QR3; the frame index; the FLAGS plane', ru: 'Каждый пиксель, DR1 и QR3; список кадров; плоскость FLAGS' },
+    { name: 'SPHEREx Tutorial Notebooks', en: 'The reference for the DR1 file layout', ru: 'Образец устройства файлов DR1' },
+    { name: 'WiseView', en: 'The model for the WISE wipe', ru: 'Образец для шторки с WISE' },
+    { name: 'Gaia DR3', host: 'MAST, STScI', en: 'What a marked star is, in a second or two', ru: 'Что за отмеченная звезда, за секунду-две' },
   ],
-  partners: [
-    { name: 'SkyBoT', host: 'IMCCE, Observatoire de Paris',
-      en: 'A second, independent answer on known solar-system objects',
-      ru: 'Второй, независимый ответ про известные тела Солнечной системы' },
-    { name: 'SIMBAD · Sesame · VizieR', host: 'CDS Strasbourg',
-      en: 'Names typed into the search box; what a marked star is called; the same catalogues when IRSA is slow',
-      ru: 'Имена из строки поиска; как называется отмеченная звезда; те же каталоги, если IRSA медлит' },
-    { name: 'VSX', host: 'AAVSO',
-      en: 'Whether a marked star is a known variable, with its type and period',
-      ru: 'Известная ли переменная отмеченная звезда, её тип и период' },
-    { name: 'CADC · CAOM', host: 'NRC Canada · CSA',
-      en: 'Which other telescopes looked at the field — HST, JWST, TESS, Chandra, Gemini, CFHT, NEOSSat and more — and over which years',
-      ru: 'Какие ещё телескопы снимали поле — HST, JWST, TESS, Chandra, Gemini, CFHT, NEOSSat и другие — и в какие годы' },
-    { name: 'Bright Star Catalogue · Hipparcos', host: 'Yale · ESA',
-      en: 'The 15 568 stars of the sky you enter through',
-      ru: '15 568 звёзд неба на входе' },
-    { name: 'Linder & Mordasini 2016', host: 'A&A 589, A134',
-      en: 'The predicted brightness of Planet X the depth is compared against',
-      ru: 'Предсказанный блеск Planet X, с которым сравнивается глубина' },
+  csa: [
+    { name: 'CADC', en: 'Which other telescopes looked at a field', ru: 'Какие ещё телескопы смотрели на поле' },
+    { name: 'NEOSSat', en: 'Muninn shows NEOSSat’s newest raw frame of a field, from CADC', ru: 'Muninn показывает самый новый сырой кадр поля с NEOSSat, из CADC' },
+  ],
+  also: [
+    { name: 'ESA Gaia / DPAC', en: 'Star positions over the frame, moved to the visit date', ru: 'Положения звёзд поверх кадра, на дату захода' },
+    { name: 'NASA WISE / NEOWISE', en: 'AllWISE pictures; CatWISE2020 motions', ru: 'Снимки AllWISE; движения CatWISE2020' },
+    { name: '2MASS', en: 'J, H and K of a marked source', ru: 'J, H и K отмеченного источника' },
+    { name: 'IMCCE SkyBoT', en: 'Known asteroids at each exposure', ru: 'Известные астероиды на момент экспозиции' },
+    { name: 'JPL SSD', en: 'Small-Body Identification, beside SkyBoT', ru: 'Small-Body Identification, рядом со SkyBoT' },
+    { name: 'CDS', en: 'SIMBAD, Sesame and VizieR', ru: 'SIMBAD, Sesame и VizieR' },
   ],
 };
 
 function renderSources() {
+  let at = 0;
   for (const [group, rows] of Object.entries(SOURCES)) {
-    $(`sources-${group}`).replaceChildren(...rows.map((row, i) => {
+    $(`sources-${group}`).replaceChildren(...rows.map((row) => {
       const item = document.createElement('div');
       item.className = 'sources__row';
-      item.style.setProperty('--l', String(i + (group === 'partners' ? SOURCES.nasa.length : 0)));
+      item.style.setProperty('--l', String(at++));
       const dt = document.createElement('dt');
-      const host = document.createElement('span');
-      host.textContent = row.host;
-      dt.append(row.name, host);
+      dt.append(row.name);
+      if (row.host) {
+        const host = document.createElement('span');
+        host.textContent = row.host;
+        dt.append(host);
+      }
       const dd = document.createElement('dd');
       dd.textContent = row[lang] ?? row.en;
       item.append(dt, dd);
@@ -428,7 +459,26 @@ function renderSources() {
 /* ----------------------------------------------------------------- slides */
 
 const slides = [...document.querySelectorAll('[data-slide]')];
+/** The jury's deck ends where the appendix begins, at its divider. */
+const MAIN = slides.findIndex((s) => s.dataset.part === 'appendix');
 let current = 0;
+
+/** The appendix, listed on its divider: each entry turns to its slide. */
+function renderContents() {
+  $('contents').replaceChildren(...slides.slice(MAIN + 1).map((slide, i) => {
+    const li = document.createElement('li');
+    li.style.setProperty('--i', String(i));
+    const b = document.createElement('button');
+    b.type = 'button';
+    const n = document.createElement('span');
+    n.className = 'num';
+    n.textContent = String(i + 1);
+    b.append(n, t(slide.querySelector('.slide__claim').dataset.t));
+    b.addEventListener('click', () => showSlide(MAIN + 1 + i));
+    li.append(b);
+    return li;
+  }));
+}
 
 /** Whether the reader has asked for stillness. */
 const STILL = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -470,15 +520,16 @@ function showSlide(n) {
   });
   $('prev').disabled = current === 0;
   $('next').disabled = current === slides.length - 1;
-  $('at').textContent = t('at', {
-    n: String(current + 1).padStart(2, '0'), total: String(slides.length).padStart(2, '0'),
-  });
+  $('at').textContent = current === MAIN ? t('app.claim') : current < MAIN
+    ? t('at', { n: String(current + 1).padStart(2, '0'), total: String(MAIN).padStart(2, '0') })
+    : t('atApp', { n: String(current - MAIN), total: String(slides.length - MAIN - 1) });
   history.replaceState(null, '', `#${current + 1}`);
 }
 
 function buildScale() {
   slides.forEach((_, i) => {
     const li = document.createElement('li');
+    li.toggleAttribute('data-appendix', i >= MAIN);
     const b = document.createElement('button');
     b.type = 'button';
     b.setAttribute('aria-label', String(i + 1));
@@ -520,7 +571,7 @@ function wire() {
   });
 }
 
-/* ------------------------------------------- 1 and 2 · the frames, read live */
+/* ------------------------------------------ 2 and 15 · the frames, read live */
 
 const FIELD = { ra: 13.4194, dec: 3.8459, fovDeg: 0.15, band: 'D2' };
 const GRID_PX = 264;
@@ -748,7 +799,39 @@ function renderSNR() {
   $('snr').replaceChildren(...rows);
 }
 
-/* -------------------------------------------------------- 5 · the targets */
+/* -------------------------------------------------------- 6 · the targets */
+
+/**
+ * The deck's own line for each target, short enough to read from the back of
+ * a room. Every thumbnail is centred on the target's position, so the
+ * crosshair is drawn at its middle. WISE 0855 is too faint for one frame, and
+ * its card says so instead of pointing at noise (README, the targets table).
+ */
+const TARGET_LINES = {
+  barnard: { en: 'Fastest star in the sky, 10.3″ a year', ru: 'Самая быстрая звезда неба, 10,3″ в год' },
+  epsindib: { en: 'A pair of brown dwarfs beside ε Indi A', ru: 'Пара коричневых карликов рядом с ε Indi A' },
+  wise0855: {
+    en: 'Coldest known brown dwarf', ru: 'Самый холодный известный коричневый карлик',
+    unseen: {
+      en: 'Too faint for one frame: about 17.2 AB against a 16.7 AB limit in D6. The crosshair is the challenge’s position.',
+      ru: 'Слишком слаб для одного кадра: около 17,2 AB при пределе 16,7 AB в D6. Перекрестие — позиция из задания.',
+    },
+  },
+  rwaur: { en: 'A young variable star', ru: 'Молодая переменная звезда' },
+  rdra: { en: 'A Mira variable near the north ecliptic pole', ru: 'Мирида у северного полюса эклиптики' },
+};
+
+/** Four ticks around the middle, leaving the target itself clear. */
+function crosshair() {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'targets__cross');
+  svg.setAttribute('viewBox', '0 0 100 100');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M50 22v16M50 62v16M22 50h16M62 50h16');
+  svg.append(path);
+  return svg;
+}
 
 let targets = [];
 let targetsLoaded;
@@ -763,25 +846,36 @@ function renderTargets() {
       ra: tg.ra.toFixed(5), dec: tg.dec.toFixed(5), fov: String(tg.fov), band: tg.band, lang, name: tg.name,
     });
     a.href = `./#${hash}`;
+    const line = TARGET_LINES[tg.key];
     // One real frame of the field, the same picture its card on the sky shows.
+    const frame = document.createElement('span');
+    frame.className = 'targets__frame';
+    frame.toggleAttribute('data-unseen', Boolean(line?.unseen));
     const shot = document.createElement('img');
     shot.className = 'targets__shot';
     shot.src = `img/fields/${tg.key}.png`;
     shot.alt = '';
     shot.width = 280;
     shot.height = 280;
-    shot.addEventListener('error', () => shot.remove());
-    a.append(shot);
+    shot.addEventListener('error', () => frame.remove());
+    frame.append(shot, crosshair());
+    a.append(frame);
     const name = document.createElement('span');
     name.className = 'targets__name';
     name.textContent = tg.name;
     const why = document.createElement('span');
     why.className = 'targets__why';
-    why.textContent = tg.why?.[lang] ?? tg.why?.en ?? '';
+    why.textContent = line?.[lang] ?? tg.why?.[lang] ?? tg.why?.en ?? '';
     const n = document.createElement('span');
     n.className = 'targets__n';
     n.textContent = `${tg.band} · ${t('s5.visits', { n: tg.visits, days: tg.spanDays })}`;
     a.append(name, why, n);
+    if (line?.unseen) {
+      const unseen = document.createElement('span');
+      unseen.className = 'targets__unseen';
+      unseen.textContent = line.unseen[lang] ?? line.unseen.en;
+      a.append(unseen);
+    }
     li.append(a);
     return li;
   }));
@@ -799,7 +893,7 @@ async function loadTargets() {
   renderTargets();
 }
 
-/* ---------------------------------------------------------- 6 · the reach */
+/* ---------------------------------------------------------- 8 · the reach */
 
 /**
  * tools/sensitivity.mjs: 5σ point source in a 3×3-pixel aperture, AB, the
@@ -817,10 +911,11 @@ function renderReach() {
   const svg = $('reach');
   // Drawn at the width it is shown at, so the type stays the size it was set:
   // a fixed drawing scaled down to a phone left the labels four pixels tall.
-  const W = Math.max(280, Math.min(1400, Math.round(svg.getBoundingClientRect().width) || 640));
-  const H = 172;
-  const pad = 8;
-  const y = 84;
+  const W = Math.max(280, Math.min(2600, Math.round(svg.getBoundingClientRect().width) || 640));
+  const k = remScale();
+  const H = 172 * k;
+  const pad = 8 * k;
+  const y = 84 * k;
   const x = (mag) => pad + ((mag - AXIS[0]) / (AXIS[1] - AXIS[0])) * (W - 2 * pad);
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   const el = (name, attrs, text) => {
@@ -831,23 +926,23 @@ function renderReach() {
   };
   const deepest = REACH.at(-1)[1];
   const parts = [
-    el('line', { class: 'reach__base', x1: x(AXIS[0]), x2: x(AXIS[1]), y1: y + 7, y2: y + 7 }),
+    el('line', { class: 'reach__base', x1: x(AXIS[0]), x2: x(AXIS[1]), y1: y + 7 * k, y2: y + 7 * k }),
     el('rect', { class: 'reach__here', x: x(AXIS[0]), y, width: x(deepest) - x(AXIS[0]), height: 14, opacity: 0.35 }),
-    el('rect', { class: 'reach__here', x: x(AXIS[0]), y, width: x(REACH[0][1]) - x(AXIS[0]), height: 14 }),
-    el('rect', { class: 'reach__target', x: x(PLANET_NINE[0]), y, width: x(PLANET_NINE[1]) - x(PLANET_NINE[0]), height: 14 }),
-    el('line', { class: 'reach__gap', x1: x(deepest), x2: x(PLANET_NINE[0]), y1: y + 7, y2: y + 7 }),
-    el('text', { class: 'reach__label reach__label--here', x: x(AXIS[0]), y: y - 14 }, t('s6.here')),
-    el('text', { class: 'reach__label reach__label--target', x: x(AXIS[1]), y: y - 14, 'text-anchor': 'end' }, t('s6.target')),
-    el('text', { class: 'reach__label', x: (x(deepest) + x(PLANET_NINE[0])) / 2, y: y - 38, 'text-anchor': 'middle' }, t('s6.short')),
-    el('line', { class: 'reach__bright', x1: x(PLANET_NINE_BRIGHT), x2: x(PLANET_NINE_BRIGHT), y1: y - 2, y2: y + 16 }),
-    el('text', { class: 'reach__label reach__label--bright', x: x(PLANET_NINE_BRIGHT), y: y + 66, 'text-anchor': 'middle' }, t('s6.bright')),
+    el('rect', { class: 'reach__here', x: x(AXIS[0]), y, width: x(REACH[0][1]) - x(AXIS[0]), height: 14 * k }),
+    el('rect', { class: 'reach__target', x: x(PLANET_NINE[0]), y, width: x(PLANET_NINE[1]) - x(PLANET_NINE[0]), height: 14 * k }),
+    el('line', { class: 'reach__gap', x1: x(deepest), x2: x(PLANET_NINE[0]), y1: y + 7 * k, y2: y + 7 * k }),
+    el('text', { class: 'reach__label reach__label--here', x: x(AXIS[0]), y: y - 14 * k }, t('s6.here')),
+    el('text', { class: 'reach__label reach__label--target', x: x(AXIS[1]), y: y - 14 * k, 'text-anchor': 'end' }, t('s6.target')),
+    el('text', { class: 'reach__label', x: (x(deepest) + x(PLANET_NINE[0])) / 2, y: y - 38 * k, 'text-anchor': 'middle' }, t('s6.short')),
+    el('line', { class: 'reach__bright', x1: x(PLANET_NINE_BRIGHT), x2: x(PLANET_NINE_BRIGHT), y1: y - 2 * k, y2: y + 16 * k }),
+    el('text', { class: 'reach__label reach__label--bright', x: x(PLANET_NINE_BRIGHT), y: y + 66 * k, 'text-anchor': 'middle' }, t('s6.bright')),
   ];
   for (const [, mag] of REACH) {
-    parts.push(el('line', { class: 'reach__pin', x1: x(mag), x2: x(mag), y1: y - 5, y2: y + 19 }));
+    parts.push(el('line', { class: 'reach__pin', x1: x(mag), x2: x(mag), y1: y - 5 * k, y2: y + 19 * k }));
   }
   for (let mag = AXIS[0]; mag <= AXIS[1]; mag += 2) {
-    parts.push(el('line', { class: 'reach__tick', x1: x(mag), x2: x(mag), y1: y + 22, y2: y + 28 }));
-    parts.push(el('text', { class: 'reach__axis', x: x(mag), y: y + 44, 'text-anchor': 'middle' }, String(mag)));
+    parts.push(el('line', { class: 'reach__tick', x1: x(mag), x2: x(mag), y1: y + 22 * k, y2: y + 28 * k }));
+    parts.push(el('text', { class: 'reach__axis', x: x(mag), y: y + 44 * k, 'text-anchor': 'middle' }, String(mag)));
   }
   svg.replaceChildren(...parts);
 
@@ -897,7 +992,7 @@ function relabelImages() {
   }
 }
 
-/* ------------------------------------------------------------- 2 · the sky */
+/* ------------------------------------------------------------ 12 · the sky */
 
 /**
  * Three places, three kinds of card: a ready field with two visits stored, a
@@ -1116,7 +1211,7 @@ RUNS.sky = {
   },
 };
 
-/* ------------------------------------------------------------ 3 · the modes */
+/* ----------------------------------------------------------- 13 · the modes */
 
 const MODES = [
   { key: 'blink', name: 'mode.blink', when: 'mode.blinkWhen' },
@@ -1188,7 +1283,7 @@ RUNS.modes = {
   leave() { clearInterval(modeTimer); clearInterval(viewBlink); },
 };
 
-/* ------------------------------------------------------------ 4 · the bands */
+/* ----------------------------------------------------------- 14 · the bands */
 
 const BAND_HUES = { D1: 285, D2: 235, D3: 160, D4: 100, D5: 60, D6: 25 };
 const WIDTHS = [0.1, 0.15, 0.2, 0.3, 0.45, 0.6];
@@ -1287,7 +1382,7 @@ RUNS.bands = {
   },
 };
 
-/* --------------------------------------------------------- 8 · the mark */
+/* -------------------------------------------------------- 16 · the mark */
 
 function renderCsv() {
   $('csv').replaceChildren(
@@ -1296,7 +1391,7 @@ function renderCsv() {
   );
 }
 
-/* ------------------------------------------------------- 9 · the overlay */
+/* ------------------------------------------------------ 17 · the overlay */
 
 const ASKS = [
   { name: 'Gaia DR3', host: 'NASA MAST',
@@ -1329,7 +1424,7 @@ function renderAsks() {
   }));
 }
 
-/* ------------------------------------------------------------ 11 · Hunter X */
+/* ----------------------------------- 7 · Hunter X and the season link */
 
 const RATE_AXIS = { au: [1.5, 2000], rate: [0.001, 100] };
 const PLANET_X_AU = [400, 800];
@@ -1340,10 +1435,11 @@ function renderRate() {
   const NS = 'http://www.w3.org/2000/svg';
   const svg = $('rate');
   // Drawn at the size it is shown at, so the type is the size it was set.
-  const W = Math.max(300, Math.min(1100, Math.round(svg.getBoundingClientRect().width) || 560));
-  const H = Math.round(Math.min(W * 0.5, Math.max(180, innerHeight * 0.32)));
+  const W = Math.max(300, Math.min(2000, Math.round(svg.getBoundingClientRect().width) || 560));
+  const k = remScale();
+  const H = Math.round(Math.min(W * 0.62, Math.max(180 * k, innerHeight * 0.4)));
   svg.style.blockSize = `${H}px`;
-  const pad = { l: 48, r: 12, t: 26, b: 36 };
+  const pad = { l: 64 * k, r: 12 * k, t: 34 * k, b: 46 * k };
   const lx = (au) => pad.l + (Math.log10(au / RATE_AXIS.au[0]) / Math.log10(RATE_AXIS.au[1] / RATE_AXIS.au[0])) * (W - pad.l - pad.r);
   const ly = (r) => H - pad.b - (Math.log10(r / RATE_AXIS.rate[0]) / Math.log10(RATE_AXIS.rate[1] / RATE_AXIS.rate[0])) * (H - pad.t - pad.b);
   const el = (name, attrs, text) => {
@@ -1356,22 +1452,22 @@ function renderRate() {
   const parts = [];
   for (const au of [2, 10, 100, 1000]) {
     parts.push(el('line', { class: 'rate__grid', x1: lx(au), x2: lx(au), y1: pad.t, y2: H - pad.b }));
-    parts.push(el('text', { class: 'rate__tick', x: lx(au), y: H - pad.b + 16, 'text-anchor': 'middle' }, num(au, 0)));
+    parts.push(el('text', { class: 'rate__tick', x: lx(au), y: H - pad.b + 22 * k, 'text-anchor': 'middle' }, num(au, 0)));
   }
   for (const r of [0.001, 0.01, 0.1, 1, 10, 100]) {
     parts.push(el('line', { class: 'rate__grid', x1: pad.l, x2: W - pad.r, y1: ly(r), y2: ly(r) }));
-    parts.push(el('text', { class: 'rate__tick', x: pad.l - 6, y: ly(r) + 4, 'text-anchor': 'end' }, num(r, r < 1 ? Math.round(-Math.log10(r)) : 0)));
+    parts.push(el('text', { class: 'rate__tick', x: pad.l - 8 * k, y: ly(r) + 6 * k, 'text-anchor': 'end' }, num(r, r < 1 ? Math.round(-Math.log10(r)) : 0)));
   }
-  parts.push(el('text', { class: 'rate__axis', x: W - pad.r, y: H - 4, 'text-anchor': 'end' }, t('hunt.axisX')));
-  parts.push(el('text', { class: 'rate__axis', x: pad.l, y: pad.t - 10 }, t('hunt.axisY')));
+  parts.push(el('text', { class: 'rate__axis', x: W - pad.r, y: H - 4 * k, 'text-anchor': 'end' }, t('hunt.axisX')));
+  parts.push(el('text', { class: 'rate__axis', x: pad.l, y: pad.t - 12 * k }, t('hunt.axisY')));
   // Planet X's distance and the rates it gives, from the same function.
   const [near, far] = PLANET_X_AU;
   parts.push(el('rect', {
     class: 'rate__px', x: lx(near), y: pad.t, width: lx(far) - lx(near), height: H - pad.t - pad.b,
   }));
-  parts.push(el('text', { class: 'rate__pxk', x: lx(near) - 8, y: pad.t + 16, 'text-anchor': 'end' }, t('hunt.px')));
+  parts.push(el('text', { class: 'rate__pxk', x: lx(near) - 10 * k, y: pad.t + 22 * k, 'text-anchor': 'end' }, t('hunt.px')));
   parts.push(el('line', { class: 'rate__floor', x1: pad.l, x2: W - pad.r, y1: ly(ASTROMETRY_FLOOR), y2: ly(ASTROMETRY_FLOOR) }));
-  parts.push(el('text', { class: 'rate__floork', x: pad.l + 6, y: ly(ASTROMETRY_FLOOR) - 6 }, t('hunt.floor')));
+  parts.push(el('text', { class: 'rate__floork', x: pad.l + 8 * k, y: ly(ASTROMETRY_FLOOR) - 8 * k }, t('hunt.floor')));
   let d = '';
   for (let k = 0; k <= 160; k++) {
     const au = RATE_AXIS.au[0] * (RATE_AXIS.au[1] / RATE_AXIS.au[0]) ** (k / 160);
@@ -1379,21 +1475,21 @@ function renderRate() {
   }
   parts.push(el('path', { class: 'rate__curve', d, pathLength: '1' }));
   for (const au of PLANET_X_AU) {
-    parts.push(el('circle', { class: 'rate__pin', cx: lx(au), cy: ly(rateAtAU(au)), r: 4 }));
+    parts.push(el('circle', { class: 'rate__pin', cx: lx(au), cy: ly(rateAtAU(au)), r: 5 * k }));
   }
   // Where SPHEREx actually sees it: near quadrature, a twentieth of the rate
   // at opposition and under the season's floor (README, Hunter X).
   const q = { lo: 0.006, hi: 0.02 };
   const qx = (lx(near) + lx(far)) / 2;
   parts.push(el('line', { class: 'rate__quad', x1: qx, x2: qx, y1: ly(q.lo), y2: ly(q.hi) }));
-  parts.push(el('text', { class: 'rate__quadk', x: lx(near) - 8, y: ly(Math.sqrt(q.lo * q.hi)) + 4, 'text-anchor': 'end' }, t('hunt.quad')));
+  parts.push(el('text', { class: 'rate__quadk', x: lx(near) - 10 * k, y: ly(Math.sqrt(q.lo * q.hi)) + 6 * k, 'text-anchor': 'end' }, t('hunt.quad')));
   const mid = rateAtAU(far);
-  parts.push(el('text', { class: 'rate__val', x: lx(far) + 8, y: ly(mid) - 10 },
+  parts.push(el('text', { class: 'rate__val', x: lx(far) + 10 * k, y: ly(mid) - 12 * k },
     `${num(rateAtAU(far), 2)}–${num(rateAtAU(near), 2)}${t('hunt.perHour')}`));
   svg.replaceChildren(...parts);
 }
 
-/* ----------------------------------------------------- 13 · other archives */
+/* ----------------------------------------------------- 18 · other archives */
 
 /** CADC, distinct science observations within 0.1° of Barnard's Star. */
 const ARCHIVES = [
@@ -1423,7 +1519,7 @@ function renderArchives() {
   }));
 }
 
-/* --------------------------------------------------------- 16 · a release */
+/* --------------------------------------------------------- 19 · a release */
 
 let typing = 0;
 let typingStart = 0;
