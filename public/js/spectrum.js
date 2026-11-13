@@ -315,6 +315,10 @@ export const magErrOf = (mJy, err) => (2.5 / Math.LN10) * (err / mJy);
 
 /** How far apart, in sigma, two magnitudes must be to call it a change. */
 export const VARIES_SIGMA = 3;
+/** The least error a SPHEREx 3 × 3 aperture brightness carries, whatever the noise. */
+export const PHOTOMETRY_FLOOR_MAG = 0.03;
+/** Fewer detections than this make no light curve worth a verdict. */
+const MIN_CURVE_POINTS = 2;
 
 /**
  * What the visits at one wavelength say about a change in brightness.
@@ -335,9 +339,13 @@ export function variability(points) {
   const limits = points.filter((p) => p.kind === 'limit' && p.mJy > 0);
   const base = { n: points.length, saturated, detections: detections.length, limits: limits.length };
   if (saturated * 2 > points.length) return { ...base, state: 'saturated' };
-  if (detections.length < 2) return { ...base, state: 'few' };
+  if (detections.length < MIN_CURVE_POINTS) return { ...base, state: 'few' };
 
-  const mags = detections.map((p) => ({ p, m: magOfMJy(p.mJy), e: magErrOf(p.mJy, p.err) }));
+  // The bars are the sky's noise alone; a bright star's own error is set by
+  // where its light falls on the pixels and by the aperture, a few hundredths
+  // of a magnitude. Without that floor a steady 12th-magnitude star "varied"
+  // by 0.01 ± 0.00.
+  const mags = detections.map((p) => ({ p, m: magOfMJy(p.mJy), e: Math.hypot(magErrOf(p.mJy, p.err), PHOTOMETRY_FLOOR_MAG) }));
   const bright = mags.reduce((a, b) => (b.m < a.m ? b : a));
   const faint = mags.reduce((a, b) => (b.m > a.m ? b : a));
   const amp = faint.m - bright.m;

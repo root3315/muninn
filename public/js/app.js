@@ -1928,7 +1928,10 @@ function identifyMark(m) {
   const a = m.analysis;
   const ready = a && IDENTIFY.has(a.kind)
     && (STILL.has(a.kind) || ['none', 'failed', 'off'].includes(m.catalog?.state));
-  if (!ready) { m.who = null; return; }
+  // Waiting on SkyBoT again (a band change re-measures every mark) keeps
+  // what the catalogues already said; only a mark that is no longer a
+  // thing to identify loses it.
+  if (!ready) { if (!(a && IDENTIFY.has(a.kind))) m.who = null; return; }
 
   // The measured centre, not the click: that is what a catalogue should be asked about.
   const pts = a.track.length ? a.track : [{ ra: m.ra, dec: m.dec }];
@@ -2043,7 +2046,8 @@ function whoLines(who, kind) {
   if (who.state === 'timeout') return [whoP(t('mark.whoTimeout', { s: Math.round(IDENTIFY_CAP_MS / 1000) }))];
   const r = who.result;
   const lines = answerLines(r, kind);
-  if (!lines.length) lines.push(whoP(t('mark.whoNone')));
+  // "Nothing" is said only for the catalogues that answered.
+  if (!lines.length) lines.push(whoP(t(r.failed.length ? 'mark.whoNoneRest' : 'mark.whoNone')));
   if (r.failed.length) lines.push(whoP(t('mark.whoPartial', { list: r.failed.map((k) => CATALOGUE_NAMES[k]).join(', ') })));
   return lines;
 }
@@ -2074,7 +2078,11 @@ function answerLines(r, kind) {
   if (r.vsx) {
     const v = r.vsx;
     const bits = [v.type ? `${t('kind.variable')} ${v.type}` : t('kind.variable')];
-    if (Number.isFinite(v.max) && Number.isFinite(v.min)) bits.push(`${fmt(v.max, 2)}–${fmt(v.min, 2)}ᵐ`);
+    // VSX gives the faint end as an amplitude when it has no minimum: a
+    // number smaller than the bright end cannot be a magnitude there.
+    if (Number.isFinite(v.max) && Number.isFinite(v.min)) {
+      bits.push(v.min > v.max ? `${fmt(v.max, 2)}–${fmt(v.min, 2)}ᵐ` : t('mark.whoAmplitude', { max: fmt(v.max, 2), amp: fmt(v.min, 2) }));
+    }
     if (Number.isFinite(v.period)) bits.push(t('mark.whoPeriod', { p: fmt(v.period, v.period < 10 ? 3 : 1) }));
     lines.push(whoP('VSX: ',
       link(v.name, `https://www.aavso.org/vsx/index.php?view=results.get&ident=${encodeURIComponent(v.name)}`),
@@ -2335,6 +2343,13 @@ const CALL = {
   intermittent: 'mark.callIntermittent',
 };
 
+/** A number to `digits` significant figures: 0,0042 and 21,3 alike, never 0,00. */
+function fmtSig(v, digits) {
+  if (!Number.isFinite(v) || v === 0) return fmt(v, 0);
+  const decimals = Math.max(0, digits - 1 - Math.floor(Math.log10(Math.abs(v))));
+  return fmt(v, Math.min(6, decimals));
+}
+
 /** What the measurement amounts to, in the fewest words that are still true. */
 const callOf = (a) => (tooSharp(shapeOf(a)) ? t('sharp.call') : t(CALL[a?.kind ?? 'none'] ?? CALL.none));
 
@@ -2358,7 +2373,7 @@ function verdictOnly(a) {
     });
   }
   if (a.kind === 'moving') {
-    return t('mark.moving', { rate: fmt(a.ratePerHour, 2), seen: a.seen, days: fmt(a.spanDays, 1), rms: fmt(a.rms, 1) });
+    return t('mark.moving', { rate: fmtSig(a.ratePerHour, 3), seen: a.seen, days: fmt(a.spanDays, 1), rms: fmt(a.rms, 1) });
   }
   if (a.kind === 'fixed') return t('mark.fixed', { total: a.total, rms: fmt(a.rms, 1) });
   if (a.kind === 'saturated') return t('mark.saturated', { n: a.saturated, total: a.total });
@@ -2911,6 +2926,9 @@ function showLink(m) {
 /** The lines and buttons a mark's link puts in its card. */
 function linkLines(m) {
   const out = [];
+  // A body SkyBoT has named is in the solar system's inner part and moves
+  // far faster than any arc of distant ones: there is no season to link.
+  if (m.known) return out;
   const link = m.link;
   if (link?.state !== 'reading') {
     const go = document.createElement('button');
