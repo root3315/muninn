@@ -354,13 +354,22 @@ async function handleTap(url, res) {
   if (field.limit !== null) field.limit = Math.round(field.limit * 2) / 2;
   field.radiusDeg = Math.max(1 / 3600, Number(field.radiusDeg.toPrecision(2)));
   const key = safeKey(`tap_${cat}_${field.ra.toFixed(4)}_${field.dec.toFixed(4)}_${field.radiusDeg}_${field.top}_${field.limit ?? 'all'}`);
-  // A star's own lookup is a few arcseconds: MAST answers that in a second or
-  // two, where IRSA's TAP takes ten to fifty. A field's worth is megabytes at
-  // MAST, so the overlays stay with IRSA.
+  // A star's own lookup is a few arcseconds, and both archives are asked for
+  // it at once: either can take twenty seconds on a bad day, and rarely both.
+  // A field's worth is megabytes at MAST, so the overlays stay with IRSA.
   const viaMast = cat === 'gaia' && field.radiusDeg <= MAST_MAX_DEG;
   return relay(res, key, () => (viaMast
-    ? askMastGaia(field, key).catch(() => askIrsaTap(archive, field, key))
+    ? firstOf([askMastGaia(field, key), askIrsaTap(archive, field, key)])
     : askIrsaTap(archive, field, key)));
+}
+
+/** The first of several asks to succeed; the first failure if none does. */
+async function firstOf(asks) {
+  try {
+    return await Promise.any(asks);
+  } catch (err) {
+    throw err.errors?.[0] ?? err;
+  }
 }
 
 /* ------------------------------------------------------- Gaia DR3 at MAST */
@@ -368,7 +377,7 @@ async function handleTap(url, res) {
 /** The Gaia DR3 the challenge's resources point to: MAST, at STScI. */
 const MAST_INVOKE = 'https://mast.stsci.edu/api/v0/invoke';
 const MAST_MAX_DEG = 0.04;
-const MAST_TIMEOUT_MS = 8_000;
+const MAST_TIMEOUT_MS = 40_000;
 
 /**
  * A small Gaia DR3 cone from MAST, under the shared (VizieR) column names.
