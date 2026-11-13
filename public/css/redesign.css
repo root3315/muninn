@@ -779,7 +779,9 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .gate-card__facts { display: grid; gap: var(--space-2xs); margin: 0; }
 .gate-card__facts div { display: flex; justify-content: space-between; align-items: baseline; gap: var(--space-md); }
 .gate-card__facts dt { font-size: var(--text-sm); color: var(--color-neutral); }
-.gate-card__facts dd { margin: 0; font-size: var(--text-xs); color: var(--color-ink); white-space: nowrap; }
+.gate-card__facts dd { margin: 0; font-size: var(--text-xs); color: var(--color-ink); text-align: end; min-inline-size: 0; overflow-wrap: anywhere; }
+/* A short value stays on one line; a sentence (the loading note) wraps inside the card. */
+.gate-card__facts dt { flex: none; }
 
 .gate-card__go {
   appearance: none; cursor: pointer; border: 0;

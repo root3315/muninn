@@ -157,6 +157,36 @@ export function fillCores(data, width, ceiling, passes = 64) {
     if (!next) break;
     cur = next;
   }
+  // The seams between a whitened overflow and a filled hole: pixels the
+  // pipeline left low but did not flag, dark threads through a white core.
+  // Anything the top of the stretch walls in completely, so that it cannot be
+  // reached from the frame's edge without crossing it, is part of the core.
+  const height = Math.floor(cur.length / width);
+  const open = new Uint8Array(cur.length);
+  const queue = [];
+  const below = (k) => !(cur[k] >= ceiling);
+  for (let x = 0; x < width; x++) for (const y of [0, height - 1]) {
+    const k = y * width + x;
+    if (below(k) && !open[k]) { open[k] = 1; queue.push(k); }
+  }
+  for (let y = 0; y < height; y++) for (const x of [0, width - 1]) {
+    const k = y * width + x;
+    if (below(k) && !open[k]) { open[k] = 1; queue.push(k); }
+  }
+  while (queue.length) {
+    const k = queue.pop();
+    const x = k % width;
+    for (const j of [x > 0 ? k - 1 : -1, x < width - 1 ? k + 1 : -1, k - width, k + width]) {
+      if (j >= 0 && j < cur.length && !open[j] && below(j)) { open[j] = 1; queue.push(j); }
+    }
+  }
+  let walled = null;
+  for (let k = 0; k < cur.length; k++) {
+    if (open[k] || cur[k] >= ceiling) continue;
+    walled ??= Float32Array.from(cur);
+    walled[k] = ceiling;
+  }
+  if (walled) cur = walled;
   return cur;
 }
 
