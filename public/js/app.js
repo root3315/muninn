@@ -1859,9 +1859,19 @@ function whoSoFar(m) {
   return m.who?.state === 'asking' ? m.who.partial ?? null : null;
 }
 
+/**
+ * The same, for a word drawn on the picture: only once both catalogues that
+ * know how stars move have spoken, since before then a fast cold star can
+ * carry its neighbour's name.
+ */
+function whoSettled(m) {
+  const r = whoSoFar(m);
+  return r && !r.pending?.some((k) => k === 'gaia' || k === 'catwise') ? r : null;
+}
+
 function tagOf(m) {
   if (m.known) return m.known;
-  const r = whoSoFar(m);
+  const r = whoSettled(m);
   if (r?.simbad) return shortName(r.simbad.name);
   if (r?.vsx) return r.vsx.name;
   if (r?.gaia && Number.isFinite(r.gaia.mag)) return `G ${fmt(r.gaia.mag, 1)}ᵐ`;
@@ -1992,7 +2002,7 @@ function whoLines(who, kind) {
     const dot = document.createElement('span');
     dot.className = 'mark__asking-dot';
     dot.setAttribute('aria-hidden', 'true');
-    const out = who.partial?.pending ?? [];
+    const out = who.partial?.asking ?? [];
     const so = who.partial ? answerLines(who.partial, kind) : [];
     const text = so.length && out.length
       ? t('mark.whoStill', { list: out.map((k) => CATALOGUE_NAMES[k]).join(', ') })

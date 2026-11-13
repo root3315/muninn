@@ -10,8 +10,10 @@ const json = (body) => ({ ok: true, status: 200, headers: { get: () => 'applicat
  * delay, SIMBAD names whatever sits at the circle it is asked about, and
  * VizieR is down, as CDS was.
  */
-function archives({ gaiaRows, catwiseMs, simbadAt }) {
+function archives({ gaiaRows, catwiseMs, simbadAt, calls = {} }) {
   return async (url) => {
+    const kind = String(url).includes('sim-tap') ? 'simbad' : String(url).match(/cat=(\w+)/)?.[1] ?? 'other';
+    calls[kind] = (calls[kind] ?? 0) + 1;
     const u = String(url);
     if (u.startsWith('api/tap?cat=gaia')) { await sleep(30); return json({ ok: true, rows: gaiaRows }); }
     if (u.startsWith('api/tap?cat=catwise')) { await sleep(catwiseMs); return json({ ok: true, rows: [] }); }
@@ -58,4 +60,23 @@ test('a fast star never shows the name at its present-day spot', async () => {
   assert.ok(updates.every((u) => u.simbad?.name !== 'Neighbour'));
   assert.equal(result.simbad.name, 'Fast star');
   assert.ok(result.moved);
+});
+
+test('a still star a second off its Gaia position is asked about once', async () => {
+  const calls = {};
+  const updates = [];
+  const result = await withArchives(archives({
+    gaiaRows: [{ Source: '3', RA_ICRS: String(180 + 1 / 3600), DE_ICRS: '0', Gmag: '9', pmRA: '5', pmDE: '5' }],
+    catwiseMs: 20,
+    simbadAt: () => 'HD 3',
+    calls,
+  }), () => identifySource({ ra: 180, dec: 0, epoch: 2026 }, { onUpdate: (u) => updates.push(u) }));
+
+  assert.equal(result.simbad.name, 'HD 3');
+  // One question, sent to both SIMBAD mirrors.
+  assert.equal(calls.simbad, 2);
+  assert.equal(calls.twomass, 1);
+  // SIMBAD answered before Gaia: held back, but no longer said to be asked.
+  assert.ok(updates.some((u) => u.pending.includes('simbad') && !u.asking.includes('simbad') && u.asking.includes('gaia')));
+  assert.equal(result.asking, undefined);
 });

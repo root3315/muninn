@@ -622,7 +622,9 @@ export function askedAt(anchor, ra, dec, { at, spread }, base) {
  * matched to whatever faint thing sat at today's position in a 1999 catalogue.
  * The other catalogues are asked at the marked spot straight away, which is
  * where nearly every star still is; what they say is held back until Gaia has
- * answered, so a fast star never shows a neighbour's name for a moment.
+ * answered, so a star Gaia sees moving never shows a neighbour's name. A cold
+ * brown dwarf only CatWISE sees moving can, until CatWISE answers; `pending`
+ * still names CatWISE then, so nothing final is drawn from it.
  * Asked one after another, SIMBAD's sub-second answer waited on CatWISE's
  * twenty.
  *
@@ -631,7 +633,8 @@ export function askedAt(anchor, ra, dec, { at, spread }, base) {
  * on its own: one service down leaves the others standing, and says so.
  *
  * `onUpdate` gets the answers so far, in the shape the result has, with
- * `pending` naming the catalogues still out.
+ * `pending` naming the catalogues not yet shown and `asking` the questions
+ * still out.
  */
 export async function identifySource({ ra, dec, epoch = 2026 }, { signal, onUpdate } = {}) {
   const answers = {};
@@ -640,7 +643,7 @@ export async function identifySource({ ra, dec, epoch = 2026 }, { signal, onUpda
   let gaiaAnswered = false;
 
   const snapshot = () => {
-    const out = { failed: [], pending: [] };
+    const out = { failed: [], pending: [], asking: IDENTIFY_KEYS.filter((k) => !answers[k]) };
     for (const key of IDENTIFY_KEYS) {
       const answer = gaiaAnswered || !(key in FIXED_EPOCH) ? answers[key] : null;
       out[key] = answer?.ok ? answer.value : null;
@@ -651,16 +654,23 @@ export async function identifySource({ ra, dec, epoch = 2026 }, { signal, onUpda
     out.moved = anchor ? { epoch } : null;
     return out;
   };
-  const publish = () => onUpdate?.(snapshot());
+  const publish = () => {
+    // The page's trouble drawing an answer is not the catalogues' failure.
+    try { onUpdate?.(snapshot()); } catch { /* the final answer still comes */ }
+  };
 
   const askFixed = (key) => {
     const spec = FIXED_EPOCH[key];
     const at = askedAt(anchor, ra, dec, EPOCHS[spec.epoch], spec.arcsec);
     if (runs[key] && sameQuestion(runs[key].at, at)) return;
+    // The old question is moot: let go of its place in the relay's queue.
+    runs[key]?.stop.abort();
     delete answers[key];
-    const run = { at };
+    const stop = new AbortController();
+    const run = { at, stop };
     runs[key] = run;
-    run.done = settled(spec.ask(at.ra, at.dec, signal, at.arcsec)).then((answer) => {
+    const runSignal = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal;
+    run.done = settled(spec.ask(at.ra, at.dec, runSignal, at.arcsec)).then((answer) => {
       if (runs[key] !== run) return;
       answers[key] = answer;
       publish();
@@ -685,6 +695,7 @@ export async function identifySource({ ra, dec, epoch = 2026 }, { signal, onUpda
   const out = snapshot();
   if (out.failed.length === IDENTIFY_KEYS.length) throw new Error('No catalogue answered');
   delete out.pending;
+  delete out.asking;
   return out;
 }
 
@@ -698,8 +709,13 @@ const FIXED_EPOCH = {
   vsx: { epoch: 'simbad', arcsec: 10, ask: askVsx },
 };
 
-/** Two circles closer than this, in centre and in radius, ask the same thing. */
-const SAME_QUESTION_ARCSEC = 0.5;
+/**
+ * Two circles closer than this, in centre and in radius, ask the same thing:
+ * a third of a SPHEREx pixel, inside what the mark's own centre is known to.
+ * Any tighter, and the gap between a still star's Gaia position and the
+ * centre measured on the picture had every catalogue asked twice.
+ */
+const SAME_QUESTION_ARCSEC = 2;
 
 const sameQuestion = (a, b) => arcsecBetween(a.ra, a.dec, b.ra, b.dec) <= SAME_QUESTION_ARCSEC
   && Math.abs(a.arcsec - b.arcsec) <= SAME_QUESTION_ARCSEC;
