@@ -139,28 +139,44 @@ Keyboard: <kbd>Space</kbd> play/pause, <kbd>←</kbd> <kbd>→</kbd> step betwee
 
 The challenge names five fields to test a tool like this on. Each opens in one press
 from the line *Challenge targets* under the search, or by URL, for example
-`/#ra=133.7951&dec=-7.2451&fov=0.3&band=D6`. Their frame indexes ship with the
-page, like the original five.
+`/#ra=133.7595&dec=-7.2422&fov=0.3&band=D6`. Their frame indexes ship with the
+page, like the original five. A field opened this way, or by a name typed into the
+search, marks its target on the plate with a thin ring and its name, carried by the
+catalogue proper motion to the date of each visit, so the dot that is WISE 0855 is the
+one in the ring.
+
+The fast movers are centred where they were at the mean date of their SPHEREx visits.
+For WISE 0855−0714 that is 2.1′ west of the challenge's 08h55m10.83s −07°14′42.5″,
+which is its WISE designation, a position of about 2010.6: it was found by Luhman (2014)
+in multi-epoch WISE/NEOWISE data, and the position and motion used here,
+(−8124, +673) mas/yr at epoch 2000, are Kirkpatrick et al. (2021). Barnard's Star and
+ε Indi B are carried from Gaia DR3.
 
 | target | why it is a test | what to do in Muninn | archive, at bake time |
 | --- | --- | --- | --- |
-| Barnard's Star | fastest proper motion in the sky, 10.3″/yr | blink; mark the star and read the verdict | 10 D2 visits over 212 days |
-| ε Indi B | a pair of brown dwarfs beside their star, ε Indi A | blink in D2, then D6 | 22 D2 visits over 371 days |
+| Barnard's Star | fastest proper motion in the sky, 10.4″/yr | blink; mark the star and read the verdict | 17 D2 visits over 397 days |
+| ε Indi B | a pair of brown dwarfs beside their star, ε Indi A | blink in D2, then D6 | 29 D2 visits over 526 days |
 | WISE 0855−0714 | the coldest known brown dwarf, 8.1″/yr | opens in D6, the only band it is bright in. At W2 ≈ 13.9 (about 17.2 AB) it sits below the one-visit limit in D6 (16.7 AB): a test of the Stack, not of a single frame | 17 D6 visits over 370 days |
-| RW Aurigae | a young, irregular variable star | switch to shared scaling and blink | 10 D2 visits over 182 days |
-| R Draconis | a Mira variable near the north ecliptic pole | shared scaling; step season to season | 63 D3 visits over 392 days |
+| RW Aurigae | a young, irregular variable star | switch to shared scaling and blink | 16 D2 visits over 372 days |
+| R Draconis | a Mira variable near the north ecliptic pole | shared scaling; step season to season | 55 D3 visits over 414 days (index capped) |
 
 For the two variables, a mark reports an AB magnitude per visit, summed over a 3×3-pixel
 aperture (a steady 12th-magnitude star in the Atala field holds within 0.3 mag over ten
 visits). What it cannot do is hold the wavelength still: each visit puts the source at a
 different wavelength inside the band. A Mira's swing of several magnitudes shows through
-that; a few tenths do not, and the mark says so.
+that; a few tenths do not, and the mark says so. Both variables are bright enough to
+saturate in their opening bands, though, and there a mark reads *saturated* and quotes
+no magnitude rather than a wrong one.
 
 What the motion test can and cannot show is stated in *What this can and cannot find*
 below: over a baseline of about a year, a star has to move more than one 6.15″ detector
-pixel to be seen to move. Over the 212 days of its baked D2 visits Barnard's Star covers
-6.0″, a hair under one pixel, so a mark on it reads *fixed*: an honest answer, and the
-reason the threshold is stated. It crosses the pixel once the baseline passes 218 days.
+pixel to be seen to move. Barnard's Star would, by 11.3″ over its 397 days of D2 visits,
+but at J ≈ 5 it saturates the detector in every one of them: its core runs past the well
+(the `OVERFLOW` flag) and the pipeline blanks it. A mark on it reads *saturated*, with no
+brightness and no motion quoted, and states the catalogue motion against the pixel
+instead; R Draconis and RW Aurigae saturate in their opening bands too. The season link
+calls a saturated source, or one still in place half a year later, a star and offers no
+candidate for it.
 
 ### NASA data and services used
 
@@ -171,7 +187,7 @@ reason the threshold is stated. It crosses the pixel once the baseline passes 21
 | SPHEREx `FLAGS` plane | the same files | masking cosmic-ray hits and bad pixels before anything is measured; the caption of every frame says how many pixels that was |
 | AllWISE Atlas images, W1 and W2 | NASA WISE, through IRSA SIA (`wise_allwise`) and an IBE cutout, relayed by `/api/wise` | the field as WISE saw it in 2010–2011, resampled onto the same north-up grid and shown as B of the wipe; a star that moved in fifteen years sits on either side of the divider at different places. The idea is WiseView's, the blink tool the challenge names as a model |
 | AllWISE W1/W2 | NASA WISE, through IRSA TAP (`allwise_p3as_psd`), raced against CDS VizieR | identifying a marked source at 3.4 and 4.6 µm; an overlay of AllWISE positions on the plate (epoch about 2010.5, not moved) |
-| CatWISE2020 | NASA WISE and NEOWISE, through IRSA TAP (`catwise_2020`) | whether a marked source moves: a proper motion from ten years of WISE, said only at five times its error. The catalogue the coldest brown dwarfs, WISE 0855−0714 among them, were found in |
+| CatWISE2020 | NASA WISE and NEOWISE, through IRSA TAP (`catwise_2020`) | whether a marked source moves: a proper motion from ten years of WISE, said only at five times its error. It measures the coldest brown dwarfs Gaia cannot see; WISE 0855−0714 itself was found by Luhman (2014) in WISE/NEOWISE multi-epoch data, and CatWISE2020 splits it into several short-baseline entries |
 | 2MASS | NASA/IPAC 2MASS Point Source Catalog, through IRSA TAP (`fp_psc`), raced against CDS VizieR | J, H and K of a marked source, the near infrared SPHEREx works in |
 | Gaia DR3 | ESA Gaia, through IRSA TAP (`gaia_dr3_source`), raced against CDS VizieR | identifying a faint marked star, and whether Gaia saw it vary; an overlay of Gaia positions on the plate, carried by proper motion from J2016.0 to the date of the visit |
 | Known solar-system objects | NASA/JPL Small-Body Identification (`sb_ident`), merged with SkyBoT (IMCCE) | naming asteroids and comets at the moment of each exposure; either service alone is enough |
@@ -257,7 +273,9 @@ The public AWS Open Data mirror `nasa-irsa-spherex` answers HTTP Range requests 
    persistence — before anything is resampled or measured. That doubles the bytes, and it
    is the difference between a search and a cosmic-ray collection (see the Atala field
    below). Bright-star saturation, `OUTLIER` and `SOURCE` are left alone, because
-   real sources carry them too.
+   real sources carry them too; `OVERFLOW` is kept beside the pixels instead, so a
+   measurement on a saturated core says *saturated* rather than quoting a brightness or a
+   position, and the picture shows that core white rather than as a dark dot.
 
 A ten-visit field costs a few tens of megabytes of the ~680 MB those files occupy at the
 archive. The page prints the exact number as you use it.
@@ -465,7 +483,8 @@ What is left is a real search rather than a consolation prize:
 
 And what it will not find: **brown dwarfs and nearby stars by their motion**, with a few
 exceptions. A star has to cross a 6.15″ pixel over the ~1.2-year baseline to be seen to
-move, which takes a proper motion above about 5″ a year. Barnard's star (10.3″/yr) and
+move, which takes a proper motion above about 5″ a year. Barnard's star (10.4″/yr, though
+saturated in SPHEREx, see above) and
 the coldest known brown dwarf, WISE 0855−0714 (8.1″/yr), qualify; a typical nearby brown
 dwarf moves 0.1–1″ a year and does not. Its parallax, under one arcsecond, does not
 show either.
