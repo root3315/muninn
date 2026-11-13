@@ -243,3 +243,35 @@ test('a brighter source gets a larger mark, within bounds', () => {
   assert.equal(markRadius(8.2, 17), 7);
   assert.ok(markRadius(14, 17) > markRadius(16, 17));
 });
+
+test('MAST Gaia rows keep the exact source id and are cut like the ADQL', async () => {
+  const { mastGaiaRows } = await import('../public/js/overlay.js');
+  const data = [
+    { designation: 'Gaia DR3 4472832130942575872', source_id: 4472832130942576000, ra: 269.4485, dec: 4.7394, phot_g_mean_mag: 8.19, pmra: -801.55, pmdec: 10362.39 },
+    { designation: 'Gaia DR3 1', source_id: 1, ra: 269.45, dec: 4.74, phot_g_mean_mag: 19.5 },
+    { designation: 'Gaia DR3 2', source_id: 2, ra: 269.45, dec: 4.74, phot_g_mean_mag: 12.0 },
+    { designation: 'Gaia DR3 3', source_id: 3, ra: 269.45, dec: 4.74, phot_g_mean_mag: null },
+  ];
+  const rows = mastGaiaRows(data, { limit: 15, top: 5 });
+  assert.deepEqual(rows.map((r) => r.Source), ['4472832130942575872', '2']);
+  assert.equal(rows[0].pmDE, 10362.39);
+  assert.equal(mastGaiaRows(data, { limit: null, top: 1 }).length, 1);
+});
+
+test('a fast star is matched at the visit date, and the other catalogues are asked where it was', async () => {
+  const { motionAnchor, askedAt } = await import('../public/js/catalog.js');
+  // Barnard's Star in Gaia DR3 (J2016.0).
+  const gaia = { ra: 269.44850252544, dec: 4.73942005111, pmRA: -801.551, pmDE: 10362.394, from: 2016 };
+  const anchor = motionAnchor(gaia, null);
+  // 2MASS saw it around 1999.5: 171″ south of its 2016 place.
+  const tm = askedAt(anchor, 0, 0, { at: 1999.5, spread: 2 }, 6);
+  assert.ok(Math.abs((tm.dec - gaia.dec) * 3600 + 10.362394 * 16.5) < 0.5, `dec ${tm.dec}`);
+  assert.ok(tm.arcsec > 26 && tm.arcsec < 28, `radius ${tm.arcsec}`);
+  // No anchor: the marked spot itself, a pixel wide.
+  assert.deepEqual(askedAt(null, 10, 20, { at: 2000, spread: 0 }, 6), { ra: 10, dec: 20, arcsec: 6 });
+  // A still faint Gaia star in the pixel does not outrank a CatWISE brown dwarf's motion.
+  const still = { ra: 133.79, dec: -7.24, pmRA: 2, pmDE: -3, from: 2016 };
+  const dwarf = { ra: 133.7951, dec: -7.2452, pmRA: -8100, pmDE: 680, pm: 8.1, from: 2015.4 };
+  assert.equal(motionAnchor(still, dwarf).pmRA, -8100);
+  assert.equal(motionAnchor(still, null).pmRA, 2);
+});

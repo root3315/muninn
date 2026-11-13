@@ -10,13 +10,13 @@ from the archive as you watch.
 
 Three things it shows on real data:
 
-- **It finds and names a mover.** On 25 Dec 2025 one dot appears in the Atala field at SNR 533 and in
+- **It finds and names a mover.** On 25 Dec 2025 one dot appears in the Atala field at SNR 374 and in
   no other visit. SkyBoT names it at that exposure's own timestamp: asteroid (152) Atala.
-- **It refuses a false discovery.** A second "flash" on 6 Jul 2025 (SNR 192) was a single pixel the
+- **It refuses a false discovery.** A second "flash" on 6 Jul 2025 (SNR 140) was a single pixel the
   SPHEREx pipeline had already flagged as a cosmic ray. Muninn reads the `FLAGS` plane and masks it.
-- **It measures how far SPHEREx is from Planet Nine.** 17.60 AB per visit, from delivered detector
-  pixels; the prediction is V 22–25. That is 1.5–4.5 mag short even with 200 visits added, and the
-  page says so.
+- **It measures how far SPHEREx is from Planet Nine.** 17.61 AB per visit, from delivered detector
+  pixels; the prediction is V 22.6–24.3. That is 5.0–6.7 mag short per visit, and still 2.1–3.8 mag
+  short with 200 visits coadded, and the page says so.
 
 Against the challenge: all five named test targets open in one press · WISE and Gaia identify a
 marked source by catalogue, and their catalogue positions can be overlaid on the plate, Gaia's
@@ -52,7 +52,7 @@ IRSA's frame index, IRSA's catalogue service (TAP) and JPL's small-body identifi
 Image data never passes through it.
 
 ```bash
-npm test                # 65 offline tests: a synthetic FITS through the whole pipeline, and more
+npm test                # 79 offline tests: a synthetic FITS through the whole pipeline, and more
 npm run bake            # refresh the pre-resolved opening fields (optional)
 npm run probe           # check the WCS round-trip against a live SPHEREx header
 node tools/verify-mover.mjs 13.4194 3.8459 0.15   # the photometry check below
@@ -175,6 +175,19 @@ reason the threshold is stated. It crosses the pixel once the baseline passes 21
 | 2MASS | NASA/IPAC 2MASS Point Source Catalog, through IRSA TAP (`fp_psc`), raced against CDS VizieR | J, H and K of a marked source, the near infrared SPHEREx works in |
 | Gaia DR3 | ESA Gaia, through IRSA TAP (`gaia_dr3_source`), raced against CDS VizieR | identifying a faint marked star, and whether Gaia saw it vary; an overlay of Gaia positions on the plate, carried by proper motion from J2016.0 to the date of the visit |
 | Known solar-system objects | NASA/JPL Small-Body Identification (`sb_ident`), merged with SkyBoT (IMCCE) | naming asteroids and comets at the moment of each exposure; either service alone is enough |
+| Gaia DR3, one marked star | NASA MAST (STScI), the Gaia archive the challenge's Resources tab names, through `/api/tap` | what a marked star is, in one or two seconds; IRSA's TAP (ten to fifty seconds) stands behind it |
+| Other telescopes of the field | Canadian Astronomy Data Centre, CAOM index (Argus TAP), through `/api/archives` | how many science observations HST, JWST, TESS, Chandra, Gemini, CFHT, JCMT, SDSS, VLASS and the CSA's NEOSSat hold of the field, and over which years; Barnard's Star, for one, has 572 NEOSSat frames from 2019 |
+
+### The challenge's Resources tab, and what became of each
+
+| resource | how Muninn uses it |
+| --- | --- |
+| NASA/IPAC IRSA, SPHEREx | every pixel (DR1 and QR3 Level-2 images), the frame index, the FLAGS plane; also AllWISE, CatWISE2020, 2MASS and Gaia DR3 catalogues and AllWISE Atlas images. IRSA's SPHEREx cutout service was measured and not used: 4 MB and 13–21 s a frame, against 1–3 MB in a few seconds by byte range from the S3 mirror |
+| SPHEREx Tutorial Notebooks | the reference for the DR1 file layout: the IMAGE, FLAGS (Rice-compressed from DR1 on) and WCS-WAVE extensions read in `stamp.js` |
+| WiseView | the model for the wipe between a SPHEREx visit and the AllWISE picture of the same field |
+| Gaia mission data (DR3) | Gaia DR3 from MAST for a marked star, and from IRSA or VizieR for the overlay, carried by proper motion to the date of each visit |
+| CADC (CSA partner) | the "In other archives" panel; NEOSSat observations of a field are counted there |
+| NEOSSat pages, tutorial and dataset | reached through CADC, where the NEOSSat observations are indexed |
 
 ### When a new SPHEREx release lands
 
@@ -339,10 +352,13 @@ because the first version tripped over them:
   ranks a candidate only past three (18.45″). That rejected a second false
   candidate that had crept in at 17.7″ of total motion.
 
-What survives is worth stating precisely. Over a 369-day baseline the astrometry
-reaches 0.002″ per hour, and Planet X needs 0.18–0.35″, so precision is not the
-obstacle. Two things are. **The brightness is out of reach** — 17.60 AB per
-visit against a prediction of V 22–25. And the tracker as built measures each
+What survives is worth stating precisely, and it is a limit, not a precision. The
+three-pixel floor over the whole 369-day baseline is 18.45″, or 0.002″ an hour; inside
+one season of about eleven days it is 18.45″ in 264 hours, 0.07″ an hour. SPHEREx looks
+near quadrature, where a body at 400–800 AU drifts by roughly 0.006–0.02″ an hour, so
+**within a season the motion test is blind at Planet X distances**: such a body would
+read as fixed. Across a year it would move, but **the brightness is out of reach**
+anyway — 17.61 AB per visit against a prediction of V 22.6–24.3. And the tracker as built measures each
 place in a fixed box about ±12″ across, while a body at 400–800 AU shifts by
 8–17′ between SPHEREx's two visits a year: it follows a mover within one season,
 not across seasons. Linking the seasons at a trial distance is the next step.
@@ -360,22 +376,28 @@ grid, which bilinear interpolation smooths, and came out about 0.4 mag too deep.
 
 | | 5σ point source |
 | --- | --- |
-| one visit | **17.60 AB** (16.68 in D6 to 18.04 in D4) |
-| 10 visits, if coadded | 18.85 AB |
-| 100 visits | 20.10 AB |
-| 200 visits, deep field | 20.47 AB |
+| one visit | **17.61 AB** (16.67 in D6 to 18.03 in D4) |
+| 10 visits, if coadded (√N) | 18.86 AB |
+| 100 visits (√N) | 20.11 AB |
+| 200 visits (√N) | 20.48 AB |
 
-Planet Nine is predicted at V ≈ 22–25. The range is from Linder & Mordasini (2016,
+These are measured in one field, Atala's (D2, ecliptic, the first three visits of each
+band), inside the 3×3-pixel aperture with no correction for the light outside it (worth
+0.1–0.4 mag, more in D6); the coadded rows are the √N extrapolation of that one-visit noise,
+not measurements. A polar field has less zodiacal light and should go somewhat deeper.
+
+Planet Nine is predicted at V ≈ 22.6–24.3. The range is from Linder & Mordasini (2016,
 A&A 589, A134), who model the planet as a small Uranus and give, near aphelion, V = 24.3,
 23.7, 23.3 and 22.6 for 5, 10, 20 and 50 Earth masses in reflected light. It is the faint
 case: the same paper puts a 10-Earth-mass planet at 700 AU at V = 21.7, and Brown &
 Batygin (2021, AJ 162, 219) argue it may be closer and brighter than first thought. Even
-at V = 21.7 the deepest stack here is more than a magnitude short. Even coadding two hundred deep-field
-visits leaves us short by 1.5 magnitudes at the bright end of that range — a
-factor of 4 in flux — and 4.5 magnitudes at the faint end, a factor of 65. The
-prediction is in V and SPHEREx works at 0.75–5 µm: for a grey, sunlike reflector
-the two are within a few tenths of a magnitude, and a cold, methane-rich body
-reflects less in the infrared, which only widens the gap.
+at V = 21.7 two hundred coadded visits would be 1.2 magnitudes short. Against the aphelion
+range, two hundred visits leave us short by 2.1 magnitudes at the bright end — a factor of
+7 in flux — and 3.8 at the faint end, a factor of 33; one visit, by 5.0 to 6.7.
+The prediction is in V and SPHEREx works at 0.75–5 µm. For a sunlike reflector V − AB is
+about +0.3 at 1.2 µm (D1–D2) and near zero at 1.6 µm (D3), so the comparison above, made
+where SPHEREx is deepest, is a fair best case; at 3.4 and 4.6 µm the same body is a
+magnitude or two fainter in AB than in V, and a cold, methane-rich one fainter still.
 
 **So this tool does not find Planet Nine, and says so on screen.** Every field it
 opens reports the depth its search works at — one visit, since the automatic search
@@ -501,31 +523,36 @@ Field: **RA 13.4194, Dec +3.8459**, band D2 (1.10–1.65 µm). Fifteen D2 visits
 Quick Release 2 frames. Signal-to-noise at the exact field centre, visit by visit:
 
 ```
-2025-07-06T11:41:24     1.6   ██
-2025-07-07T20:18:06     3.1   ███
-2025-07-09T03:23:15     0.8   █
-2025-07-19T11:04:07     2.4   ██
-2025-12-24T11:12:16     3.5   ████
-2025-12-25T16:33:36   533.1   ████████████████████████████████████████
-2026-01-01T01:44:29     2.9   ███
-2026-01-01T08:21:29     1.4   █
-2026-01-03T05:59:11     3.8   ████
-2026-01-04T14:32:35     1.2   █
-2026-07-03T09:52:56     3.0   ███
-2026-07-03T19:44:45     2.3   ██
-2026-07-04T18:27:55     2.1   ██
-2026-07-05T05:58:03     2.1   ██
-2026-07-10T06:30:49     1.4   █
+2025-07-06T11:41:24     1.2   █
+2025-07-07T20:18:06     2.0   ██
+2025-07-09T03:23:15     0.5   █
+2025-07-19T11:04:07     1.6   ██
+2025-12-24T11:12:16     2.2   ██
+2025-12-25T16:33:36   374.3   ████████████████████████████████████████
+2026-01-01T01:44:29     1.5   ██
+2026-01-01T08:21:29     0.9   █
+2026-01-03T05:59:11     2.4   ██
+2026-01-04T14:32:35     0.8   █
+2026-07-03T09:52:56     1.9   ██
+2026-07-03T19:44:45     1.4   █
+2026-07-04T18:27:55     1.3   █
+2026-07-05T05:58:03     1.2   █
+2026-07-10T06:30:49     0.9   █
 ```
+
+The noise here is never taken below the detector's own: the ring around the centre is
+read on the resampled grid, whose interpolation smooths it to about two thirds of the
+detector-pixel noise, and an earlier version of this table quoted against that and read
+half as high again (SNR 533 for Atala). The page measures a mark the same way.
 
 One spike. Fourteen visits of pure background.
 
-**25 Dec 2025 — SNR 533.** SkyBoT places **(152) Atala**, a main-belt asteroid at V = 13.81,
+**25 Dec 2025 — SNR 374.** SkyBoT places **(152) Atala**, a main-belt asteroid at V = 13.81,
 2.3″ from the field centre at that exposure's timestamp. Muninn rings it and
 names it, live, from the ephemeris.
 
 **6 Jul 2025 — the spike that was not there.** Before Muninn read the `FLAGS` plane,
-this visit showed SNR 192 at the same spot (206 in QR2), and nothing in the catalogue
+this visit showed SNR 140 at the same spot, and nothing in the catalogue
 explained it. It was one detector pixel at eleven times its neighbours — and the pipeline
 had already said what it was: `FLAGS = 0x45` in DR1, `TRANSIENT` + `SUR_ERROR` + `NONFUNC`
 (QR2 had `0x80005`, with `OUTLIER` for the last), a cosmic-ray jump caught during the
@@ -668,8 +695,8 @@ Muninn складывает заходы друг на друга и показ�
 касательную плоскость с севером вверх.
 
 Стартовое поле выбрано не наугад: 25 декабря 2025 года в его центре стоит астероид
-**(152) Atala** (V = 13.8) — SNR 533 против фона 1–4 во всех остальных заходах. Раньше
-6 июля в той же точке была «вспышка» SNR 192 без объяснения в каталогах. Это один пиксель,
+**(152) Atala** (V = 13.8) — SNR 374 против фона 0,5–2,4 во всех остальных заходах. Раньше
+6 июля в той же точке была «вспышка» SNR 140 без объяснения в каталогах. Это один пиксель,
 который пайплайн SPHEREx сам пометил как попадание космической частицы (`FLAGS = 0x45` в DR1,
 `TRANSIENT`). С DR1 флаги хранятся в сжатии Rice, Muninn распаковывает их в браузере. Теперь Muninn читает эти флаги и маскирует такие пиксели до любых измерений.
 

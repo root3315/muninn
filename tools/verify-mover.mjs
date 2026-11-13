@@ -27,8 +27,14 @@ const visits = groupVisits(frames, { ra: RA, dec: DEC, band: 'D2' });
 const grid = new TangentGrid(RA, DEC, FOV, SIZE);
 const centre = Math.floor(SIZE / 2);
 
-/** Peak minus local background, in units of the local noise. */
-function centralSNR(data) {
+/**
+ * Peak minus local background, in units of the noise. The noise is never
+ * taken below the detector's own: the ring is read on the resampled grid,
+ * whose interpolation smooths it to about two thirds of the detector-pixel
+ * noise, and quoting against that inflated every SNR by half again. The page
+ * measures a mark the same way (sky.js measure).
+ */
+function centralSNR(data, detectorSigma = 0) {
   const ring = [];
   for (let j = centre - 12; j <= centre + 12; j++) {
     for (let i = centre - 12; i <= centre + 12; i++) {
@@ -41,7 +47,7 @@ function centralSNR(data) {
   if (ring.length < 20) return null;
   ring.sort((a, b) => a - b);
   const bg = ring[Math.floor(ring.length / 2)];
-  const noise = Math.max(ring[Math.floor(ring.length * 0.84)] - bg, 1e-9);
+  const noise = Math.max(ring[Math.floor(ring.length * 0.84)] - bg, detectorSigma, 1e-9);
   let peak = -Infinity;
   for (let j = centre - 4; j <= centre + 4; j++) {
     for (let i = centre - 4; i <= centre + 4; i++) {
@@ -62,7 +68,7 @@ for (const v of visits) {
     stamp = await loadStamp(toS3(v.url), grid);
   } catch { continue; }
   if (!stamp) continue;
-  const s = centralSNR(stamp.data);
+  const s = centralSNR(stamp.data, stamp.meta?.detectorSigma ?? 0);
   if (!s) continue;
   results.push({ iso: v.iso, ...s });
   const bar = '█'.repeat(Math.max(0, Math.min(40, Math.round(s.snr))));

@@ -32,6 +32,7 @@ import { spectrumBlock } from './spectrum-view.js';
 import { trackCSV } from './export.js';
 import { SkyView, shortName } from './sky.js';
 import { loadWise, WISE_BANDS } from './wise.js';
+import { fieldArchives, CADC_SEARCH } from './archives.js';
 import {
   searchFrames, NoRelayError, UpstreamError, groupVisits, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, identifySource, fieldObjects, toS3, surveySources,
@@ -1030,7 +1031,7 @@ function drawDepthScale(svg, reached) {
     return el;
   };
   const title = t('depth.scale', {
-    mag: fmt(reached, 1), lo: fmt(PLANET_NINE_V.bright, 0), hi: fmt(PLANET_NINE_V.faint, 0),
+    mag: fmt(reached, 1), lo: fmt(PLANET_NINE_V.bright, 1), hi: fmt(PLANET_NINE_V.faint, 1),
   });
   add('title', {}, title);
   svg.setAttribute('aria-label', title);
@@ -1599,9 +1600,15 @@ function identifyMark(m) {
   // (359.999° and 0.001°) averages to itself and not to 180°.
   const ra0 = pts[0].ra;
   const meanRA = ra0 + pts.reduce((s, p) => s + deltaRA(p.ra, ra0), 0) / pts.length;
+  // The date the catalogues are compared at: the visits' own, on average,
+  // so a fast star is looked for where it was when SPHEREx saw it.
+  const dated = pts.filter((p) => Number.isFinite(p.mjd));
+  const mjd = dated.length ? dated.reduce((s, p) => s + p.mjd, 0) / dated.length
+    : sky.visits.reduce((s, v) => s + v.frame.mjd, 0) / Math.max(1, sky.visits.length);
   const at = {
     ra: ((meanRA % 360) + 360) % 360,
     dec: pts.reduce((s, p) => s + p.dec, 0) / pts.length,
+    epoch: Number.isFinite(mjd) && mjd > 0 ? 2000 + (mjd - 51544.5) / 365.25 : 2026,
   };
   const key = `${at.ra.toFixed(5)} ${at.dec.toFixed(5)}`;
   if (m.who?.key === key) return;
@@ -2296,6 +2303,8 @@ async function openField({ ra, dec, label = '', band = null }) {
   renderWhen();
   sky.setCatalog([]);
   resetSurveys();
+  archives = null;
+  renderArchives();
   showTip(null);
   skybot = { asking: new Set(), failed: new Set() };
   stackPlanned = [];
@@ -2424,6 +2433,7 @@ async function openField({ ra, dec, label = '', band = null }) {
   refreshKnownObjects();
   prefetchKnownObjects(ctrl.signal);
   loadFieldCatalog(ctrl.signal);
+  loadArchives(ctrl.signal);
   applySurvey();
 
   // The headline number of this whole approach: how little of the archive we touched.
@@ -3462,6 +3472,51 @@ function syncLambda() {
   }
 }
 
+/* ------------------------------------------------ the field in other archives */
+
+/** What CADC said about the open field: null, 'asking', 'failed' or a list. */
+let archives = null;
+
+async function loadArchives(signal) {
+  const at = { ra: state.ra, dec: state.dec };
+  archives = 'asking';
+  renderArchives();
+  try {
+    const list = await fieldArchives({ ...at, radiusDeg: Math.min(0.3, sky.grid.spanDeg / 2) }, { signal });
+    if (signal?.aborted || state.ra !== at.ra || state.dec !== at.dec) return;
+    archives = list;
+  } catch {
+    if (signal?.aborted) return;
+    archives = 'failed';
+  }
+  renderArchives();
+}
+
+/** Up to eight archives by size, each with its count and its years. */
+function renderArchives() {
+  const box = $('archives');
+  if (!box) return;
+  box.hidden = archives === null;
+  const list = Array.isArray(archives) ? archives : [];
+  $('archives-count').textContent = list.length ? String(list.length) : '';
+  $('archives-note').textContent = archives === 'asking' ? t('archives.asking')
+    : archives === 'failed' ? t('archives.failed')
+      : list.length ? t('archives.lede') : t('archives.none');
+  $('archives-list').replaceChildren(...list.slice(0, 8).map((a) => {
+    const row = document.createElement('div');
+    const dt = document.createElement('dt');
+    dt.textContent = a.name;
+    const dd = document.createElement('dd');
+    const years = a.from && a.to ? (a.from === a.to ? ` · ${a.from}` : ` · ${a.from}–${a.to}`) : '';
+    dd.textContent = `${fmt(a.n, 0)}${years}`;
+    row.append(dt, dd);
+    return row;
+  }));
+  const link = $('archives-link');
+  link.hidden = !list.length;
+  link.href = CADC_SEARCH;
+}
+
 /* ------------------------------------------------- AllWISE beside the frame */
 
 /** Where the AllWISE picture for the open field stands: asking, ok or failed. */
@@ -3496,7 +3551,7 @@ function chooseReference(band) {
       for (const radio of document.querySelectorAll('input[name="mode"]')) radio.checked = radio.value === 'wipe';
       applyMode('wipe');
     }
-    if (sky.ref?.bandNumber !== band && sky.visits.length) loadReference(state.abort?.signal);
+    if (sky.ref?.bandNumber !== band && sky.grid && state.ra != null) loadReference(state.abort?.signal);
   }
   fillSlots();
   $('mode-hint').textContent = modeHint(sky.mode);
@@ -3508,6 +3563,8 @@ async function loadReference(signal) {
   if (!band || !grid) return;
   referenceStatus = 'asking';
   sky.setReference(null);
+  // A new field's reset put B back on a visit; the choice still stands.
+  sky.setUseRef(true);
   $('mode-hint').textContent = modeHint(sky.mode);
   try {
     const ref = await loadWise(grid, band, { signal });
@@ -3516,7 +3573,7 @@ async function loadReference(signal) {
     sky.setReference({ ...ref, bandNumber: band });
     referenceStatus = 'ok';
   } catch {
-    if (signal?.aborted || sky.grid !== grid) return;
+    if (signal?.aborted || sky.grid !== grid || state.reference !== band) return;
     referenceStatus = 'failed';
   }
   $('mode-hint').textContent = modeHint(sky.mode);
@@ -3832,6 +3889,7 @@ function relabel() {
   $('cursor-hint').textContent = t(matchMedia('(pointer: coarse)').matches
     ? 'readout.hintTouch' : 'readout.hint');
   renderPresets();
+  renderArchives();
   // Where the sky in the entry screen comes from, with the other credits.
   const skyCredit = [
     state.skyLayers.stars && t('credit.stars'), state.skyLayers.deep && t('credit.deep'), t('gate.modelled'),

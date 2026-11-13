@@ -113,11 +113,16 @@ export async function loadStars(url = 'data/sky/stars.json') {
  *   glowTo   the faintest magnitude that gets a glow drawn under it
  *   spikeTo  the faintest that gets diffraction spikes
  */
+/** Whether the reader has asked for less motion; read each time, it can change. */
+const REDUCED = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 const TIERS = [
   { dpr: 2, haze: 9000, band: 8, glowTo: 5.0, spikeTo: 2.7 },
   { dpr: 1.6, haze: 6000, band: 10, glowTo: 4.4, spikeTo: 2.4 },
   { dpr: 1.3, haze: 3600, band: 13, glowTo: 3.6, spikeTo: 2.0 },
   { dpr: 1.0, haze: 2200, band: 18, glowTo: 2.6, spikeTo: 1.2 },
+  // A machine without a GPU worth the name: fewer, coarser pixels, still smooth.
+  { dpr: 0.75, haze: 1200, band: 24, glowTo: 2.0, spikeTo: 0.9 },
 ];
 
 /** What the device says about itself, before anything has been timed. */
@@ -302,6 +307,8 @@ export class Gate {
     this.buildHaze(this.quality.haze);
     this.cost = 0;
     this.slow = 0;
+    this.gap = 0;
+    this.late = 0;
     return true;
   }
 
@@ -977,7 +984,8 @@ export class Gate {
     const p = this.projectV(direction(s.ra, s.dec));
     if (!p) return;
     const { dpr } = this.box;
-    const age = (performance.now() - s.since) / 1000;
+    // With motion turned down there is no loop to animate it: drawn settled.
+    const age = this.running && !REDUCED() ? (performance.now() - s.since) / 1000 : 1;
     const settle = Math.min(1, age / 0.45);
     const ease = 1 - (1 - settle) ** 3;
     const breath = 0.5 + 0.5 * Math.sin(age * (2 * Math.PI / 2.8));
@@ -1347,6 +1355,29 @@ export class Gate {
         this.cam.dec = Math.max(-80, Math.min(80,
           this.cam.dec + g.nod * w * Math.cos(w * g.phase) * step));
         g.phase += step;
+      }
+
+      // What the screen actually got: the time between frames, which counts
+      // the painting the GPU (or a CPU standing in for one) does after the
+      // script has returned. Timing the script alone missed exactly the
+      // machines that needed a lighter sky: 20 ms of script, 110 ms of paint.
+      const moving = g.speed > 0.05 && !this.drag;
+      const gap = now - (this.lastFrame ?? now);
+      this.lastFrame = now;
+      if (moving && gap > 0 && gap < 250) {
+        this.gap = this.gap ? this.gap * 0.9 + gap * 0.1 : gap;
+        // Against the best this screen has managed, not against 60 Hz: a
+        // display or a battery saver capped at 30 frames is not a slow GPU,
+        // and stepping down there only blurs the sky.
+        this.bestGap = Math.min(this.bestGap ?? Infinity, this.gap);
+        // Below 25 frames a second is slow on any screen.
+        if (this.gap > 40 || this.gap > Math.max(25, this.bestGap * 1.6)) {
+          // Far behind steps down sooner: three seconds of judder is enough.
+          this.late += this.gap > 50 ? 3 : 1;
+          if (this.late > 90) this.stepDown();
+        } else if (this.late) {
+          this.late--;
+        }
       }
 
       const t0 = performance.now();
