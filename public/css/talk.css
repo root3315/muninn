@@ -570,7 +570,7 @@ a { color: inherit; }
   animation: grow 5200ms linear backwards;
 }
 .view {
-  position: relative; inline-size: 100%; aspect-ratio: 900 / 626; max-block-size: 58vh;
+  position: relative; inline-size: min(100%, calc(58vh * 900 / 626)); aspect-ratio: 900 / 626;
   border-radius: var(--radius-lg); overflow: hidden; background: var(--color-well);
 }
 .view img { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; object-fit: cover; opacity: 0; }
