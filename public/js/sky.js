@@ -18,7 +18,7 @@
  */
 
 import { DETECTOR_ARCSEC, magAB } from './depth.js';
-import { limitsFromSorted, sortedFinite, paint, paintDifference, rampFromToken, resolveColor } from './render.js';
+import { limitsFromSorted, limitsFromTable, quantileTable, sortedFinite, paint, paintDifference, rampFromToken, resolveColor } from './render.js';
 import { SECTOR_COLS, SECTOR_ROWS, sectorBounds } from './sectors.js';
 import { deltaRA } from './wcs.js';
 import { coadd } from './stack.js';
@@ -76,10 +76,11 @@ const GRID_STEPS = [1 / 240, 1 / 120, 1 / 60, 1 / 30, 1 / 12, 1 / 6, 0.5, 1];
 const BAR_STEPS = [5, 10, 15, 30, 60, 120, 300, 600, 1800];
 
 export class SkyView {
-  constructor(canvas, { onHover, onPick, onItem, onReferenceMoved } = {}) {
+  constructor(canvas, { onHover, onPick, onItem, onReferenceMoved, onRepainted } = {}) {
     this.canvas = canvas;
     /* Called when a catalogue-drawn reference is drawn again for another date. */
     this.onReferenceMoved = onReferenceMoved;
+    this.onRepainted = onRepainted;
     this.ctx = canvas.getContext('2d');
     this.onHover = onHover;
     this.onPick = onPick;
@@ -333,14 +334,15 @@ export class SkyView {
   }
 
   /**
-   * One visit's own black and white point, cut once per clip setting. The
-   * sorted pixels are kept, so a new clip is a lookup rather than a sort.
+   * One visit's own black and white point, cut once per clip setting. Its
+   * pixels are sorted once, into a table of percentiles, so a new clip is a
+   * lookup rather than a sort.
    */
   ownLimits(v) {
     const key = this.render.clip;
     if (v.cut?.key !== key) {
-      v.sorted ??= sortedFinite(v.stamp.data);
-      v.cut = { key, lim: limitsFromSorted(v.sorted, { loPercent: 5, hiPercent: key }) };
+      v.quantiles ??= quantileTable(sortedFinite(v.stamp.data));
+      v.cut = { key, lim: limitsFromTable(v.quantiles, { loPercent: 5, hiPercent: key }) };
     }
     return v.cut.lim;
   }
@@ -397,14 +399,38 @@ export class SkyView {
     return { lo: lows[Math.floor(lows.length / 2)], hi: highs[highs.length - 1] };
   }
 
+  /**
+   * A new cut, stretch or palette for every visit. The ones on screen are
+   * painted as they are drawn; the rest one at a time behind, so a step of
+   * the white-point slider costs one visit's paint and not sixty.
+   */
   repaintAll() {
+    clearTimeout(this.paintTimer);
     if (!this.visits.length) { this.draw(); return; }
-    const shared = this.render.shared ? this.sharedLimits() : null;
-    for (const v of this.visits) this.paintVisit(v, shared);
+    const job = { shared: this.render.shared ? this.sharedLimits() : null };
+    this.paintJob = job;
+    for (const v of this.visits) v.stale = true;
     if (this.ref) this.paintVisit(this.ref);
     this.diffCache = null;
     this.stackCache = null;
     this.draw();
+    const behind = () => {
+      if (this.paintJob !== job) return;
+      const v = this.visits.find((x) => x.stale);
+      if (!v) { this.draw(); this.onRepainted?.(); return; }
+      this.fresh(v);
+      this.paintTimer = setTimeout(behind, 0);
+    };
+    this.paintTimer = setTimeout(behind, 0);
+  }
+
+  /** A visit painted to the current cut, if the last repaint has not reached it yet. */
+  fresh(v) {
+    if (v?.stale) {
+      v.stale = false;
+      this.paintVisit(v, this.paintJob?.shared ?? null);
+    }
+    return v;
   }
 
   /**
@@ -482,7 +508,7 @@ export class SkyView {
       if (this.mode === 'difference') {
         const diff = this.differenceCanvas();
         if (diff) this.place(ctx, diff.canvas);
-        else if (this.visits[this.a]) this.place(ctx, this.visits[this.a].canvas);
+        else if (this.visits[this.a]) this.place(ctx, this.fresh(this.visits[this.a]).canvas);
       } else if (this.mode === 'stack') {
         const stack = this.stackCanvas();
         if (stack) this.place(ctx, stack.canvas);
@@ -490,18 +516,18 @@ export class SkyView {
         const a = this.visits[this.a];
         if (this.useRef) this.followReference(a);
         const b = (this.useRef && this.ref) || (this.visits[this.b] ?? a);
-        if (a) this.place(ctx, a.canvas);
+        if (a) this.place(ctx, this.fresh(a).canvas);
         const x = Math.round(this.cssW * this.wipe);
         ctx.save();
         ctx.beginPath();
         ctx.rect(x, 0, this.cssW - x, this.cssH);
         ctx.clip();
-        if (b) this.place(ctx, b.canvas);
+        if (b) this.place(ctx, this.fresh(b).canvas);
         ctx.restore();
         this.drawWipeHandle(ctx, x);
       } else {
         const v = this.current;
-        if (v) this.place(ctx, v.canvas);
+        if (v) this.place(ctx, this.fresh(v).canvas);
       }
     }
 
@@ -1282,10 +1308,9 @@ export class SkyView {
   sources(visit, { minSnr = 5 } = {}) {
     const { width: W, height: H, data } = visit.stamp;
     const sigma = visit.stamp.meta?.detectorSigma;
-    visit.sorted ??= sortedFinite(data);
-    const sorted = visit.sorted;
-    if (!(sigma > 0) || !sorted.length) return [];
-    const median = sorted[sorted.length >> 1];
+    visit.quantiles ??= quantileTable(sortedFinite(data));
+    if (!(sigma > 0) || !visit.quantiles.n) return [];
+    const median = visit.quantiles.at(50);
     // A little below the bar the measurement sets, since the local background
     // differs from the field's median; the measurement has the last word.
     const floor = median + 0.8 * minSnr * sigma;
