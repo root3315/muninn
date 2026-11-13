@@ -35,8 +35,9 @@ Three things it shows on real data:
 Against the challenge: all five named test targets open in one press · WISE and Gaia identify a
 marked source by catalogue, and their catalogue positions can be overlaid on the plate, Gaia's
 moved to the date of each visit · Gaia has no images, so the wipe can put a model drawn from its
-catalogue beside the frame, labelled as one · a marked source gets a spectrum on demand, one
-point per band at the wavelength the file gives for its detector pixel.
+catalogue beside the frame, labelled as one · a marked source gets a spectrum on demand from
+up to sixty exposures, each at the wavelength the file gives for its detector pixel, and a light curve
+at the wavelength seen most often, where the filter is not what changed.
 
 ---
 
@@ -508,10 +509,41 @@ What is left is a real search rather than a consolation prize:
   Checking the real observing schedule of one field: on 25 Dec 2025 SPHEREx took
   it in D2, D3, D5 and D6 — four bands the same day — and the best three-day
   window covers all six, 0.75–5.01 µm. D4 (2.40–3.85 µm) and D5 (3.81–4.43 µm)
-  straddle the 3 µm water-ice band. A mark now reads one exposure per band and
-  plots flux density against the wavelength each exposure saw the source at
-  (the file's `WCS-WAVE` table at its detector pixel): six points, not the full
-  102-channel spectrum, which needs every exposure of a visit rather than one.
+  straddle the 3 µm water-ice band. Behind a linear variable filter every
+  exposure sees a source at its own wavelength — the file's `WCS-WAVE` table at
+  its detector pixel — so a mark's spectrum is read from as many exposures as
+  there is time for, not one per band. First the wavelength of up to 160
+  exposures across D1–D6 is looked up (a header and the small table, ~70 KB
+  each, kept per file), then up to 60 are measured: every visit on the plate,
+  the wavelengths seen most often in full, the rest shared out between the
+  bands. Only about thirty detector rows around the mark are read from each
+  (~0.3 MB), and they go through the same aperture photometry and
+  detector-noise floor as the plate. Every point is drawn, coloured by band:
+  detections with 1σ bars, non-detections as 5σ limits, saturated exposures as
+  triangles along the top with no flux; a line joins the median detections in
+  bins of Δλ/λ = 4/R. The block says how many exposures went in and over how
+  many days, and puts a number on what those days can do to the shape.
+- **Brightness at one wavelength over time.** The same block finds the
+  wavelengths that the most exposures saw the source at, each window one
+  resolution element wide — the file's own bandwidth at that pixel, which
+  agrees with the published resolving power R = 39, 41, 41, 35, 112, 128 for
+  D1–D6 (Crill et al. 2020, Proc. SPIE 11443, 114430I) — and offers the best
+  three as chips. Within a window the filter is not what changed, so flux
+  against date there is a light curve. It states the peak-to-peak change in
+  AB magnitudes with its error (the two 1σ errors in quadrature) and calls it
+  a change past 3σ, or "steady within ±Y mag" where Y is half of whichever is
+  larger, the change or 3σ. A non-detection deeper than every detection turns
+  the change into a lower bound. A window saturated in most of its visits
+  gets no light curve, and says so. Two guards keep a steady star steady:
+  a detection centred more than a pixel from the rest is a neighbour caught
+  by the two-pixel search box, and a detection in a band where the source is
+  saturated in most exposures is at the edge of saturation; both are drawn
+  hollow and kept out of the line and the light curve. Tried live: R Draconis
+  and RW Aurigae are saturated in nearly every exposure, so neither gets a
+  light curve; a 2MASS star beside R Dra comes out steady within ±0.22 mag at
+  1.675 µm over five visits; (152) Atala, seen in one run, gives four D2 and
+  four D5 points six minutes apart, 22 mJy at 1.5 µm falling to 5 mJy at
+  4.3 µm; and an empty patch gives sixty 5σ limits of 0.2–0.7 mJy.
 
 And what it will not find: **brown dwarfs and nearby stars by their motion**, with a few
 exceptions. A star has to cross a 6.15″ pixel over the ~1.2-year baseline to be seen to
@@ -584,9 +616,11 @@ position compares across bands, brightness does not.
 ## Taking a measurement out
 
 A marked point can be saved as a table: "Save measurements (CSV)" in the mark's panel
-writes one row a visit, with the date, the exposure id, the band, the position found, the
-flux in mJy in a 3×3-pixel aperture (no aperture correction), the AB magnitude and the
-peak signal-to-noise. The field itself is in the page's address, so a link reproduces the
+writes one row an exposure — every visit on the plate, and every exposure its spectrum
+measured — with the date, the exposure id, the band, the wavelength and bandwidth at the
+source's detector pixel, the position found, the result (detection, limit or saturated), the
+flux and its 1σ in mJy in a 3×3-pixel aperture (no aperture correction) or the 5σ limit,
+the AB magnitude and the peak signal-to-noise. The field itself is in the page's address, so a link reproduces the
 view, and the plate can be saved as a PNG or the blink recorded as WebM.
 
 ## Does it actually work? The Atala field
@@ -676,11 +710,19 @@ of the image and read the verdict: one visit, named by SkyBoT as the asteroid.
 - **Brightness across bands is not comparable.** SPHEREx is a spectral survey with a linear
   variable filter; the wavelength at a given pixel depends on where it falls on the
   detector. The band filter and the per-band wavelength labels exist for this reason.
-- **The spectrum of a mark is six points from six exposures.** Each sits at the wavelength
-  read from that file's `WCS-WAVE` table, in a 3×3-pixel aperture with no aperture
-  correction, so part of a source's light is left out of every point. The detectors do not look
-  at the same sky at once: the exposures can be days apart, the block says how far, and a
-  mover absent from a band's nearest exposure is drawn as a 5σ upper limit.
+- **The spectrum of a mark is up to sixty exposures, not one simultaneous spectrum.** Each
+  point sits at the wavelength read from that file's `WCS-WAVE` table, in a 3×3-pixel aperture
+  with no aperture correction, so part of a source's light is left out of every point. For a
+  still source the exposures span the whole archive, over a year; the block says how long and,
+  where it can, how much the source changed at one wavelength over it. A mover is followed
+  along its fitted track over the dates it was measured; one seen in a single visit only in
+  that run's exposures, ten minutes either side. Reading 160 wavelengths and 60 spots takes
+  one to four minutes, shown as it goes.
+- **The light curve's errors are detector noise alone.** Undersampled 6.15″ pixels, no
+  aperture correction and a flux calibration that is taken as given all add scatter that
+  the error bars do not hold, so a "change" near 3σ is worth checking by eye on the chart.
+  With 60 exposures over roughly a hundred resolution elements a window rarely holds more than
+  five or six visits.
 - **Known-object marks are geocentric.** SPHEREx is in low-Earth orbit, about 7 000 km from
   the Earth's centre, which shifts a main-belt asteroid by 3–7″ — up to about one pixel,
   inside the two-pixel radius a SkyBoT match allows, but it would matter for anything closer.
