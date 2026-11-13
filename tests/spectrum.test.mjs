@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  BANDS, LIMIT_SIGMA, nearestExposures, parseWaveTable, wavelengthAt, placeInBand,
+  LIMIT_SIGMA, parseWaveTable, wavelengthAt, placeInBand,
   apertureMJy, fluxPoint, dateSpan, fluxAxis, fluxDigits,
 } from '../public/js/spectrum.js';
 import { magAB, limitAB } from '../public/js/depth.js';
@@ -41,25 +41,6 @@ function waveTable({ x, y, wave, width, name = 'WCS-WAVE' }) {
   }
   return buf;
 }
-
-const frame = (band, mjd, extra = {}) => ({ band, mjd, obsId: `${band}@${mjd}`, ...extra });
-
-test('nearestExposures: every band, nearest in time first', () => {
-  const frames = [
-    frame('D2', 100), frame('D2', 103.1), frame('D2', 90), frame('D2', 140),
-    frame('D5', 103.0), frame('D5', 99),
-    frame('D1', 60), frame('D4', NaN),
-  ];
-  const plan = nearestExposures(frames, 103);
-  assert.deepEqual(plan.map((p) => p.band), BANDS);
-  const of = (band, from = plan) => from.find((p) => p.band === band).frames.map((f) => f.mjd);
-  assert.deepEqual(of('D2'), [103.1, 100, 90], 'three nearest, in order');
-  assert.deepEqual(of('D5'), [103.0, 99]);
-  assert.deepEqual(of('D1'), [60], 'the only exposure there is, however far');
-  assert.deepEqual(of('D3'), [], 'a band with no frames is still a row');
-  assert.deepEqual(of('D4'), [], 'a frame with no date cannot be nearest');
-  assert.deepEqual(of('D2', nearestExposures(frames, 103, { perBand: 1 })), [103.1]);
-});
 
 test('parseWaveTable + wavelengthAt: the grid the file has, bilinear between samples', () => {
   // Wavelength falls along Y and bows a little along X, as on the real detectors.

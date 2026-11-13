@@ -38,8 +38,31 @@ async function fetchRange(url, start, end, signal) {
   throw new Error(`Range not honoured (HTTP ${res.status}) on ${url}`);
 }
 
+/**
+ * A file read more than once in a session — its wavelength, then its pixels;
+ * or the same field's spectrum for a second mark — has its header and its
+ * wavelength table kept, so the second read costs nothing. A failed or
+ * cancelled read is forgotten, so it can be asked again.
+ */
+const KEPT_FILES = 256;
+
+function remembered(cache, key, read) {
+  if (cache.has(key)) return cache.get(key);
+  const promise = read();
+  cache.set(key, promise);
+  promise.catch(() => { if (cache.get(key) === promise) cache.delete(key); });
+  while (cache.size > KEPT_FILES) cache.delete(cache.keys().next().value);
+  return promise;
+}
+
+const headers = new Map();
+const waveTables = new Map();
+
+/** The IMAGE extension's header, read once per file. */
+const readImageHDU = (url, signal) => remembered(headers, url, () => scanImageHDU(url, signal));
+
 /** Read enough of the file to describe HDU 0 and the IMAGE extension. */
-async function readImageHDU(url, signal) {
+async function scanImageHDU(url, signal) {
   let want = HEADER_PROBE;
   for (;;) {
     const buf = await fetchRange(url, 0, want - 1, signal);
@@ -195,7 +218,7 @@ function sourceBounds(wcs, grid) {
  * Fetch and resample one epoch.
  * Returns null when the frame does not actually overlap the requested field.
  */
-export async function loadStamp(url, grid, { signal, minCoverage = 0.15 } = {}) {
+export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = true } = {}) {
   const hdu = await readImageHDU(url, signal);
   const cards = hdu.cards;
   const wcs = new WCS(cards);
@@ -233,8 +256,9 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15 } = {}) 
   // A pixel the pipeline has already called bad is a hole here too — filled
   // from its good neighbours below — instead of a bright point waiting to be
   // "found".
+  // `mask: false` is for the tools that calibrate against a flagged pixel.
   const read = await flagsRead;
-  const flagged = read ? maskFlagged(plane, read) : null;
+  const flagged = read && mask ? maskFlagged(plane, read) : null;
   const flagRows = read?.values ?? null;
 
   // The sky noise of the detector's own pixels, over the columns the field
@@ -309,6 +333,11 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15 } = {}) 
     height: gh,
     coverage,
     wcs,
+    // The detector's own pixels under the field, kept for the one test that
+    // must not be read through the resampling: whether a flash is a star's
+    // shape or a single pixel (sharpness.js). A fraction of the visit's own
+    // bytes: the grid is cut a few times finer than the detector.
+    detector: { data: patch, width: colTo - colFrom + 1, height: rows, x0: colFrom + 1, y0: rowFrom, wcs },
     meta: {
       obsId: String(cards.get('OBSID') ?? '').trim(),
       dateObs: String(cards.get('DATE-OBS') ?? '').trim(),
@@ -351,10 +380,10 @@ async function fetchTail(url, bytes, signal) {
  * position is off the detector — never a guess.
  */
 export async function loadWavelength(url, ra, dec, { signal } = {}) {
-  const [hdu, tail] = await Promise.all([
+  const [hdu, table] = await Promise.all([
     readImageHDU(url, signal),
-    fetchTail(url, WAVE_TAIL_BYTES, signal),
+    remembered(waveTables, url, async () => parseWaveTable(await fetchTail(url, WAVE_TAIL_BYTES, signal))),
   ]);
   const pix = new WCS(hdu.cards).worldToPix(ra, dec);
-  return pix ? wavelengthAt(parseWaveTable(tail), pix[0], pix[1]) : null;
+  return pix ? wavelengthAt(table, pix[0], pix[1]) : null;
 }

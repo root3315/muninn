@@ -152,9 +152,14 @@ export function neighbourhood(au) {
  * quantity the search is actually about. Anything a catalogue recognises is
  * kept in the list but pushed below the unrecognised ones and labelled, since a
  * named asteroid is a good check that the machinery works and a bad candidate.
+ *
+ * A standout whose light sat in one detector pixel (`tooSharp`, see
+ * sharpness.js) is a cosmic ray or a hot pixel, whatever the fit through it
+ * says; it stays on the page among the flashes and is never ranked.
  */
 export function rankCandidates(found, { maxArcsecPerHour = 60 } = {}) {
   return found
+    .filter((c) => !c.tooSharp)
     .filter((c) => c.analysis?.kind === 'moving')
     // Not "did the fit return a slope" but "is that slope a measurement".
     .filter((c) => rateIsMeasured(c.analysis))

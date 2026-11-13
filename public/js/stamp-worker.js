@@ -28,15 +28,16 @@ self.addEventListener('message', async ({ data: msg }) => {
     const grid = new TangentGrid(g.ra, g.dec, g.fovDeg, g.width, g.height);
     const stamp = await loadStamp(url, grid, { signal: ctrl.signal });
     if (!stamp) { self.postMessage({ id, stamp: null }); return; }
-    // The WCS is a class instance and the page never reads it; the pixels are
-    // moved rather than copied.
+    // The WCS is a class instance and arrives as its plain fields (the
+    // detector patch carries them for sharpness.js); the pixels are moved
+    // rather than copied.
     const { wcs, ...plain } = stamp;
     // Both of these sort every pixel of the visit, and on the page's thread
     // they were the stall each time a visit landed — felt as a hitch in the
     // blink and in anything else moving. Done here, they arrive with it.
     plain.sigma = skySigma(plain.data);
     plain.cut = { key: DEFAULT_CLIP, lim: limits(plain.data, { loPercent: 5, hiPercent: DEFAULT_CLIP }) };
-    self.postMessage({ id, stamp: plain }, [plain.data.buffer, plain.quality.buffer]);
+    self.postMessage({ id, stamp: plain }, [plain.data.buffer, plain.quality.buffer, plain.detector.data.buffer]);
   } catch (err) {
     self.postMessage({ id, error: err?.name === 'AbortError' ? 'AbortError' : String(err?.message ?? err) });
   } finally {

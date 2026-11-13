@@ -24,6 +24,7 @@ import { deltaRA } from './wcs.js';
 import { coadd } from './stack.js';
 import { epochOfMjd, propagate, markRadius } from './overlay.js';
 import { QUALITY } from './stamp.js';
+import { sharpness, sharpVerdict } from './sharpness.js';
 
 const RAMP_TOKENS = { deep: '--cmap-deep', ice: '--cmap-ice', infrared: '--cmap-infrared' };
 
@@ -75,8 +76,10 @@ const GRID_STEPS = [1 / 240, 1 / 120, 1 / 60, 1 / 30, 1 / 12, 1 / 6, 0.5, 1];
 const BAR_STEPS = [5, 10, 15, 30, 60, 120, 300, 600, 1800];
 
 export class SkyView {
-  constructor(canvas, { onHover, onPick, onItem } = {}) {
+  constructor(canvas, { onHover, onPick, onItem, onReferenceMoved } = {}) {
     this.canvas = canvas;
+    /* Called when a catalogue-drawn reference is drawn again for another date. */
+    this.onReferenceMoved = onReferenceMoved;
     this.ctx = canvas.getContext('2d');
     this.onHover = onHover;
     this.onPick = onPick;
@@ -248,9 +251,11 @@ export class SkyView {
   }
 
   /**
-   * Another survey's image of the field on the same grid (an AllWISE cutout),
-   * or null. Cut on its own pixels, never shared with SPHEREx's: the units
-   * and the depth are another instrument's.
+   * Another survey's image of the field on the same grid (an AllWISE cutout,
+   * or the Gaia model), or null. Cut on its own pixels, never shared with
+   * SPHEREx's: the units and the depth are another instrument's. A reference
+   * with `follow(mjd)` is drawn from a catalogue and is drawn again for the
+   * date of whichever visit is A (see followReference).
    */
   setReference(ref) {
     if (ref) {
@@ -267,6 +272,15 @@ export class SkyView {
 
   /** B of the wipe is the reference image, or the visit chosen as B. */
   setUseRef(on) { this.useRef = on; this.draw(); }
+
+  /** A catalogue-drawn reference, moved to A's date when A is another visit. */
+  followReference(a) {
+    const ref = this.ref;
+    if (!ref?.follow || !a || ref.mjd === a.frame.mjd) return;
+    Object.assign(ref, ref.follow(a.frame.mjd));
+    this.paintVisit(ref);
+    this.onReferenceMoved?.();
+  }
 
   /** An exposure read only to be stacked: not a visit, not in the run. */
   addExtra(frame, stamp) {
@@ -333,7 +347,9 @@ export class SkyView {
 
   paintVisit(v, shared = null) {
     const lut = this.ramps[this.render.palette] ?? this.ramps.deep;
-    const lim = shared ?? this.ownLimits(v);
+    // A model drawn from a catalogue brings its own black and white point:
+    // its sky is exactly zero, and a percentile cut would find nothing.
+    const lim = shared ?? v.stamp.limits ?? this.ownLimits(v);
     v.limits = lim;
     const img = v.ctx.createImageData(v.stamp.width, v.stamp.height);
     paint(img, v.stamp.data, lut, { lo: lim.lo, hi: lim.hi, stretch: this.render.stretch, quality: v.stamp.quality });
@@ -472,6 +488,7 @@ export class SkyView {
         if (stack) this.place(ctx, stack.canvas);
       } else if (this.mode === 'wipe') {
         const a = this.visits[this.a];
+        if (this.useRef) this.followReference(a);
         const b = (this.useRef && this.ref) || (this.visits[this.b] ?? a);
         if (a) this.place(ctx, a.canvas);
         const x = Math.round(this.cssW * this.wipe);
@@ -1310,7 +1327,7 @@ export class SkyView {
     const track = [];
     for (const v of this.visits) {
       const m = this.measure(v, ra, dec);
-      if (m) track.push({ ...m, band: v.frame.band });
+      if (m) track.push({ ...m, band: v.frame.band, sharp: m.saturated ? null : sharpnessOf(v, m) });
     }
 
     const total = this.visits.length;
@@ -1388,6 +1405,17 @@ export class SkyView {
     else result.kind = 'intermittent';
     return result;
   }
+}
+
+/**
+ * Star or single pixel, for one detection: read on the detector pixels the
+ * visit was cut from (see sharpness.js), never on the resampled grid. Null
+ * for a visit that arrived without them.
+ */
+function sharpnessOf(visit, m) {
+  const det = visit.stamp.detector;
+  if (!det) return null;
+  return sharpVerdict(sharpness(det, m.ra, m.dec), visit.stamp.meta?.detectorSigma);
 }
 
 /**
