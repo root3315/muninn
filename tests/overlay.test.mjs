@@ -7,8 +7,10 @@ import assert from 'node:assert/strict';
 
 import {
   GAIA_EPOCH, ROW_CAP, epochOfMjd, propagate, magLimit, wiseLimit, searchRadius,
-  gaiaQuery, wiseQuery, parseGaiaRow, parseWiseRow, cutToCap, markRadius, properMotion,
+  CATALOGUES, CATWISE_EPOCH, coneQuery, renameRow, parseGaiaRow, parseWiseRow, parseCatwiseRow, measuredMotion,
+  cutToCap, markRadius, properMotion,
 } from '../public/js/overlay.js';
+import { parseCsv } from '../public/js/csv.js';
 import { TangentGrid } from '../public/js/wcs.js';
 
 /* Barnard's Star as Gaia DR3 has it (source 4472832130942575872), epoch J2016.0. */
@@ -99,26 +101,97 @@ test('the search circle covers the corners of the plate, with room for drift', (
   assert.ok(r - Math.hypot(0.48, 0.3) / 2 >= 104 / 3600);
 });
 
+/** A query on one line, so it can be compared as text. */
+const flat = (query) => query.replace(/\s+/g, ' ');
+
 test('the queries are built from formatted numbers and nothing else', () => {
-  const field = { ra: 269.4463, dec: 4.768, radiusDeg: 0.31641, limit: 17 };
-  const gaia = gaiaQuery(field);
-  assert.match(gaia, /SELECT TOP 301 Source, RA_ICRS, DE_ICRS, Gmag, pmRA, pmDE, Plx, e_Plx/);
-  assert.match(gaia, /FROM "I\/355\/gaiadr3"/);
-  assert.match(gaia, /CIRCLE\('ICRS', 269\.446300, 4\.768000, 0\.31641\)\) = 1 AND Gmag <= 17\.00/);
-  assert.match(gaia, /ORDER BY Gmag$/);
-  const wise = wiseQuery({ ...field, limit: 14.5, cap: 50 });
-  assert.match(wise, /SELECT TOP 51 AllWISE, RAJ2000, DEJ2000, W1mag, W2mag/);
-  assert.match(wise, /FROM "II\/328\/allwise"/);
-  assert.match(wise, /W1mag <= 14\.50\s+ORDER BY W1mag$/);
+  const field = { ra: 269.4463, dec: 4.768, radiusDeg: 0.31641, limit: 17, top: ROW_CAP + 1 };
+  assert.equal(flat(coneQuery(CATALOGUES.gaia.vizier, field)),
+    'SELECT TOP 301 Source, RA_ICRS, DE_ICRS, Gmag, pmRA, pmDE, Plx, e_Plx, VarFlag, PQSO, PGal, PSS'
+    + ' FROM "I/355/gaiadr3"'
+    + " WHERE CONTAINS(POINT('ICRS', RA_ICRS, DE_ICRS), CIRCLE('ICRS', 269.446300, 4.768000, 0.31641)) = 1 AND Gmag <= 17.00"
+    + ' ORDER BY Gmag');
+  assert.equal(flat(coneQuery(CATALOGUES.wise.vizier, { ...field, limit: 14.5, top: 51 })),
+    'SELECT TOP 51 AllWISE, RAJ2000, DEJ2000, W1mag, W2mag FROM "II/328/allwise"'
+    + " WHERE CONTAINS(POINT('ICRS', RAJ2000, DEJ2000), CIRCLE('ICRS', 269.446300, 4.768000, 0.31641)) = 1 AND W1mag <= 14.50"
+    + ' ORDER BY W1mag');
+});
+
+test('the IRSA templates ask the NASA tables, in their own column names', () => {
+  const field = { ra: 269.452, dec: 4.693, radiusDeg: 6 / 3600, top: 8 };
+  assert.equal(flat(coneQuery(CATALOGUES.gaia.irsa, { ...field, limit: 17 })),
+    'SELECT TOP 8 source_id, ra, dec, phot_g_mean_mag, pmra, pmdec, parallax, parallax_error, phot_variable_flag,'
+    + ' classprob_dsc_combmod_quasar, classprob_dsc_combmod_galaxy, classprob_dsc_combmod_star'
+    + " FROM gaia_dr3_source WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', 269.452000, 4.693000, 0.00167)) = 1"
+    + ' AND phot_g_mean_mag <= 17.00 ORDER BY phot_g_mean_mag');
+  // Without a limit there is no cut, only the cone; still brightest first.
+  assert.equal(flat(coneQuery(CATALOGUES.twomass.irsa, field)),
+    "SELECT TOP 8 designation, ra, dec, j_m, h_m, k_m FROM fp_psc WHERE CONTAINS(POINT('ICRS', ra, dec),"
+    + " CIRCLE('ICRS', 269.452000, 4.693000, 0.00167)) = 1 ORDER BY j_m");
+  assert.ok(flat(coneQuery(CATALOGUES.wise.irsa, field)).startsWith('SELECT TOP 8 designation, ra, dec, w1mpro, w2mpro FROM allwise_p3as_psd'));
+  assert.ok(flat(coneQuery(CATALOGUES.catwise.irsa, field)).startsWith(
+    'SELECT TOP 8 source_name, ra_pm, dec_pm, pmra, pmdec, sigpmra, sigpmdec, w1mpro, w2mpro FROM catwise_2020'));
+  // VizieR quotes the one column whose name starts with a digit.
+  assert.ok(coneQuery(CATALOGUES.twomass.vizier, field).startsWith('SELECT TOP 8 "2MASS", RAJ2000'));
+  // Every catalogue has an IRSA template; CatWISE has no VizieR one.
+  assert.deepEqual(Object.keys(CATALOGUES).filter((k) => CATALOGUES[k].irsa), ['gaia', 'wise', 'twomass', 'catwise']);
+  assert.equal(CATALOGUES.catwise.vizier, undefined);
 });
 
 test('a query refuses anything that is not a finite number', () => {
-  const field = { ra: 10, dec: 20, radiusDeg: 0.2, limit: 17 };
-  for (const bad of ['10', "10'; DROP TABLE x --", NaN, Infinity, null, undefined]) {
-    assert.throws(() => gaiaQuery({ ...field, ra: bad }), TypeError);
-    assert.throws(() => wiseQuery({ ...field, limit: bad }), TypeError);
-    assert.throws(() => gaiaQuery({ ...field, radiusDeg: bad }), TypeError);
+  const field = { ra: 10, dec: 20, radiusDeg: 0.2, limit: 17, top: 9 };
+  for (const archive of [CATALOGUES.gaia.vizier, CATALOGUES.wise.irsa]) {
+    for (const bad of ['10', "10'; DROP TABLE x --", NaN, Infinity, null, undefined]) {
+      assert.throws(() => coneQuery(archive, { ...field, ra: bad }), TypeError);
+      assert.throws(() => coneQuery(archive, { ...field, radiusDeg: bad }), TypeError);
+      assert.throws(() => coneQuery(archive, { ...field, top: bad }), TypeError);
+    }
+    for (const bad of ['10', "10'; DROP TABLE x --", NaN, Infinity]) {
+      assert.throws(() => coneQuery(archive, { ...field, limit: bad }), TypeError);
+    }
   }
+});
+
+/* Recorded from IRSA TAP on 13 Nov 2026: Gaia DR3 near Barnard's Star, the IRSA template, top 3. */
+const IRSA_GAIA_CSV = `source_id,ra,dec,phot_g_mean_mag,pmra,pmdec,parallax,parallax_error,phot_variable_flag,classprob_dsc_combmod_quasar,classprob_dsc_combmod_galaxy,classprob_dsc_combmod_star
+4472835983521061248,269.45241699657,4.77473723896,14.975017,-1.843,-6.193,0.2183,0.0281,NOT_AVAILABLE,0.000000,0.000000,0.999987
+4472835876142910336,269.44852449166,4.76290250243,16.695990,-3.157,-0.535,0.4920,0.0631,NOT_AVAILABLE,0.000000,0.000000,0.999988
+`;
+
+test('an IRSA row, renamed, reads exactly like a VizieR row', () => {
+  const rows = parseCsv(IRSA_GAIA_CSV).map((r) => renameRow(r, CATALOGUES.gaia.irsa.columns));
+  assert.equal(rows.length, 2);
+  assert.deepEqual(Object.keys(rows[0]), Object.keys(CATALOGUES.gaia.vizier.columns));
+  assert.equal(rows[0].Source, '4472835983521061248');
+  assert.equal(rows[0].VarFlag, 'NOT_AVAILABLE');
+  assert.deepEqual(parseGaiaRow(rows[0]), {
+    id: '4472835983521061248', ra: 269.45241699657, dec: 4.77473723896, mag: 14.975017,
+    pmRA: -1.843, pmDE: -6.193, plx: 0.2183, plxErr: 0.0281,
+  });
+  // A column the archive did not send is empty, not undefined.
+  assert.equal(renameRow({}, { Gmag: 'phot_g_mean_mag' }).Gmag, '');
+});
+
+/* Recorded from IRSA TAP on 13 Nov 2026: CatWISE2020, the IRSA template. */
+const IRSA_CATWISE_CSV = `source_name,ra_pm,dec_pm,pmra,pmdec,sigpmra,sigpmdec,w1mpro,w2mpro
+J175754.41+044050.2,269.4767330,4.6806137,-0.01458,-0.00345,0.0040,0.0040,10.298,10.391
+J175752.99+044147.7,269.4708135,4.6965593,-0.00138,-0.19722,0.0450,0.0481,16.541,16.865
+`;
+
+test('a CatWISE row gives its motion in mas a year, and only a measured one is said', () => {
+  const [bright, faint] = parseCsv(IRSA_CATWISE_CSV).map(parseCatwiseRow);
+  assert.equal(bright.id, 'J175754.41+044050.2');
+  assert.equal(bright.mag, 10.298);
+  assert.ok(Math.abs(bright.pmRA + 14.58) < 1e-9);
+  assert.ok(Math.abs(bright.pmDEErr - 4) < 1e-9);
+  // 15 mas/yr against a 5.7 mas/yr error: under five sigma, not a measurement.
+  assert.equal(measuredMotion(bright), null);
+  // 197 mas/yr against 66: three sigma, still not.
+  assert.equal(measuredMotion(faint), null);
+  // A brown dwarf's 8″ a year at 0.1″ error is.
+  assert.ok(Math.abs(measuredMotion({ pmRA: -8000, pmDE: 600, pmRAErr: 100, pmDEErr: 100 }) - 8.0225) < 1e-3);
+  assert.equal(measuredMotion({ pmRA: 100, pmDE: 0, pmRAErr: null, pmDEErr: null }), null);
+  assert.ok(Math.abs(CATWISE_EPOCH - 2015.4) < 0.01);
 });
 
 test('a Gaia row keeps its 64-bit id as text and its gaps as null', () => {

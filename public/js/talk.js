@@ -1,5 +1,5 @@
 /**
- * talk.js — Muninn in seven slides.
+ * talk.js — Muninn in eight slides.
  *
  * The first slide is not a screenshot. It reads four visits of the Atala field
  * from the archive with the same modules the tool uses, and blinks them; the
@@ -36,7 +36,7 @@ const WORDS = {
     's1.failed': 'The archive did not answer. The tool itself is one click away.',
     's2.claim': 'A 70 MB file, read a megabyte or two at a time.',
     's2.say': 'The browser asks the public AWS mirror for byte ranges: the header, then only the detector rows this field lands on, then the pipeline’s quality flags for the same rows. No pixels pass through our server.',
-    's2.src': 'File size 68.3 MB per Level-2 frame; bytes read are measured on the previous slide.',
+    's2.src': 'File size 65.4 MB per Level-2 frame; bytes read are measured on the previous slide.',
     's2.head': 'What the four frames on slide 1 cost',
     's2.sum': 'Read {read} MB of {total} MB held at the archive: {pct} %',
     's2.pending': 'Measured once slide 1 has finished reading.',
@@ -48,20 +48,20 @@ const WORDS = {
     's2.step3': 'the same rows of the FLAGS plane',
     's3.claim': 'It finds a mover, and names it.',
     's3.say': 'Fifteen visits of one spot over 369 days. Fourteen are background. On 25 Dec 2025 SkyBoT places asteroid (152) Atala, V 13.8, 2.3″ from the centre at that exposure’s own timestamp.',
-    's3.src': 'tools/verify-mover.mjs 13.4194 3.8459 0.15: brightest pixel against the noise of the ring around it. The tool’s own 3×3-pixel aperture reads about 417σ for the same visit. SkyBoT, IMCCE.',
+    's3.src': 'tools/verify-mover.mjs 13.4194 3.8459 0.15: brightest pixel against the noise of the ring around it, on SPHEREx DR1 and QR3 with the pipeline flags applied. SkyBoT, IMCCE.',
     's3.head': 'Signal-to-noise at the field centre, visit by visit',
     's4.claim': 'It refuses a false discovery.',
-    's4.say': 'On 6 Jul 2025 the same spot flashed at SNR 206 and no catalogue explained it. It was one detector pixel, and the SPHEREx pipeline had already said what: a cosmic-ray hit. Muninn reads those flags and masks the pixel before anything is measured.',
+    's4.say': 'On 6 Jul 2025 the same spot flashed at SNR 192 and no catalogue explained it. It was one detector pixel, and the SPHEREx pipeline had already said what: a cosmic-ray hit. Muninn reads those flags and masks the pixel before anything is measured.',
     's4.src': 'Atala’s own pixels on 25 Dec carry only OUTLIER, and spread like a real source.',
     's4.head': '6 Jul 2025, the centre of the Atala field',
     's4.before': 'SNR without the flags',
     's4.beforeSay': 'one pixel at 11× its neighbours',
     's4.after': 'SNR with the flags read',
     's4.afterSay': 'background, like the other visits',
-    's4.note': 'A jump in the up-the-ramp samples, caught during readout. The pipeline marked it; a viewer that ignores FLAGS collects cosmic rays.',
+    's4.note': 'A jump in the up-the-ramp samples, caught during readout. The pipeline marked it; a viewer that ignores FLAGS collects cosmic rays. From DR1 on, FLAGS is stored Rice-compressed, and Muninn decodes it in the browser.',
     's5.claim': 'The challenge’s five test targets open in one press.',
     's5.say': 'Each opens in the band that suits it, from a frame index that ships with the page. Press a row to open it in the tool.',
-    's5.src': 'Visit counts from IRSA SIA at bake time, 11 Nov 2026.',
+    's5.src': 'Visit counts from IRSA SIA, SPHEREx DR1 and QR3, at bake time, 13 Nov 2026.',
     's5.head': 'Five targets named by the challenge',
     's5.visits': '{n} visits · {days} d',
     's6.claim': 'Even 200 added visits leave SPHEREx 1.5 to 4.5 magnitudes short of Planet X.',
@@ -76,6 +76,11 @@ const WORDS = {
     's6.hundred': '100 visits added',
     's6.deep': '200 visits, deep field',
     's6.short': 'at best short by 1.5–4.5 mag',
+    'src.claim': 'Every pixel and every name has a source.',
+    'src.say': 'The pixels come from NASA, read where NASA keeps them. Names and catalogue positions come from NASA first and from partner archives beside it, each asked in parallel, so one service being down costs one line of the answer, not the answer.',
+    'src.src': 'Every service here is asked live, by the page or by its relay. Only the bright-star map is copied into the site, and the paper is a paper.',
+    'src.nasa': 'NASA',
+    'src.partners': 'Partner archives',
     's7.claim': 'What Muninn searches today, and where it stops.',
     's7.say': 'Slow movers brighter than 17.6 AB per visit, season stacks, and a stated depth for every field examined. A null result at a known depth is a constraint.',
     's7.link': 'muninn.mydevbox.xyz',
@@ -110,7 +115,7 @@ const WORDS = {
     's1.failed': 'Архив не ответил. Сам инструмент открывается одним нажатием.',
     's2.claim': 'Файл в 70 МБ читается по мегабайту-два.',
     's2.say': 'Браузер запрашивает у открытого зеркала AWS диапазоны байтов: заголовок, затем только строки детектора, на которые попадает поле, затем флаги качества для тех же строк. Через наш сервер пиксели не идут.',
-    's2.src': 'Размер кадра Level-2: 68,3 МБ; прочитанные байты измерены на предыдущем слайде.',
+    's2.src': 'Размер кадра Level-2: 65,4 МБ; прочитанные байты измерены на предыдущем слайде.',
     's2.head': 'Во что обошлись четыре кадра со слайда 1',
     's2.sum': 'Прочитано {read} МБ из {total} МБ, лежащих в архиве: {pct} %',
     's2.pending': 'Будет измерено, когда слайд 1 дочитает кадры.',
@@ -122,20 +127,20 @@ const WORDS = {
     's2.step3': 'те же строки плоскости FLAGS',
     's3.claim': 'Находит движущееся тело и называет его.',
     's3.say': 'Пятнадцать заходов в одну точку за 369 дней. В четырнадцати только фон. 25 декабря 2025 SkyBoT ставит астероид (152) Atala, V 13,8, в 2,3″ от центра на момент самой экспозиции.',
-    's3.src': 'tools/verify-mover.mjs 13.4194 3.8459 0.15: самый яркий пиксель против шума кольца вокруг. Апертура 3×3 пикселя в самом инструменте даёт для того же захода около 417σ. SkyBoT, IMCCE.',
+    's3.src': 'tools/verify-mover.mjs 13.4194 3.8459 0.15: самый яркий пиксель против шума кольца вокруг, по SPHEREx DR1 и QR3 с учётом флагов конвейера. SkyBoT, IMCCE.',
     's3.head': 'Сигнал/шум в центре поля, заход за заходом',
     's4.claim': 'Отказывается от ложного открытия.',
-    's4.say': '6 июля 2025 в той же точке была вспышка с SNR 206, и каталоги её не объясняли. Это один пиксель детектора, и конвейер SPHEREx уже сказал, что это: попадание космической частицы. Muninn читает эти флаги и маскирует пиксель до любых измерений.',
+    's4.say': '6 июля 2025 в той же точке была вспышка с SNR 192, и каталоги её не объясняли. Это один пиксель детектора, и конвейер SPHEREx уже сказал, что это: попадание космической частицы. Muninn читает эти флаги и маскирует пиксель до любых измерений.',
     's4.src': 'У пикселей самой Atala 25 декабря только OUTLIER, и они размыты как настоящий источник.',
     's4.head': '6 июля 2025, центр поля Atala',
     's4.before': 'SNR без флагов',
     's4.beforeSay': 'один пиксель в 11 раз ярче соседей',
     's4.after': 'SNR с прочитанными флагами',
     's4.afterSay': 'фон, как в остальных заходах',
-    's4.note': 'Скачок, пойманный при считывании. Конвейер его пометил; просмотрщик, который не читает FLAGS, собирает космические частицы.',
+    's4.note': 'Скачок, пойманный при считывании. Конвейер его пометил; просмотрщик, который не читает FLAGS, собирает космические частицы. С DR1 плоскость FLAGS хранится в сжатии Rice, Muninn распаковывает её прямо в браузере.',
     's5.claim': 'Пять целей задания открываются одним нажатием.',
     's5.say': 'Каждая открывается в подходящей полосе, а список кадров уже лежит в странице. Нажмите строку, чтобы открыть её в инструменте.',
-    's5.src': 'Число заходов: IRSA SIA на момент сборки, 11 ноября 2026.',
+    's5.src': 'Число заходов: IRSA SIA, SPHEREx DR1 и QR3, на момент сборки, 13 ноября 2026.',
     's5.head': 'Пять целей из задания',
     's5.visits': 'заходов: {n} · {days} дн.',
     's6.claim': 'Даже 200 сложенных заходов не дотягивают до Планеты X на 1,5–4,5 величины.',
@@ -150,6 +155,11 @@ const WORDS = {
     's6.hundred': '100 сложенных заходов',
     's6.deep': '200 заходов, глубокое поле',
     's6.short': 'в лучшем случае не хватает 1,5–4,5',
+    'src.claim': 'У каждого пикселя и каждого имени есть источник.',
+    'src.say': 'Пиксели берутся у NASA, прямо из его архива. Имена и положения из каталогов сначала у NASA, рядом у партнёрских архивов, все запросы идут параллельно: если один сервис лёг, теряется одна строка ответа, а не весь ответ.',
+    'src.src': 'Каждый сервис здесь спрашивается вживую, страницей или её сервером. В сайт скопирована только карта ярких звёзд, а статья остаётся статьёй.',
+    'src.nasa': 'NASA',
+    'src.partners': 'Партнёрские архивы',
     's7.claim': 'Что Muninn ищет уже сейчас и где останавливается.',
     's7.say': 'Медленные тела ярче 17,6 AB за заход, стек сезона и названная глубина для каждого просмотренного поля. Нулевой результат на известной глубине тоже ограничение.',
     's7.link': 'muninn.mydevbox.xyz',
@@ -199,7 +209,66 @@ function relabel() {
   renderTargets();
   renderReads();
   renderBytes();
+  renderSources();
   showSlide(current);
+}
+
+/* ------------------------------------------------------------ 7 · sources */
+
+/**
+ * Every outside service the page or its relay calls, with what it is used
+ * for. NASA first: the challenge asks which NASA data a tool stands on.
+ */
+const SOURCES = {
+  nasa: [
+    { name: 'SPHEREx DR1 + QR3', host: 'NASA/JPL-Caltech · IPAC/IRSA · AWS Open Data',
+      en: 'Every pixel on screen: Level-2 spectral images, read by byte range from the public S3 mirror, with their FLAGS plane',
+      ru: 'Каждый пиксель на экране: спектральные снимки Level-2 и их плоскость FLAGS, читаются по диапазонам байтов с открытого зеркала S3' },
+    { name: 'IRSA SIA v2', host: 'irsa.ipac.caltech.edu',
+      en: 'Which frames cover a position, when, in which band and detector',
+      ru: 'Какие кадры покрывают точку, когда, в какой полосе и на каком детекторе' },
+    { name: 'Gaia DR3 · AllWISE · CatWISE2020 · 2MASS', host: 'IRSA TAP',
+      en: 'What a marked source is, and how fast CatWISE sees it move; Gaia and AllWISE positions over the frame, Gaia carried to the date of the visit',
+      ru: 'Что за источник отмечен и как быстро он движется по CatWISE; положения Gaia и AllWISE поверх кадра, Gaia перенесена на дату захода' },
+    { name: 'Small-Body Identification', host: 'JPL SSD',
+      en: 'Known asteroids and comets in the field at the moment of each exposure, beside SkyBoT',
+      ru: 'Известные астероиды и кометы в поле на момент каждой экспозиции, вместе со SkyBoT' },
+  ],
+  partners: [
+    { name: 'SkyBoT', host: 'IMCCE, Observatoire de Paris',
+      en: 'A second, independent answer on known solar-system objects',
+      ru: 'Второй, независимый ответ про известные тела Солнечной системы' },
+    { name: 'SIMBAD · Sesame · VizieR', host: 'CDS Strasbourg',
+      en: 'Names typed into the search box; what a marked star is called; the same catalogues when IRSA is slow',
+      ru: 'Имена из строки поиска; как называется отмеченная звезда; те же каталоги, если IRSA медлит' },
+    { name: 'VSX', host: 'AAVSO',
+      en: 'Whether a marked star is a known variable, with its type and period',
+      ru: 'Известная ли переменная отмеченная звезда, её тип и период' },
+    { name: 'Bright Star Catalogue · Hipparcos', host: 'Yale · ESA',
+      en: 'The 15 568 stars of the sky you enter through',
+      ru: '15 568 звёзд неба на входе' },
+    { name: 'Linder & Mordasini 2016', host: 'A&A 589, A134',
+      en: 'The predicted brightness of Planet X the depth is compared against',
+      ru: 'Предсказанный блеск Planet X, с которым сравнивается глубина' },
+  ],
+};
+
+function renderSources() {
+  for (const [group, rows] of Object.entries(SOURCES)) {
+    $(`sources-${group}`).replaceChildren(...rows.map((row, i) => {
+      const item = document.createElement('div');
+      item.className = 'sources__row';
+      item.style.setProperty('--l', String(i + (group === 'partners' ? SOURCES.nasa.length : 0)));
+      const dt = document.createElement('dt');
+      const host = document.createElement('span');
+      host.textContent = row.host;
+      dt.append(row.name, host);
+      const dd = document.createElement('dd');
+      dd.textContent = row[lang] ?? row.en;
+      item.append(dt, dd);
+      return item;
+    }));
+  }
 }
 
 /* ----------------------------------------------------------------- slides */
@@ -478,10 +547,10 @@ async function readFrames() {
 
 /** tools/verify-mover.mjs 13.4194 3.8459 0.15, as printed in the README. */
 const SNR = [
-  ['2025-07-06', 1.4], ['2025-07-07', 3.0], ['2025-07-09', 0.8], ['2025-07-19', 2.2],
-  ['2025-12-24', 3.3], ['2025-12-25', 534.2], ['2026-01-01', 2.7], ['2026-01-01', 1.3],
-  ['2026-01-03', 3.6], ['2026-01-04', 1.2], ['2026-07-03', 3.0], ['2026-07-03', 2.0],
-  ['2026-07-04', 2.1], ['2026-07-05', 1.9], ['2026-07-10', 1.2],
+  ['2025-07-06', 1.6], ['2025-07-07', 3.1], ['2025-07-09', 0.8], ['2025-07-19', 2.4],
+  ['2025-12-24', 3.5], ['2025-12-25', 533.1], ['2026-01-01', 2.9], ['2026-01-01', 1.4],
+  ['2026-01-03', 3.8], ['2026-01-04', 1.2], ['2026-07-03', 3.0], ['2026-07-03', 2.3],
+  ['2026-07-04', 2.1], ['2026-07-05', 2.1], ['2026-07-10', 1.4],
 ];
 
 function renderSNR() {

@@ -1,6 +1,6 @@
 // End-to-end check: SIA search → S3 range read → reprojection → stretched PNG.
 import { writeFileSync, mkdirSync } from 'node:fs';
-import { parseVOTable } from '../public/js/votable.js';
+import { siaRows } from './sia.mjs';
 import { TangentGrid } from '../public/js/wcs.js';
 import { loadStamp } from '../public/js/stamp.js';
 import { limits, STRETCHES, ramp } from '../public/js/render.js';
@@ -16,9 +16,8 @@ mkdirSync(OUT, { recursive: true });
 const S3 = 'https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/';
 const toS3 = (u) => u.replace(/^https:\/\/irsa\.ipac\.caltech\.edu\/ibe\/data\/spherex\//, S3);
 
-const sia = `https://irsa.ipac.caltech.edu/SIA?COLLECTION=spherex_qr2&POS=circle+${RA}+${DEC}+0.02`;
 const t0 = Date.now();
-const { rows } = parseVOTable(await (await fetch(sia)).text());
+const rows = await siaRows(RA, DEC, 0.02);
 console.log(`SIA: ${rows.length} frames in ${Date.now() - t0} ms`);
 
 // One frame per visit, preferring the detector with the most coverage in the set.

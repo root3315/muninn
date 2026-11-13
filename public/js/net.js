@@ -23,5 +23,7 @@ export function deadline(signal, ms) {
 export const FRAME_DEADLINE_MS = 45_000;
 /** A catalogue answer (Sesame, SkyBoT, VizieR) or one of the page's own files. */
 export const CATALOG_DEADLINE_MS = 30_000;
-/** The relay asking IRSA about a new position: the server itself waits 150 s. */
+/** The relay asking IRSA's TAP for a catalogue: the server itself waits 75 s. */
+export const RELAY_DEADLINE_MS = 90_000;
+/** The relay asking IRSA about a new position (the server waits 150 s), or JPL (120 s). */
 export const SEARCH_DEADLINE_MS = 170_000;

@@ -5,14 +5,14 @@
 NASA Space Apps Challenge 2026 — *Planet X and SPHEREx* · team **Yggdrasil**
 
 **Live: <https://muninn.mydevbox.xyz>** · open *(152) Atala* under the search and press Space.
-**The talk, seven slides: <https://muninn.mydevbox.xyz/talk.html>** — its first slide reads real frames
+**The talk, eight slides: <https://muninn.mydevbox.xyz/talk.html>** — its first slide reads real frames
 from the archive as you watch.
 
 Three things it shows on real data:
 
-- **It finds and names a mover.** On 25 Dec 2025 one dot appears in the Atala field at SNR 534 and in
+- **It finds and names a mover.** On 25 Dec 2025 one dot appears in the Atala field at SNR 533 and in
   no other visit. SkyBoT names it at that exposure's own timestamp: asteroid (152) Atala.
-- **It refuses a false discovery.** A second "flash" on 6 Jul 2025 (SNR 206) was a single pixel the
+- **It refuses a false discovery.** A second "flash" on 6 Jul 2025 (SNR 192) was a single pixel the
   SPHEREx pipeline had already flagged as a cosmic ray. Muninn reads the `FLAGS` plane and masks it.
 - **It measures how far SPHEREx is from Planet Nine.** 17.60 AB per visit, from delivered detector
   pixels; the prediction is V 22–25. That is 1.5–4.5 mag short even with 200 visits added, and the
@@ -46,11 +46,13 @@ node server.js          # Node 18+, no dependencies to install
 
 Then open <http://127.0.0.1:5173>.
 
-The server does two things: it serves the page, and it relays one call to IRSA that the
-browser is not allowed to make itself. Image data never passes through it.
+The server does two things: it serves the page, and it relays the calls to NASA services
+that send no CORS headers, which the browser is therefore not allowed to make itself:
+IRSA's frame index, IRSA's catalogue service (TAP) and JPL's small-body identification.
+Image data never passes through it.
 
 ```bash
-npm test                # 53 offline tests: a synthetic FITS through the whole pipeline, and more
+npm test                # 65 offline tests: a synthetic FITS through the whole pipeline, and more
 npm run bake            # refresh the pre-resolved opening fields (optional)
 npm run probe           # check the WCS round-trip against a live SPHEREx header
 node tools/verify-mover.mjs 13.4194 3.8459 0.15   # the photometry check below
@@ -84,7 +86,9 @@ npm run deploy                  # wrangler pages deploy
 IRSA relay ported to the Workers runtime. Both import the same VOTable parser, but
 the port runs under tighter limits (a 20 s wait on IRSA against 150 s, 400 rows per
 collection against 500), so a position IRSA has not seen before can time out there.
-The live site runs `server.js`.
+The live site runs `server.js`. The catalogue and small-body relays (`/api/tap`,
+`/api/sbident`) exist only there; on Pages the catalogues come from VizieR alone and
+known asteroids from SkyBoT alone.
 Pixels are not involved either way: the browser reads them straight from the S3
 mirror.
 
@@ -162,12 +166,14 @@ reason the threshold is stated. It crosses the pixel once the baseline passes 21
 
 | what | from | used for |
 | --- | --- | --- |
-| SPHEREx Level-2 spectral images (Quick Release 2) | NASA/JPL-Caltech · IPAC/IRSA, via the AWS Open Data mirror `nasa-irsa-spherex` | every pixel on screen, read by HTTP range request |
-| SPHEREx frame index | IRSA Simple Image Access v2, collections `spherex_qr2` and `spherex_qr2_deep` | which frames cover a position, when, and in which band |
+| SPHEREx Level-2 spectral images (Data Release 1 and Quick Release 3) | NASA/JPL-Caltech · IPAC/IRSA, via the AWS Open Data mirror `nasa-irsa-spherex` | every pixel on screen, read by HTTP range request |
+| SPHEREx frame index | IRSA Simple Image Access v2, collections `spherex_dr1`, `spherex_dr1_deep`, `spherex_qr3`, `spherex_qr3_deep` | which frames cover a position, when, and in which band |
 | SPHEREx `FLAGS` plane | the same files | masking cosmic-ray hits and bad pixels before anything is measured; the caption of every frame says how many pixels that was |
-| AllWISE W1/W2 | NASA WISE, through CDS VizieR | identifying a marked source at 3.4 and 4.6 µm; an overlay of AllWISE positions on the plate (epoch about 2010.5, not moved) |
-| Gaia DR3 | ESA Gaia, through CDS VizieR | identifying a faint marked star, and whether Gaia saw it vary; an overlay of Gaia positions on the plate, carried by proper motion from J2016.0 to the date of the visit |
-| Known solar-system objects | SkyBoT, IMCCE | naming asteroids at the moment of each exposure |
+| AllWISE W1/W2 | NASA WISE, through IRSA TAP (`allwise_p3as_psd`), raced against CDS VizieR | identifying a marked source at 3.4 and 4.6 µm; an overlay of AllWISE positions on the plate (epoch about 2010.5, not moved) |
+| CatWISE2020 | NASA WISE and NEOWISE, through IRSA TAP (`catwise_2020`) | whether a marked source moves: a proper motion from ten years of WISE, said only at five times its error. The catalogue the coldest brown dwarfs, WISE 0855−0714 among them, were found in |
+| 2MASS | NASA/IPAC 2MASS Point Source Catalog, through IRSA TAP (`fp_psc`), raced against CDS VizieR | J, H and K of a marked source, the near infrared SPHEREx works in |
+| Gaia DR3 | ESA Gaia, through IRSA TAP (`gaia_dr3_source`), raced against CDS VizieR | identifying a faint marked star, and whether Gaia saw it vary; an overlay of Gaia positions on the plate, carried by proper motion from J2016.0 to the date of the visit |
+| Known solar-system objects | NASA/JPL Small-Body Identification (`sb_ident`), merged with SkyBoT (IMCCE) | naming asteroids and comets at the moment of each exposure; either service alone is enough |
 
 ### When a new SPHEREx release lands
 
@@ -490,37 +496,41 @@ the ecliptic for catalogued objects bright enough to detect (`tools/find-mover.m
 checked photometrically (`tools/verify-mover.mjs`).
 
 Field: **RA 13.4194, Dec +3.8459**, band D2 (1.10–1.65 µm). Fifteen D2 visits over
-369 days. Signal-to-noise at the exact field centre, visit by visit:
+369 days in SPHEREx DR1 and QR3, re-measured on 13 Nov 2026 when DR1 replaced the
+Quick Release 2 frames. Signal-to-noise at the exact field centre, visit by visit:
 
 ```
-2025-07-06T11:41:24     1.4   █
-2025-07-07T20:18:06     3.0   ███
+2025-07-06T11:41:24     1.6   ██
+2025-07-07T20:18:06     3.1   ███
 2025-07-09T03:23:15     0.8   █
-2025-07-19T11:04:07     2.2   ██
-2025-12-24T11:12:16     3.3   ███
-2025-12-25T16:33:36   534.2   ████████████████████████████████████████
-2026-01-01T01:44:29     2.7   ███
-2026-01-01T08:21:29     1.3   █
-2026-01-03T05:59:11     3.6   ████
+2025-07-19T11:04:07     2.4   ██
+2025-12-24T11:12:16     3.5   ████
+2025-12-25T16:33:36   533.1   ████████████████████████████████████████
+2026-01-01T01:44:29     2.9   ███
+2026-01-01T08:21:29     1.4   █
+2026-01-03T05:59:11     3.8   ████
 2026-01-04T14:32:35     1.2   █
 2026-07-03T09:52:56     3.0   ███
-2026-07-03T19:44:45     2.0   ██
+2026-07-03T19:44:45     2.3   ██
 2026-07-04T18:27:55     2.1   ██
-2026-07-05T05:58:03     1.9   ██
-2026-07-10T06:30:49     1.2   █
+2026-07-05T05:58:03     2.1   ██
+2026-07-10T06:30:49     1.4   █
 ```
 
 One spike. Fourteen visits of pure background.
 
-**25 Dec 2025 — SNR 534.** SkyBoT places **(152) Atala**, a main-belt asteroid at V = 13.81,
+**25 Dec 2025 — SNR 533.** SkyBoT places **(152) Atala**, a main-belt asteroid at V = 13.81,
 2.3″ from the field centre at that exposure's timestamp. Muninn rings it and
 names it, live, from the ephemeris.
 
 **6 Jul 2025 — the spike that was not there.** Before Muninn read the `FLAGS` plane,
-this visit showed SNR 206 at the same spot, and nothing in the catalogue explained it.
-It was one detector pixel at eleven times its neighbours, with a variance 230 times the
-usual — and the pipeline had already said what it was: `FLAGS = 0x80005`, `TRANSIENT`
-+ `SUR_ERROR` + `OUTLIER`, a cosmic-ray jump caught during the up-the-ramp readout.
+this visit showed SNR 192 at the same spot (206 in QR2), and nothing in the catalogue
+explained it. It was one detector pixel at eleven times its neighbours — and the pipeline
+had already said what it was: `FLAGS = 0x45` in DR1, `TRANSIENT` + `SUR_ERROR` + `NONFUNC`
+(QR2 had `0x80005`, with `OUTLIER` for the last), a cosmic-ray jump caught during the
+up-the-ramp readout. DR1 stores `FLAGS` as a Rice-compressed tile image; Muninn decodes
+it in the browser (`public/js/rice.js`), and the decoded counts match the `N_TRANSIENT`,
+`N_PERSIST` and other totals in the file's own header.
 Atala's own pixels on 25 Dec carry only `OUTLIER`, and spread over the point-spread
 function the way a real source does. With the flags read, 6 July is background like the
 rest.
@@ -532,8 +542,10 @@ of the image and read the verdict: one visit, named by SkyBoT as the asteroid.
 
 ## Limitations, stated plainly
 
-- **Quick Release data only.** The app queries `spherex_qr2` and `spherex_qr2_deep`. Coverage
-  is not yet uniform over the whole sky; some positions return nothing.
+- **Released data only.** The app queries `spherex_dr1`, `spherex_dr1_deep`, `spherex_qr3`
+  and `spherex_qr3_deep`: DR1 holds the reprocessed frames from April 2025 to mid-May 2026, QR3 those from
+  mid-May to early October 2026. Coverage
+  is not uniform over the whole sky; some positions return nothing.
 - **The archive caps large queries.** A cone at the ecliptic poles matches over 25 000
   frames and takes four minutes unserved. We ask for `MAXREC=500` per collection and say so
   in the interface when the list came back truncated.
@@ -556,9 +568,9 @@ of the image and read the verdict: one visit, named by SkyBoT as the asteroid.
   the light outside the aperture, and it does not match wavelengths between visits.
 - **The distance bound assumes a circular orbit in the ecliptic.** It is a ceiling from a rate,
   not an orbit fit.
-- **The relay is not hardened for abuse.** It caps six lookups in flight, but has no per-client
+- **The relay is not hardened for abuse.** It caps twelve lookups in flight, but has no per-client
   limit and never prunes its disk cache.
-- **No video yet.** The submission's 30-second recording is not made; the seven slides are.
+- **No video yet.** The submission's 30-second recording is not made; the eight slides are.
 - **Cosmic rays look like transients.** They are single-frame, sharp, and common. The ones
   the pipeline caught are masked through `FLAGS`; the ones it missed are not. Anything
   seen exactly once still deserves that explanation first.
@@ -569,11 +581,16 @@ of the image and read the verdict: one visit, named by SkyBoT as the asteroid.
 
 | | |
 | --- | --- |
-| Images | NASA/JPL-Caltech · SPHEREx · IPAC/IRSA Quick Release, via the AWS Open Data mirror `nasa-irsa-spherex` |
+| Images | NASA/JPL-Caltech · SPHEREx · IPAC/IRSA Data Release 1 and Quick Release 3, via the AWS Open Data mirror `nasa-irsa-spherex` |
 | Frame index | IRSA Simple Image Access v2 (`irsa.ipac.caltech.edu/SIA`) |
-| Known solar-system objects | SkyBoT, IMCCE / Observatoire de Paris |
-| Object names | SIMBAD / Sesame, CDS Strasbourg |
-| What a marked source is, and the Gaia / WISE overlay | AllWISE, Gaia DR3, 2MASS and VSX through VizieR TAP, CDS Strasbourg |
+| Known solar-system objects | NASA/JPL Small-Body Identification API (`ssd-api.jpl.nasa.gov/sb_ident.api`), through the relay; SkyBoT, IMCCE / Observatoire de Paris, from the browser. Both asked, merged by number or name |
+| What a marked source is, and the Gaia / WISE overlay | Gaia DR3, AllWISE, CatWISE2020 and 2MASS through IRSA TAP (`irsa.ipac.caltech.edu/TAP`), via the relay. Gaia DR3, AllWISE and 2MASS are also asked of VizieR TAP, CDS Strasbourg, and the first answer is used, so either archive being down leaves the other |
+| Variable stars | AAVSO VSX through VizieR TAP, CDS Strasbourg; no NASA equivalent |
+| Object names | SIMBAD / Sesame, CDS Strasbourg; no NASA equivalent |
+
+Each catalogue is asked on its own: one that does not answer leaves the rest of a
+marked source's card standing, and the card names the one that did not. The overlay's
+legend says which archive answered, NASA IRSA or CDS VizieR.
 
 Muninn is not affiliated with NASA, and it adds nothing to the data it shows.
 
@@ -587,7 +604,7 @@ sources, listed under "Data and services" above.
 ## Layout
 
 ```
-server.js                 static host (compressed, with the security headers) + the one IRSA relay + disk cache
+server.js                 static host (compressed, with the security headers) + the IRSA and JPL relays + disk cache
 public/
   index.html
   css/tokens.css          the design system: colour, type, space, motion
@@ -603,11 +620,14 @@ public/
   js/sectors.js           the 5 × 4 sector scores
   js/release.js           which SPHEREx release (IRSA collections) is read
   js/net.js               a deadline for every request the page makes
-  js/catalog.js           SIA, SkyBoT, SIMBAD, coordinate parsing
+  js/catalog.js           SIA, the catalogues (IRSA and VizieR), SkyBoT and JPL, SIMBAD, coordinate parsing
+  js/overlay.js           the catalogue templates for both archives, overlay arithmetic, row parsers
+  js/sbident.js           the JPL small-body question and the reading of its answer
+  js/csv.js               TAP CSV answers as rows of text
   js/votable.js           just enough IVOA VOTable for both services
   js/i18n.js              English and Russian
   js/app.js               state, wiring, the loading choreography
-  js/talk.js              the seven slides at talk.html; slide 1 reads frames live
+  js/talk.js              the eight slides at talk.html; slide 1 reads frames live
   data/targets.json       the ten opening fields, with counts from the archive
   data/fields/*.json      their frame indexes, pre-resolved so they open in ~80 ms
 tools/                    the scripts that verified all of the above
@@ -624,7 +644,8 @@ and the pixels come straight from the CORS-enabled AWS mirror, so the ten ready
 fields work on any static host — GitHub Pages, Netlify, Cloudflare Pages — with no
 server at all. Searching an arbitrary position is the one thing that needs
 `server.js`, because IRSA's index sends no CORS headers; without the relay the page
-says so plainly instead of failing silently.
+says so plainly instead of failing silently. The catalogues and known asteroids work
+there too, from VizieR and SkyBoT; the NASA routes to them (IRSA TAP, JPL) need the relay.
 
 One place it will *not* work is a sandbox with a strict content-security policy that
 blocks cross-origin `fetch` — the whole design depends on reading byte ranges from
@@ -646,9 +667,9 @@ Muninn складывает заходы друг на друга и показ�
 касательную плоскость с севером вверх.
 
 Стартовое поле выбрано не наугад: 25 декабря 2025 года в его центре стоит астероид
-**(152) Atala** (V = 13.8) — SNR 534 против фона 1–4 во всех остальных заходах. Раньше
-6 июля в той же точке была «вспышка» SNR 206 без объяснения в каталогах. Это один пиксель,
-который пайплайн SPHEREx сам пометил как попадание космической частицы (`FLAGS = 0x80005`,
-`TRANSIENT`). Теперь Muninn читает эти флаги и маскирует такие пиксели до любых измерений.
+**(152) Atala** (V = 13.8) — SNR 533 против фона 1–4 во всех остальных заходах. Раньше
+6 июля в той же точке была «вспышка» SNR 192 без объяснения в каталогах. Это один пиксель,
+который пайплайн SPHEREx сам пометил как попадание космической частицы (`FLAGS = 0x45` в DR1,
+`TRANSIENT`). С DR1 флаги хранятся в сжатии Rice, Muninn распаковывает их в браузере. Теперь Muninn читает эти флаги и маскирует такие пиксели до любых измерений.
 
 Запуск: `node server.js`, затем <http://127.0.0.1:5173>. Зависимостей нет.

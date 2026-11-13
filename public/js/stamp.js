@@ -19,6 +19,7 @@ import { WCS } from './wcs.js';
 import { skySigma } from './depth.js';
 import { deadline, FRAME_DEADLINE_MS } from './net.js';
 import { parseWaveTable, wavelengthAt } from './spectrum.js';
+import { riceDecode } from './rice.js';
 
 const HEADER_PROBE = 65536;
 const MAX_HEADER = 1 << 20;
@@ -55,15 +56,16 @@ async function readImageHDU(url, signal) {
  * the image. These bits mean the pixel did not see the sky in this exposure:
  * a cosmic-ray jump caught up the ramp (TRANSIENT), an onboard processing
  * error, a dead, hot or cold pixel, lost data, or charge persisting from an
- * earlier bright source. Bit numbers are the MP_* keys of the FLAGS header.
+ * earlier bright source. Bit numbers are the MP_* keys of the FLAGS header
+ * in Quick Release files and the MSKN* keys from DR1 on; they did not change.
  *
  * Deliberately not masked: OVERFLOW (the cores of bright stars), OUTLIER (set
  * on real sources too) and SOURCE (a known source, i.e. the sky itself).
  *
  * Without this the "flash" that opened the Atala field on 6 Jul 2025 was one
- * pixel at eleven times its neighbours with FLAGS 0x80005 — TRANSIENT,
- * SUR_ERROR, OUTLIER — and every one of Hunter X's standouts there was a
- * flagged pixel as well.
+ * pixel at eleven times its neighbours: FLAGS 0x80005 in QR2 (TRANSIENT,
+ * SUR_ERROR, OUTLIER) and 0x45 in DR1 (TRANSIENT, SUR_ERROR, NONFUNC). Every
+ * one of Hunter X's standouts there was a flagged pixel as well.
  */
 const MASK_BITS = {
   TRANSIENT: 0, SUR_ERROR: 2, NONFUNC: 6, MISSING_DATA: 9, HOT: 10, COLD: 11, PERSIST: 17,
@@ -87,20 +89,60 @@ async function readFlags(url, img, rowFrom, rowTo, nx, signal) {
     hdr = readHeader(head, 0);
   }
   if (!hdr || String(hdr.cards.get('EXTNAME') ?? '').trim() !== 'FLAGS') return null;
+  const dataAt = at + hdr.headerBytes;
+  if (hdr.cards.get('ZIMAGE') === true) {
+    const tiles = await readRiceRows(url, hdr.cards, dataAt, rowFrom, rowTo, nx, signal);
+    return tiles && { values: tiles.values, bytes: head.byteLength + tiles.bytes };
+  }
   if (hdr.cards.get('BITPIX') !== 32 || hdr.cards.get('NAXIS1') !== nx) return null;
 
-  const start = at + hdr.headerBytes + (rowFrom - 1) * nx * 4;
-  const raw = await fetchRange(url, start, at + hdr.headerBytes + rowTo * nx * 4 - 1, signal);
-  return { raw, bytes: head.byteLength + raw.byteLength };
+  const raw = await fetchRange(url, dataAt + (rowFrom - 1) * nx * 4, dataAt + rowTo * nx * 4 - 1, signal);
+  const view = new DataView(raw);
+  const values = new Int32Array(raw.byteLength / 4);
+  for (let k = 0; k < values.length; k++) values[k] = view.getInt32(k * 4, false);
+  return { values, bytes: head.byteLength + raw.byteLength };
+}
+
+/**
+ * The same rows when FLAGS is a tile-compressed image (DR1 onward): one
+ * RICE_1 tile per detector row. Two reads: the rows' heap pointers, then the
+ * stretch of heap they point into. Any other layout returns null, so the
+ * frame is shown unmasked and says so, rather than masked wrongly.
+ */
+async function readRiceRows(url, cards, dataAt, rowFrom, rowTo, nx, signal) {
+  if (String(cards.get('ZCMPTYPE') ?? '').trim() !== 'RICE_1') return null;
+  if (cards.get('ZBITPIX') !== 32 || cards.get('ZNAXIS1') !== nx) return null;
+  if (cards.get('ZTILE1') !== nx || (cards.get('ZTILE2') ?? 1) !== 1) return null;
+  if (cards.get('NAXIS1') !== 8 || !/^1?P/.test(String(cards.get('TFORM1') ?? ''))) return null;
+  let block = 32;
+  for (let k = 1; cards.has(`ZNAME${k}`); k++) {
+    const name = String(cards.get(`ZNAME${k}`)).trim();
+    if (name === 'BLOCKSIZE') block = cards.get(`ZVAL${k}`);
+    if (name === 'BYTEPIX' && cards.get(`ZVAL${k}`) !== 4) return null;
+  }
+
+  const pointers = new DataView(await fetchRange(url, dataAt + (rowFrom - 1) * 8, dataAt + rowTo * 8 - 1, signal));
+  const rows = rowTo - rowFrom + 1;
+  const tiles = [];
+  for (let r = 0; r < rows; r++) tiles.push([pointers.getInt32(r * 8, false), pointers.getInt32(r * 8 + 4, false)]);
+  const from = Math.min(...tiles.map(([, off]) => off));
+  const to = Math.max(...tiles.map(([len, off]) => off + len));
+  const heapAt = dataAt + (cards.get('THEAP') ?? cards.get('NAXIS1') * cards.get('NAXIS2'));
+  const heap = new Uint8Array(await fetchRange(url, heapAt + from, heapAt + to - 1, signal));
+
+  const values = new Int32Array(rows * nx);
+  tiles.forEach(([len, off], r) => {
+    values.set(riceDecode(heap.subarray(off - from, off - from + len), nx, block), r * nx);
+  });
+  return { values, bytes: pointers.byteLength + heap.byteLength };
 }
 
 /** Blank, in place, every pixel of the rows read that the pipeline flagged. */
 function maskFlagged(plane, read) {
-  const flags = new DataView(read.raw);
-  const n = Math.min(plane.length, read.raw.byteLength / 4);
+  const n = Math.min(plane.length, read.values.length);
   let masked = 0;
   for (let k = 0; k < n; k++) {
-    if (flags.getInt32(k * 4, false) & FLAG_MASK) { plane[k] = NaN; masked += 1; }
+    if (read.values[k] & FLAG_MASK) { plane[k] = NaN; masked += 1; }
   }
   return { bytes: read.bytes, masked };
 }

@@ -12,6 +12,14 @@
  *   · AllWISE (NASA WISE) positions belong to about 2010.5 and its proper
  *     motions are not reliable, so its marks are drawn where the catalogue has
  *     them and the page says so.
+ *   · CatWISE2020 (NASA WISE and NEOWISE) measured motions over ten years of
+ *     the same sky; it is the catalogue the coldest brown dwarfs were found
+ *     in, by how fast they move. It says whether a marked source moves.
+ *
+ * Each catalogue is held by two archives, NASA's IRSA and CDS VizieR, under
+ * different column names. Every catalogue is described once, here, with the
+ * column each archive uses for each field; rows from either come out under the
+ * same names and go through the same parser.
  */
 
 export const GAIA_EPOCH = 2016.0;
@@ -78,28 +86,82 @@ function fixed(value, digits) {
 }
 
 const circle = (ra, dec, radiusDeg) => `CIRCLE('ICRS', ${fixed(ra, 6)}, ${fixed(dec, 6)}, ${fixed(radiusDeg, 5)})`;
-const top = (cap) => fixed(Math.trunc(cap) + 1, 0);
 
-/*
- * Both queries ask for one row more than the cap, brightest first: the extra
- * row is how a cut list is told from a complete one, and brightest first means
- * a cut list loses its faint end and nothing else.
+const same = (...names) => Object.fromEntries(names.map((n) => [n, n]));
+
+/**
+ * The catalogues, as each archive names their columns. The keys of `columns`
+ * are the names a row is read under, the values the archive's own. VizieR's
+ * names are the shared ones, so its rows need no renaming; IRSA's rows are
+ * renamed by the relay (renameRow). `ra`, `dec` and `mag` are the archive
+ * columns the cone and the magnitude cut are made on.
+ *
+ * CatWISE2020 is asked of IRSA only. It is a NASA catalogue, and its VizieR
+ * copy (II/365) names everything differently again.
  */
+export const CATALOGUES = {
+  gaia: {
+    irsa: {
+      table: 'gaia_dr3_source', ra: 'ra', dec: 'dec', mag: 'phot_g_mean_mag',
+      columns: {
+        Source: 'source_id', RA_ICRS: 'ra', DE_ICRS: 'dec', Gmag: 'phot_g_mean_mag',
+        pmRA: 'pmra', pmDE: 'pmdec', Plx: 'parallax', e_Plx: 'parallax_error',
+        VarFlag: 'phot_variable_flag', PQSO: 'classprob_dsc_combmod_quasar',
+        PGal: 'classprob_dsc_combmod_galaxy', PSS: 'classprob_dsc_combmod_star',
+      },
+    },
+    vizier: {
+      table: '"I/355/gaiadr3"', ra: 'RA_ICRS', dec: 'DE_ICRS', mag: 'Gmag',
+      columns: same('Source', 'RA_ICRS', 'DE_ICRS', 'Gmag', 'pmRA', 'pmDE', 'Plx', 'e_Plx', 'VarFlag', 'PQSO', 'PGal', 'PSS'),
+    },
+  },
+  wise: {
+    irsa: {
+      table: 'allwise_p3as_psd', ra: 'ra', dec: 'dec', mag: 'w1mpro',
+      columns: { AllWISE: 'designation', RAJ2000: 'ra', DEJ2000: 'dec', W1mag: 'w1mpro', W2mag: 'w2mpro' },
+    },
+    vizier: {
+      table: '"II/328/allwise"', ra: 'RAJ2000', dec: 'DEJ2000', mag: 'W1mag',
+      columns: same('AllWISE', 'RAJ2000', 'DEJ2000', 'W1mag', 'W2mag'),
+    },
+  },
+  twomass: {
+    irsa: {
+      table: 'fp_psc', ra: 'ra', dec: 'dec', mag: 'j_m',
+      columns: { '2MASS': 'designation', RAJ2000: 'ra', DEJ2000: 'dec', Jmag: 'j_m', Hmag: 'h_m', Kmag: 'k_m' },
+    },
+    vizier: {
+      table: '"II/246/out"', ra: 'RAJ2000', dec: 'DEJ2000', mag: 'Jmag',
+      columns: { '2MASS': '"2MASS"', ...same('RAJ2000', 'DEJ2000', 'Jmag', 'Hmag', 'Kmag') },
+    },
+  },
+  catwise: {
+    irsa: {
+      table: 'catwise_2020', ra: 'ra', dec: 'dec', mag: 'w1mpro',
+      columns: same('source_name', 'ra_pm', 'dec_pm', 'pmra', 'pmdec', 'sigpmra', 'sigpmdec', 'w1mpro', 'w2mpro'),
+    },
+  },
+};
 
-/** ADQL for the Gaia DR3 sources in a circle, through VizieR (I/355). */
-export function gaiaQuery({ ra, dec, radiusDeg, limit, cap = ROW_CAP }) {
-  return `SELECT TOP ${top(cap)} Source, RA_ICRS, DE_ICRS, Gmag, pmRA, pmDE, Plx, e_Plx
-    FROM "I/355/gaiadr3"
-    WHERE CONTAINS(POINT('ICRS', RA_ICRS, DE_ICRS), ${circle(ra, dec, radiusDeg)}) = 1 AND Gmag <= ${fixed(limit, 2)}
-    ORDER BY Gmag`;
+/**
+ * ADQL for one catalogue's sources in a circle, as one archive holds it
+ * (`CATALOGUES[kind].irsa` or `.vizier`), brightest first: at most `top` rows,
+ * and, when `limit` is given, none fainter than it.
+ *
+ * Every value goes through `fixed` and every name comes from the table above:
+ * nothing a caller sends ever becomes query text.
+ */
+export function coneQuery(archive, { ra, dec, radiusDeg, limit = null, top }) {
+  const cut = limit === null ? '' : ` AND ${archive.mag} <= ${fixed(limit, 2)}`;
+  return `SELECT TOP ${fixed(top, 0)} ${Object.values(archive.columns).join(', ')}
+    FROM ${archive.table}
+    WHERE CONTAINS(POINT('ICRS', ${archive.ra}, ${archive.dec}), ${circle(ra, dec, radiusDeg)}) = 1${cut}
+    ORDER BY ${archive.mag}`;
 }
 
-/** ADQL for the AllWISE sources in a circle, through VizieR (II/328). */
-export function wiseQuery({ ra, dec, radiusDeg, limit, cap = ROW_CAP }) {
-  return `SELECT TOP ${top(cap)} AllWISE, RAJ2000, DEJ2000, W1mag, W2mag
-    FROM "II/328/allwise"
-    WHERE CONTAINS(POINT('ICRS', RAJ2000, DEJ2000), ${circle(ra, dec, radiusDeg)}) = 1 AND W1mag <= ${fixed(limit, 2)}
-    ORDER BY W1mag`;
+/** An IRSA row under the shared names. A column the archive left out reads as ''. */
+export function renameRow(row, columns) {
+  return Object.fromEntries(Object.entries(columns).map(([name, col]) => [name, row[col] ?? '']));
 }
 
 /** `''` and anything that is not a number → null. */
@@ -125,6 +187,34 @@ export function parseWiseRow(r) {
     id: String(r.AllWISE ?? '').trim(),
     ra: num(r.RAJ2000) ?? NaN, dec: num(r.DEJ2000) ?? NaN, mag: num(r.W1mag), w2: num(r.W2mag),
   });
+}
+
+/** CatWISE2020's motion-fit positions are for MJD 57170.0, about 2015.4. */
+export const CATWISE_EPOCH = epochOfMjd(57170);
+
+/**
+ * One row of the CatWISE2020 answer. Its motions come in arcsec a year and
+ * become mas a year here, the unit Gaia's are in, so `propagate` takes either.
+ */
+export function parseCatwiseRow(r) {
+  const mas = (v) => (num(v) == null ? null : num(v) * 1000);
+  return placed({
+    id: String(r.source_name ?? '').trim(),
+    ra: num(r.ra_pm) ?? NaN, dec: num(r.dec_pm) ?? NaN, mag: num(r.w1mpro), w2: num(r.w2mpro),
+    pmRA: mas(r.pmra), pmDE: mas(r.pmdec), pmRAErr: mas(r.sigpmra), pmDEErr: mas(r.sigpmdec),
+  });
+}
+
+/**
+ * A CatWISE motion worth saying, in arcsec a year, or null. Most faint
+ * sources come back with a motion the size of its own error; only one five
+ * times its error is a measurement rather than noise.
+ */
+export function measuredMotion(row) {
+  const pm = properMotion(row);
+  const err = Math.hypot(row.pmRAErr, row.pmDEErr) / 1000;
+  if (pm == null || !(err > 0)) return null;
+  return pm / err >= 5 ? pm : null;
 }
 
 /**

@@ -33,7 +33,7 @@ import { trackCSV } from './export.js';
 import { SkyView, shortName } from './sky.js';
 import {
   searchFrames, NoRelayError, UpstreamError, groupVisits, bandsPresent, bandRange, parseCoordinates,
-  resolveName, formatRA, formatDec, skybotCone, identifySource, fieldObjects, toS3, surveySources,
+  resolveName, formatRA, formatDec, knownBodies, identifySource, fieldObjects, toS3, surveySources,
 } from './catalog.js';
 import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP } from './overlay.js';
 
@@ -308,7 +308,7 @@ function updateIdentity() {
     if (!total) {
       cue.textContent = state.ra == null ? t('app.lede')
         : state.failed ? t('epochs.cueFailed')
-        : state.frames.length ? t('epochs.none') : t('epochs.searching');
+        : state.searched ? t('epochs.none') : t('epochs.searching');
     } else {
       cue.textContent = settled >= total
         ? t(state.visits.some((v) => v.status === 'failed') ? 'epochs.unread' : 'epochs.none')
@@ -1399,7 +1399,7 @@ async function askSkybot(v, signal) {
     const mid = exptime > 0
       ? new Date((mjd + exptime / 2 / 86400 - 40587) * 86400000).toISOString().replace('Z', '')
       : v.frame.iso;
-    const objects = await skybotCone({
+    const objects = await knownBodies({
       ra: state.ra, dec: state.dec,
       radiusDeg: Math.max(0.03, (sky.grid?.spanDeg ?? state.fov) * 0.8), iso: mid,
     }, { signal });
@@ -1614,7 +1614,7 @@ function identifyMark(m) {
     });
 }
 
-const CATALOGUE_NAMES = { simbad: 'SIMBAD', gaia: 'Gaia', tmass: '2MASS', wise: 'AllWISE', vsx: 'VSX' };
+const CATALOGUE_NAMES = { simbad: 'SIMBAD', gaia: 'Gaia', tmass: '2MASS', wise: 'AllWISE', catwise: 'CatWISE2020', vsx: 'VSX' };
 
 function link(text, href) {
   const a = document.createElement('a');
@@ -1707,6 +1707,7 @@ function whoLines(who, kind) {
     const pc = 1000 / g.plx;
     lines.push(whoP(t('mark.whoPlx', { plx: fmt(g.plx, 2), pc: fmt(pc, pc < 100 ? 1 : 0) })));
   }
+  if (r.catwise?.pm != null) lines.push(whoP(t('mark.whoCatwise', { pm: fmt(r.catwise.pm, 2) })));
 
   if (!lines.length) lines.push(whoP(t('mark.whoNone')));
   if (r.failed.length) lines.push(whoP(t('mark.whoPartial', { list: r.failed.map((k) => CATALOGUE_NAMES[k]).join(', ') })));
@@ -1791,7 +1792,8 @@ function surveyLineText(kind) {
   const line = t(`survey.${kind}Line`, {
     name, n: sky.surveyShown[kind] ?? 0, band: SURVEY_BAND[kind], lim: fmt(found.reached, 1),
   });
-  return found.cut ? `${line} · ${t('survey.cut', { cap: ROW_CAP })}` : line;
+  const via = found.via ? `${line} · ${t(`survey.via${found.via}`)}` : line;
+  return found.cut ? `${via} · ${t('survey.cut', { cap: ROW_CAP })}` : via;
 }
 
 function surveyLine(kind, text) {
@@ -2306,6 +2308,7 @@ async function openField({ ra, dec, label = '', band = null }) {
   renderVerdict();
   state.bytes = 0;
   renderBytes();
+  state.searched = false;
   setPlateState(t('epochs.searching'), { progress: 0 });
   drawAxis();
 
@@ -2330,6 +2333,7 @@ async function openField({ ra, dec, label = '', band = null }) {
   if (ctrl.signal.aborted) return;
 
   state.frames = frames;
+  state.searched = true;
   state.truncated = truncated;
   state.partial = partial;
   populateBands();

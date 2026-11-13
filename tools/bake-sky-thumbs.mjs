@@ -10,7 +10,8 @@
 // visit that covers the whole picture and is not mostly masked is kept. An
 // object SPHEREx has not reached, or whose frames are all masked, gets no
 // picture: its card then shows what is known and no image. Run again after a
-// data release; objects already done are skipped unless named.
+// data release with --all; otherwise objects already done are skipped unless
+// named.
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { parseVOTable } from '../public/js/votable.js';
 import { frameFromRow, groupVisits, toS3 } from '../public/js/catalog.js';
@@ -31,7 +32,8 @@ const { objects } = JSON.parse(await readFile(new URL('data/sky/deepsky.json', r
 const indexUrl = new URL('data/sky/thumbs.json', root);
 const index = await readFile(indexUrl, 'utf8').then(JSON.parse, () => ({}));
 await mkdir(new URL('img/sky/', root), { recursive: true });
-const only = process.argv.slice(2);
+const all = process.argv.includes('--all');
+const only = process.argv.slice(2).filter((a) => a !== '--all');
 
 // The named stars have no catalogue id of their own here; their place on the
 // sky, to a hundredth of a degree, is the key the page looks them up by.
@@ -70,7 +72,7 @@ async function bake(object) {
   return null;
 }
 
-const queue = [...objects, ...named].filter((o) => (only.length ? only.includes(o.id) : !index[o.id]));
+const queue = [...objects, ...named].filter((o) => (only.length ? only.includes(o.id) : all || !index[o.id]));
 let done = 0;
 async function worker() {
   for (let object = queue.shift(); object; object = queue.shift()) {
