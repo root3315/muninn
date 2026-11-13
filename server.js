@@ -22,7 +22,7 @@
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { brotliCompressSync, gzipSync, gunzipSync, constants as zlib } from 'node:zlib';
-import { readFile, writeFile, mkdir, stat, readdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, stat, readdir, unlink } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -43,6 +43,8 @@ const HOST = process.env.HOST || '127.0.0.1';
 const SIA = 'https://irsa.ipac.caltech.edu/SIA';
 const IRSA_TAP = 'https://irsa.ipac.caltech.edu/TAP/sync';
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+/** The most the answer cache may hold on disk. */
+const CACHE_MAX_BYTES = 300 * 1024 * 1024;
 /** IRSA's TAP answers a cone in 7–30 s; well past that, it is not coming. */
 const TAP_TIMEOUT_MS = 75_000;
 /** JPL's second pass takes 20–70 s on a crowded ecliptic field. */
@@ -105,14 +107,13 @@ const send = (res, code, body, headers = {}) => {
 const json = (res, code, value) =>
   send(res, code, JSON.stringify(value), { 'content-type': TYPES['.json'] });
 
-async function withTimeout(url, ms) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), ms);
-  try {
-    return await fetch(url, { signal: ctrl.signal, headers: { 'user-agent': 'Muninn/1.0 (NASA Space Apps 2026)' } });
-  } finally {
-    clearTimeout(timer);
-  }
+/**
+ * A fetch whose deadline covers the body as well as the headers: an archive
+ * that sends headers and then stalls would otherwise hold its slot until the
+ * process restarted.
+ */
+function withTimeout(url, ms) {
+  return fetch(url, { signal: AbortSignal.timeout(ms), headers: { 'user-agent': 'Muninn/1.0 (NASA Space Apps 2026)' } });
 }
 
 /* ------------------------------------------------------------------- caching */
@@ -120,13 +121,6 @@ async function withTimeout(url, ms) {
 const memory = new Map();
 /** Answers kept in memory; the disk keeps the rest. Oldest out first. */
 const MEMORY_MAX = 256;
-/**
- * Distinct questions out to the archives at once. Behind a public tunnel a
- * crawler could otherwise open as many slow archive queries as it liked. One
- * field asks for its frames, two overlays, four catalogues for a marked source
- * and two ephemeris answers at a time; this leaves room for that, not for more.
- */
-const INFLIGHT_MAX = 12;
 
 const safeKey = (text) => text.replace(/[^\w.-]/g, '_');
 const cacheKey = (ra, dec, radius) => safeKey(`sia_${ra.toFixed(4)}_${dec.toFixed(4)}_${radius.toFixed(4)}`);
@@ -256,20 +250,30 @@ async function answerSlowly(res, pending) {
 }
 
 /**
+ * Questions out at once, per kind of question. One pool for all of them let
+ * a single page's ephemeris questions (one per visit, each up to a minute at
+ * JPL) fill every slot, and then the frame search answered "busy" to
+ * everyone. Each kind now waits only behind its own.
+ */
+const POOL_MAX = { search: 6, catalog: 8, jpl: 3, wise: 3 };
+const pools = Object.fromEntries(Object.keys(POOL_MAX).map((k) => [k, new Set()]));
+
+/**
  * A question for an archive, answered from the cache, by joining the same
  * question already out, or by asking. `ask` caches its own answer, since only
  * it knows whether the answer is whole.
  */
-async function relay(res, key, ask) {
+async function relay(res, key, ask, pool = 'catalog') {
   const cached = await readCache(key);
   if (cached) return json(res, 200, { ok: true, cached: true, ...cached });
 
   let pending = inflight.get(key);
-  if (!pending && inflight.size >= INFLIGHT_MAX) {
+  if (!pending && pools[pool].size >= POOL_MAX[pool]) {
     return json(res, 503, { ok: false, error: 'The archive relay is busy with other questions; try again in a moment.' });
   }
   if (!pending) {
-    pending = ask().finally(() => inflight.delete(key));
+    pools[pool].add(key);
+    pending = ask().finally(() => { inflight.delete(key); pools[pool].delete(key); });
     inflight.set(key, pending);
   }
   return answerSlowly(res, pending);
@@ -313,7 +317,7 @@ async function handleSearch(url, res) {
   }
 
   const key = cacheKey(ra, dec, radius);
-  return relay(res, key, () => lookup(ra, dec, radius, key));
+  return relay(res, key, () => lookup(ra, dec, radius, key), 'search');
 }
 
 /* ------------------------------------------------------- catalogues at IRSA */
@@ -344,7 +348,11 @@ async function handleTap(url, res) {
     top: clamp(Math.trunc(param(url, 'top')) || 9, 1, ROW_CAP + 1),
     limit: Number.isFinite(param(url, 'mag')) ? clamp(param(url, 'mag'), -2, 30) : null,
   };
-  const key = safeKey(`tap_${cat}_${field.ra.toFixed(5)}_${field.dec.toFixed(5)}_${field.radiusDeg.toFixed(5)}_${field.top}_${field.limit ?? 'all'}`);
+  // Rounded before they become a key: a float that differs in the sixth
+  // decimal is the same question, not a new file and a new archive query.
+  if (field.limit !== null) field.limit = Math.round(field.limit * 2) / 2;
+  field.radiusDeg = Math.max(1 / 3600, Number(field.radiusDeg.toPrecision(2)));
+  const key = safeKey(`tap_${cat}_${field.ra.toFixed(4)}_${field.dec.toFixed(4)}_${field.radiusDeg}_${field.top}_${field.limit ?? 'all'}`);
   // A star's own lookup is a few arcseconds: MAST answers that in a second or
   // two, where IRSA's TAP takes ten to fifty. A field's worth is megabytes at
   // MAST, so the overlays stay with IRSA.
@@ -358,8 +366,8 @@ async function handleTap(url, res) {
 
 /** The Gaia DR3 the challenge's resources point to: MAST, at STScI. */
 const MAST_INVOKE = 'https://mast.stsci.edu/api/v0/invoke';
-const MAST_MAX_DEG = 0.02;
-const MAST_TIMEOUT_MS = 30_000;
+const MAST_MAX_DEG = 0.04;
+const MAST_TIMEOUT_MS = 8_000;
 
 /**
  * A small Gaia DR3 cone from MAST, under the shared (VizieR) column names.
@@ -406,7 +414,7 @@ async function askIrsaTap(archive, field, key) {
 
 /** The AllWISE Atlas tiles, one per 1.56° of sky, listed by IRSA's SIA. */
 const WISE_COLLECTION = 'wise_allwise';
-const WISE_TIMEOUT_MS = 60_000;
+const WISE_DEADLINE_MS = 85_000;
 /** Biggest cutout asked for: the widest field the page opens, with a margin. */
 const WISE_MAX_DEG = 0.6;
 const wiseInflight = new Map();
@@ -421,7 +429,8 @@ async function handleWise(url, res) {
   const at = position(url);
   if (!at) return json(res, 400, BAD_POSITION);
   const band = url.searchParams.get('band') === '2' ? 2 : 1;
-  const size = clamp(param(url, 'size') || 0.2, 0.02, WISE_MAX_DEG);
+  // In steps of 0.05°, rounded up: a handful of sizes per position, not 581.
+  const size = Math.ceil(clamp(param(url, 'size') || 0.2, 0.02, WISE_MAX_DEG) / 0.05) * 0.05;
   const key = safeKey(`wise_w${band}_${at.ra.toFixed(4)}_${at.dec.toFixed(4)}_${size.toFixed(3)}`);
   const file = join(CACHE, `${key}.fits`);
   try {
@@ -430,11 +439,12 @@ async function handleWise(url, res) {
   } catch { /* not cut yet */ }
 
   let pending = wiseInflight.get(key);
-  if (!pending && wiseInflight.size >= INFLIGHT_MAX) {
+  if (!pending && pools.wise.size >= POOL_MAX.wise) {
     return json(res, 503, { ok: false, error: 'The archive relay is busy; try again in a moment.' });
   }
   if (!pending) {
-    pending = cutWise(at, band, size, file).finally(() => wiseInflight.delete(key));
+    pools.wise.add(key);
+    pending = cutWise(at, band, size, file).finally(() => { wiseInflight.delete(key); pools.wise.delete(key); });
     wiseInflight.set(key, pending);
   }
   try {
@@ -445,8 +455,12 @@ async function handleWise(url, res) {
 }
 
 async function cutWise({ ra, dec }, band, size, file) {
+  // Both steps under one deadline, short of the tunnel's 100 s cut-off, so a
+  // slow cut fails as JSON the page can read rather than as the proxy's page.
+  const until = Date.now() + WISE_DEADLINE_MS;
+  const left = () => Math.max(1000, until - Date.now());
   const pos = encodeURIComponent(`circle ${ra} ${dec} 0.002`);
-  const listed = await withTimeout(`${SIA}?COLLECTION=${WISE_COLLECTION}&POS=${pos}&MAXREC=40`, WISE_TIMEOUT_MS);
+  const listed = await withTimeout(`${SIA}?COLLECTION=${WISE_COLLECTION}&POS=${pos}&MAXREC=40`, left());
   if (!listed.ok) throw new Error(`IRSA ${WISE_COLLECTION}: HTTP ${listed.status}`);
   const { rows } = parseVOTable(await listed.text());
   const want = `-w${band}-int-3.fits`;
@@ -456,10 +470,10 @@ async function cutWise({ ra, dec }, band, size, file) {
     .map((r) => ({ url: r.access_url, d: Math.hypot((Number(r.s_ra) - ra) * Math.cos(dec * Math.PI / 180), Number(r.s_dec) - dec) }))
     .sort((a, b) => a.d - b.d);
   if (!tiles.length) throw new Error('AllWISE has no tile here');
-  const cut = await withTimeout(`${tiles[0].url}?center=${ra.toFixed(5)},${dec.toFixed(5)}&size=${size.toFixed(3)}deg`, WISE_TIMEOUT_MS);
+  const cut = await withTimeout(`${tiles[0].url}?center=${ra.toFixed(5)},${dec.toFixed(5)}&size=${size.toFixed(3)}deg`, left());
   if (!cut.ok) throw new Error(`IRSA cutout: HTTP ${cut.status}`);
   let body = Buffer.from(await cut.arrayBuffer());
-  if (body[0] === 0x1f && body[1] === 0x8b) body = gunzipSync(body);
+  if (body[0] === 0x1f && body[1] === 0x8b) body = gunzipSync(body, { maxOutputLength: 64 << 20 });
   if (!body.subarray(0, 6).toString('latin1').startsWith('SIMPLE')) throw new Error('IRSA cutout: not a FITS file');
   body = binFits(body, WISE_MAX_SIDE);
   try {
@@ -580,10 +594,10 @@ async function handleSbIdent(url, res) {
     ...at,
     halfWidthDeg: clamp(param(url, 'r') || 0.1, 0.01, 2),
     iso: time.slice(0, 19),
-    magLimit: clamp(param(url, 'mag') || 20, 10, 25),
+    magLimit: Math.round(clamp(param(url, 'mag') || 20, 10, 25)),
   };
   const key = safeKey(`sbid_${field.ra.toFixed(4)}_${field.dec.toFixed(4)}_${field.halfWidthDeg.toFixed(4)}_${field.iso}_${field.magLimit}`);
-  return relay(res, key, () => askJpl(field, key));
+  return relay(res, key, () => askJpl(field, key), 'jpl');
 }
 
 async function askJpl(field, key) {
@@ -723,6 +737,28 @@ function cachePolicy(rel) {
 
 /* ----------------------------------------------------------------------- run */
 
+/**
+ * Questions to the archives per visitor per minute. A page opening a field
+ * asks a few dozen; a script looping over the sky asks thousands, each one a
+ * query at someone else's archive on our behalf.
+ */
+const PER_MINUTE = 180;
+const asked = new Map();
+
+function overLimit(req) {
+  // Behind the tunnel every request comes from 127.0.0.1; Cloudflare says who.
+  const who = String(req.headers['cf-connecting-ip'] ?? req.socket.remoteAddress ?? '');
+  const now = Date.now();
+  let entry = asked.get(who);
+  if (!entry || now - entry.from > 60_000) {
+    entry = { from: now, n: 0 };
+    asked.set(who, entry);
+    if (asked.size > 5000) for (const [k, v] of asked) if (now - v.from > 60_000) asked.delete(k);
+  }
+  entry.n += 1;
+  return entry.n > PER_MINUTE;
+}
+
 const server = createServer(async (req, res) => {
   // A request line that is not a URL ("//", a host with a space) is the
   // client's mistake. Parsed outside a try it was an unhandled rejection, and
@@ -736,6 +772,9 @@ const server = createServer(async (req, res) => {
   // Everything here is read-only.
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     return send(res, 405, 'Method not allowed', { allow: 'GET, HEAD' });
+  }
+  if (url.pathname.startsWith('/api/') && overLimit(req)) {
+    return json(res, 429, { ok: false, error: 'Too many questions from here; wait a minute.' });
   }
   try {
     if (url.pathname === '/api/search') return await handleSearch(url, res);
@@ -756,6 +795,36 @@ const server = createServer(async (req, res) => {
 });
 
 await loadBakedFields();
+
+/**
+ * Drop answers older than they are trusted for. Every relay question is a
+ * file in .cache, and on a small always-on box the disk is the limit that
+ * would be reached first; an expired answer is never served, so it is only
+ * taking room. Swept at start and every hour after.
+ */
+async function sweepCache() {
+  let names;
+  try { names = await readdir(CACHE); } catch { return; }
+  const now = Date.now();
+  const kept = [];
+  for (const name of names) {
+    const file = join(CACHE, name);
+    try {
+      const info = await stat(file);
+      if (!info.isFile()) continue;
+      if (now - info.mtimeMs > CACHE_TTL_MS) await unlink(file);
+      else kept.push({ file, at: info.mtimeMs, size: info.size });
+    } catch { /* gone already, or busy: the next sweep has it */ }
+  }
+  // And a ceiling on what is kept, oldest out first.
+  let total = kept.reduce((sum, f) => sum + f.size, 0);
+  for (const f of kept.sort((a, b) => a.at - b.at)) {
+    if (total <= CACHE_MAX_BYTES) break;
+    try { await unlink(f.file); total -= f.size; } catch { /* next sweep */ }
+  }
+}
+sweepCache();
+setInterval(sweepCache, 10 * 60 * 1000).unref();
 
 server.listen(PORT, HOST, () => {
   console.log(`\n  Muninn — SPHEREx time-domain viewer`);
