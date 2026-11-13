@@ -20,6 +20,7 @@
  */
 
 import { createServer } from 'node:http';
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { brotliCompressSync, gzipSync, gunzipSync, constants as zlib } from 'node:zlib';
 import { readFile, writeFile, mkdir, stat, readdir, unlink } from 'node:fs/promises';
@@ -710,7 +711,7 @@ async function lookup(ra, dec, radius, key) {
 
 /* -------------------------------------------------------------------- static */
 
-async function serveStatic(pathname, req, res) {
+async function serveStatic(pathname, req, res, asked = null) {
   // A malformed escape is the request's fault, not the server's.
   let decoded;
   try {
@@ -734,7 +735,7 @@ async function serveStatic(pathname, req, res) {
   const ext = extname(target);
   const headers = {
     'content-type': TYPES[ext] ?? 'application/octet-stream',
-    'cache-control': cachePolicy(rel),
+    'cache-control': asked && asked === file.version ? IMMUTABLE : cachePolicy(rel),
     etag: file.etag,
     vary: 'accept-encoding',
   };
@@ -762,11 +763,13 @@ async function loadStatic(target) {
   const kept = staticCache.get(target);
   if (kept && kept.mtimeMs === info.mtimeMs) return kept;
 
-  const raw = await readFile(target);
+  const version = await codeVersion();
+  const raw = versioned(target, await readFile(target), version);
   const file = {
     mtimeMs: info.mtimeMs,
     raw,
-    etag: `"${info.size.toString(16)}-${Math.round(info.mtimeMs).toString(16)}"`,
+    version,
+    etag: `"${info.size.toString(16)}-${Math.round(info.mtimeMs).toString(16)}-${version}"`,
   };
   if (COMPRESSIBLE.has(extname(target))) {
     file.br = brotliCompressSync(raw, { params: { [zlib.BROTLI_PARAM_QUALITY]: 9 } });
@@ -774,6 +777,51 @@ async function loadStatic(target) {
   }
   staticCache.set(target, file);
   return file;
+}
+
+/**
+ * The page's code, served under a tag for the deploy it belongs to.
+ *
+ * Through the tunnel each request to the box is one to three seconds, and the
+ * code was sent `no-cache`, so Cloudflare asked the box about every one of
+ * the page's thirty-odd files on every visit: seven seconds to a first paint.
+ * Now the page names each file as `js/app.js?v=<tag>`, every import inside
+ * the code carries the same tag, and a file asked for under the current tag
+ * is marked immutable: Cloudflare keeps it and the box is not asked again.
+ * A new deploy is a new tag, so a visitor never gets one deploy's page with
+ * another's code. A file asked for under an old tag is served as it is now,
+ * `no-cache`, so the edge never keeps new code under an old name.
+ */
+const IMMUTABLE = 'public, max-age=31536000, immutable';
+let versionTag = null;
+
+/** A short hash of the code as deployed: every file's path, size and date. */
+async function codeVersion() {
+  if (versionTag) return versionTag;
+  const hash = createHash('sha1');
+  for (const dir of ['js', 'css']) {
+    for (const name of (await readdir(join(PUBLIC, dir))).sort()) {
+      const info = await stat(join(PUBLIC, dir, name));
+      if (info.isFile()) hash.update(`${dir}/${name}:${info.size}:${Math.round(info.mtimeMs)}\n`);
+    }
+  }
+  versionTag = hash.digest('hex').slice(0, 10);
+  return versionTag;
+}
+
+const PAGE_CODE = /((?:src|href)=")((?:js|css)\/[^"?#]+\.(?:js|css))"/g;
+const IMPORTS = /(\bfrom\s*|\bimport\s*\(?\s*|new URL\(\s*)(['"])(\.{1,2}\/[^'"?#]+\.js)\2/g;
+
+/** The page's references to its own code, and the code's to itself, tagged. */
+function versioned(target, raw, version) {
+  const ext = extname(target);
+  if (ext === '.html') {
+    return Buffer.from(raw.toString('utf8').replace(PAGE_CODE, `$1$2?v=${version}"`));
+  }
+  if (ext === '.js' && target.startsWith(join(PUBLIC, 'js') + sep)) {
+    return Buffer.from(raw.toString('utf8').replace(IMPORTS, `$1$2$3?v=${version}$2`));
+  }
+  return raw;
 }
 
 /**
@@ -839,7 +887,7 @@ const server = createServer(async (req, res) => {
       const body = await readFile(join(PUBLIC, 'data', 'targets.json'));
       return send(res, 200, body, { 'content-type': TYPES['.json'] });
     }
-    return await serveStatic(url.pathname, req, res);
+    return await serveStatic(url.pathname, req, res, url.searchParams.get('v'));
   } catch (err) {
     console.error(`${req.method} ${req.url} → ${err.message}`);
     if (res.headersSent) return res.end();
