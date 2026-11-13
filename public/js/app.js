@@ -1031,7 +1031,7 @@ function drawDepthScale(svg, reached) {
     return el;
   };
   const title = t('depth.scale', {
-    mag: fmt(reached, 1), lo: fmt(PLANET_NINE_V.bright, 0), hi: fmt(PLANET_NINE_V.faint, 0),
+    mag: fmt(reached, 1), lo: fmt(PLANET_NINE_V.bright, 1), hi: fmt(PLANET_NINE_V.faint, 1),
   });
   add('title', {}, title);
   svg.setAttribute('aria-label', title);
@@ -1600,9 +1600,15 @@ function identifyMark(m) {
   // (359.999° and 0.001°) averages to itself and not to 180°.
   const ra0 = pts[0].ra;
   const meanRA = ra0 + pts.reduce((s, p) => s + deltaRA(p.ra, ra0), 0) / pts.length;
+  // The date the catalogues are compared at: the visits' own, on average,
+  // so a fast star is looked for where it was when SPHEREx saw it.
+  const dated = pts.filter((p) => Number.isFinite(p.mjd));
+  const mjd = dated.length ? dated.reduce((s, p) => s + p.mjd, 0) / dated.length
+    : sky.visits.reduce((s, v) => s + v.frame.mjd, 0) / Math.max(1, sky.visits.length);
   const at = {
     ra: ((meanRA % 360) + 360) % 360,
     dec: pts.reduce((s, p) => s + p.dec, 0) / pts.length,
+    epoch: Number.isFinite(mjd) && mjd > 0 ? 2000 + (mjd - 51544.5) / 365.25 : 2026,
   };
   const key = `${at.ra.toFixed(5)} ${at.dec.toFixed(5)}`;
   if (m.who?.key === key) return;
@@ -3545,7 +3551,7 @@ function chooseReference(band) {
       for (const radio of document.querySelectorAll('input[name="mode"]')) radio.checked = radio.value === 'wipe';
       applyMode('wipe');
     }
-    if (sky.ref?.bandNumber !== band && sky.visits.length) loadReference(state.abort?.signal);
+    if (sky.ref?.bandNumber !== band && sky.grid && state.ra != null) loadReference(state.abort?.signal);
   }
   fillSlots();
   $('mode-hint').textContent = modeHint(sky.mode);
@@ -3557,6 +3563,8 @@ async function loadReference(signal) {
   if (!band || !grid) return;
   referenceStatus = 'asking';
   sky.setReference(null);
+  // A new field's reset put B back on a visit; the choice still stands.
+  sky.setUseRef(true);
   $('mode-hint').textContent = modeHint(sky.mode);
   try {
     const ref = await loadWise(grid, band, { signal });
@@ -3565,7 +3573,7 @@ async function loadReference(signal) {
     sky.setReference({ ...ref, bandNumber: band });
     referenceStatus = 'ok';
   } catch {
-    if (signal?.aborted || sky.grid !== grid) return;
+    if (signal?.aborted || sky.grid !== grid || state.reference !== band) return;
     referenceStatus = 'failed';
   }
   $('mode-hint').textContent = modeHint(sky.mode);

@@ -113,6 +113,9 @@ export async function loadStars(url = 'data/sky/stars.json') {
  *   glowTo   the faintest magnitude that gets a glow drawn under it
  *   spikeTo  the faintest that gets diffraction spikes
  */
+/** Whether the reader has asked for less motion; read each time, it can change. */
+const REDUCED = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 const TIERS = [
   { dpr: 2, haze: 9000, band: 8, glowTo: 5.0, spikeTo: 2.7 },
   { dpr: 1.6, haze: 6000, band: 10, glowTo: 4.4, spikeTo: 2.4 },
@@ -981,7 +984,8 @@ export class Gate {
     const p = this.projectV(direction(s.ra, s.dec));
     if (!p) return;
     const { dpr } = this.box;
-    const age = (performance.now() - s.since) / 1000;
+    // With motion turned down there is no loop to animate it: drawn settled.
+    const age = this.running && !REDUCED() ? (performance.now() - s.since) / 1000 : 1;
     const settle = Math.min(1, age / 0.45);
     const ease = 1 - (1 - settle) ** 3;
     const breath = 0.5 + 0.5 * Math.sin(age * (2 * Math.PI / 2.8));
@@ -1362,7 +1366,12 @@ export class Gate {
       this.lastFrame = now;
       if (moving && gap > 0 && gap < 250) {
         this.gap = this.gap ? this.gap * 0.9 + gap * 0.1 : gap;
-        if (this.gap > 25) {
+        // Against the best this screen has managed, not against 60 Hz: a
+        // display or a battery saver capped at 30 frames is not a slow GPU,
+        // and stepping down there only blurs the sky.
+        this.bestGap = Math.min(this.bestGap ?? Infinity, this.gap);
+        // Below 25 frames a second is slow on any screen.
+        if (this.gap > 40 || this.gap > Math.max(25, this.bestGap * 1.6)) {
           // Far behind steps down sooner: three seconds of judder is enough.
           this.late += this.gap > 50 ? 3 : 1;
           if (this.late > 90) this.stepDown();
