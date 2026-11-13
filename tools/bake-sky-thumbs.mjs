@@ -64,7 +64,9 @@ async function bake(object) {
   const visits = groupVisits(frames, { ra: object.ra, dec: object.dec, band: BAND });
   const grid = new TangentGrid(object.ra, object.dec, FOV_DEG, SIZE, SIZE);
   for (const visit of visits.slice(0, 5)) {
-    const stamp = await loadStamp(toS3(visit.url), grid, { minCoverage: 0.97 }).catch(() => null);
+    // A bright star blanks its own core and the pipeline masks its streaks:
+    // a few percent of the picture, which is no reason to refuse it.
+    const stamp = await loadStamp(toS3(visit.url), grid, { minCoverage: 0.93 }).catch(() => null);
     if (!stamp || seenFraction(stamp) < 0.9) continue;
     await writeFile(new URL(`img/sky/${object.id}.png`, root), toPNG(stamp));
     return { iso: visit.iso.slice(0, 19), band: BAND, fovArcmin: FOV_DEG * 60, visits: visits.length };

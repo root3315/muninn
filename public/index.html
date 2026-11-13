@@ -441,6 +441,10 @@
           <svg viewBox="0 0 16 16" aria-hidden="true" class="key__play"><path d="M5 3l8 5-8 5z"/></svg>
           <svg viewBox="0 0 16 16" aria-hidden="true" class="key__pause"><path d="M5 3h2.2v10H5zM8.8 3H11v10H8.8z"/></svg>
         </button>
+        <!-- Whole run in the width, or frames at full size and the run scrolls. -->
+        <button type="button" class="key key--fit" id="run-fit" aria-pressed="false" data-i18n-label="run.scroll" data-i18n-title="run.scroll" hidden>
+          <svg viewBox="0 0 16 16" aria-hidden="true" class="key__fit"><path d="M2 8h12M4.5 5.5 2 8l2.5 2.5M11.5 5.5 14 8l-2.5 2.5"/></svg>
+        </button>
       </div>
 
       <fieldset class="segments">
@@ -465,7 +469,9 @@
     </div>
     </div>
 
-    <canvas class="run__canvas" id="run-canvas" role="img" data-i18n-label="matrix.alt"></canvas>
+    <div class="run__scroll" id="run-scroll">
+      <canvas class="run__canvas" id="run-canvas" role="img" data-i18n-label="matrix.alt"></canvas>
+    </div>
 
     <p class="run__scale">
       <span data-i18n="matrix.quiet"></span>

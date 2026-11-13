@@ -35,6 +35,7 @@ import { SkyView, shortName, mostlySaturated } from './sky.js';
 import { loadWise, WISE_BANDS } from './wise.js';
 import { fieldArchives, CADC_SEARCH } from './archives.js';
 import {
+  SIMBAD_PAGE, VIZIER_PAGE,
   searchFrames, NoRelayError, UpstreamError, groupVisits, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, identifySource, fieldObjects, toS3, surveySources,
 } from './catalog.js';
@@ -1244,7 +1245,16 @@ function drawAxis() {
   if (!runPaint) readRunPaint();
 
   const shown = sky.indexed ? sky.index : sky.a;
+  // Fitted, every frame narrows as more land; scrolling, each keeps its size
+  // and the run runs off to the right, the shown frame kept in view.
+  const lane = $('run-scroll');
+  const room = lane.clientWidth || 1;
+  const wide = state.runScroll && slots.length * RUN_SLOT_PX > room ? slots.length * RUN_SLOT_PX : null;
+  $('run-canvas').style.width = wide ? `${wide}px` : '';
+  lane.dataset.scroll = String(Boolean(wide));
+  $('run-fit').hidden = slots.length * RUN_SLOT_PX <= room;
   runHits = drawStrip($('run-canvas'), {
+    width: wide,
     slots,
     sectors: state.sectors,
     index: shown,
@@ -1256,12 +1266,33 @@ function drawAxis() {
     motion: !matchMedia('(prefers-reduced-motion: reduce)').matches,
   });
   runHeight = box.offsetHeight || runHeight;
+  if (wide) keepInView(lane, shown, slots.length, wide);
   // The run's own name says how much of the archive it is.
   const read = visits.length;
   const total = state.allVisits.length;
   box.querySelector('.run__k').textContent = total > read && read
     ? t('run.legendSome', { n: read, total }) : t('run.legend');
   animateRun(slots);
+}
+
+/** A frame's place in the scrolling run, wide enough to read its date. */
+const RUN_SLOT_PX = 72;
+
+/** Scroll the run so the frame on screen is in view, not chased every frame. */
+function keepInView(lane, i, n, width) {
+  if (i == null || i < 0) return;
+  const x = 8 + ((width - 16) / n) * (i + 0.5);
+  const left = lane.scrollLeft;
+  const right = left + lane.clientWidth;
+  if (x > left + 60 && x < right - 60) return;
+  lane.scrollTo({ left: Math.max(0, x - lane.clientWidth / 2), behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+}
+
+function setRunScroll(on) {
+  state.runScroll = on;
+  $('run-fit').setAttribute('aria-pressed', String(on));
+  try { localStorage.setItem('muninn.runScroll', on ? '1' : '0'); } catch { /* private window */ }
+  drawAxis();
 }
 
 /** How many places the last run had, so the empty one keeps its width. */
@@ -1853,7 +1884,18 @@ function gaiaKind(g) {
  * A line appears only when a catalogue had something to say.
  */
 function whoLines(who, kind) {
-  if (who.state === 'asking') return [whoP(t(who.slow ? 'mark.whoSlow' : 'mark.whoAsking'))];
+  // Still waiting is a state, not a finding: set apart from what the mark
+  // measured, with a dot that pulses while the catalogues are out.
+  if (who.state === 'asking') {
+    const p = document.createElement('p');
+    p.className = 'mark__asking';
+    p.setAttribute('role', 'status');
+    const dot = document.createElement('span');
+    dot.className = 'mark__asking-dot';
+    dot.setAttribute('aria-hidden', 'true');
+    p.append(dot, t(who.slow ? 'mark.whoSlow' : 'mark.whoAsking'));
+    return [p];
+  }
   if (who.state === 'failed') return [whoP(t('mark.whoFailed'))];
   if (who.state === 'timeout') return [whoP(t('mark.whoTimeout', { s: Math.round(IDENTIFY_CAP_MS / 1000) }))];
   const r = who.result;
@@ -1866,13 +1908,13 @@ function whoLines(who, kind) {
     const what = s.family ? t(`kind.${s.family}`) : t('kind.other', { code: s.otype });
     const mag = Number.isFinite(s.mag) ? `, ${s.magBand} ${fmt(s.mag, 1)}ᵐ` : '';
     lines.push(whoP(`${t('mark.whoSimbad')} `,
-      link(s.name, `https://simbad.cds.unistra.fr/simbad/sim-id?Ident=${encodeURIComponent(s.name)}`),
+      link(s.name, `${SIMBAD_PAGE}${encodeURIComponent(s.name)}`),
       ` — ${what}${mag}${off(s.sep)}`));
   } else if (r.gaia) {
     const g = r.gaia;
     const mag = Number.isFinite(g.mag) ? `, G ${fmt(g.mag, 1)}ᵐ` : '';
     lines.push(whoP(`${t('mark.whoGaia')} `,
-      link(g.id, `https://vizier.cds.unistra.fr/viz-bin/VizieR-4?-source=I/355/gaiadr3&Source=${encodeURIComponent(g.id)}`),
+      link(g.id, `${VIZIER_PAGE}-source=I/355/gaiadr3&Source=${encodeURIComponent(g.id)}`),
       ` — ${gaiaKind(g)}${mag}${off(g.sep)}`));
   }
 
@@ -4637,6 +4679,9 @@ function wire() {
   }
 
   $('tools-toggle').addEventListener('click', () => setTools($('tools').hidden));
+  try { state.runScroll = localStorage.getItem('muninn.runScroll') === '1'; } catch { /* private window */ }
+  $('run-fit').setAttribute('aria-pressed', String(Boolean(state.runScroll)));
+  $('run-fit').addEventListener('click', () => setRunScroll(!state.runScroll));
   window.addEventListener('resize', placeTools);
   placeLabel();
   DESK.addEventListener('change', placeLabel);

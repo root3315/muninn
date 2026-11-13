@@ -336,7 +336,28 @@ export async function knownBodies(field, { signal, magLimit = 20, limit = 40 } =
 
 /* ------------------------------------------------------------- fixed sources */
 
-const SIMBAD_TAP = 'https://simbad.cds.unistra.fr/simbad/sim-tap/sync';
+/**
+ * SIMBAD at CDS, and its mirror at the CfA. CDS in Strasbourg has had days
+ * this November when it answered nothing; both are asked and the first
+ * answer is taken.
+ */
+const SIMBAD_TAPS = [
+  'https://simbad.cds.unistra.fr/simbad/sim-tap/sync',
+  'https://simbad.cfa.harvard.edu/simbad/sim-tap/sync',
+];
+/** VizieR's cone search at the CfA mirror, which also answers when CDS does not. */
+const VIZIER_CFA = 'https://vizier.cfa.harvard.edu/viz-bin/votable';
+/** Where a person is sent to read more: the mirrors that stayed up. */
+export const SIMBAD_PAGE = 'https://simbad.cfa.harvard.edu/simbad/sim-id?Ident=';
+export const VIZIER_PAGE = 'https://vizier.cfa.harvard.edu/viz-bin/VizieR-4?';
+
+async function simbadTap(query, format, signal) {
+  try {
+    return await Promise.any(SIMBAD_TAPS.map((base) => tap(base, query, format, signal)));
+  } catch (err) {
+    throw err.errors?.[0] ?? err;
+  }
+}
 const VIZIER_TAP = 'https://tapvizier.cds.unistra.fr/TAPVizieR/tap/sync';
 
 async function tap(base, query, format, signal) {
@@ -424,7 +445,7 @@ const brightest = (rows, key) => rows
   .sort((a, b) => (a[key] ?? 99) - (b[key] ?? 99) || a.sep - b.sep)[0] ?? null;
 
 async function askSimbad(ra, dec, signal, arcsec = 8) {
-  const body = await tap(SIMBAD_TAP, `SELECT TOP 8 main_id, otype, ${sepCol('ra', 'dec', ra, dec)}, allfluxes.J AS j, allfluxes.V AS v, allfluxes.G AS g
+  const body = await simbadTap(`SELECT TOP 8 main_id, otype, ${sepCol('ra', 'dec', ra, dec)}, allfluxes.J AS j, allfluxes.V AS v, allfluxes.G AS g
     FROM basic LEFT JOIN allfluxes ON oid = allfluxes.oidref WHERE ${cone('ra', 'dec', ra, dec, arcsec)}`, 'json', signal);
   const rows = (body.data ?? []).map(([name, otype, sep, j, v, g]) => ({
     name: String(name).trim().replace(/\s+/g, ' '), otype: String(otype ?? '').trim(), sep: Number(sep),
@@ -523,10 +544,29 @@ async function askWise(ra, dec, signal, arcsec) {
 }
 
 async function askVsx(ra, dec, signal, arcsec = 10) {
-  const rows = parseCsv(await tap(VIZIER_TAP, `SELECT TOP 4 Name, Type, Period, max, min, ${sepCol('RAJ2000', 'DEJ2000', ra, dec)}
-    FROM "B/vsx/vsx" WHERE ${cone('RAJ2000', 'DEJ2000', ra, dec, arcsec)}`, 'csv', signal))
-    .map((r) => ({ name: r.Name.replace(/\s+/g, ' '), type: r.Type, period: num(r.Period), max: num(r.max), min: num(r.min), sep: num(r.sep) }))
-    .sort((a, b) => a.sep - b.sep);
+  const read = (rows) => rows
+    .map((r) => ({ name: String(r.Name ?? '').replace(/\s+/g, ' ').trim(), type: r.Type, period: num(r.Period), max: num(r.max), min: num(r.min), sep: num(r.sep ?? r._r) }))
+    .filter((r) => r.name)
+    .sort((x, y) => x.sep - y.sep);
+  const viaTap = tap(VIZIER_TAP, `SELECT TOP 4 Name, Type, Period, max, min, ${sepCol('RAJ2000', 'DEJ2000', ra, dec)}
+    FROM "B/vsx/vsx" WHERE ${cone('RAJ2000', 'DEJ2000', ra, dec, arcsec)}`, 'csv', signal).then((text) => read(parseCsv(text)));
+  const q = new URLSearchParams({
+    '-source': 'B/vsx/vsx', '-c': `${ra.toFixed(6)} ${dec >= 0 ? '+' : ''}${dec.toFixed(6)}`, '-c.rs': arcsec.toFixed(1),
+    '-out': 'Name,Type,Period,max,min', '-out.add': '_r', '-sort': '_r', '-out.max': '4',
+  });
+  const viaCfa = fetch(`${VIZIER_CFA}?${q}`, { signal: deadline(signal, CATALOG_DEADLINE_MS) })
+    .then((res) => { if (!res.ok) throw new Error(`VizieR ${res.status}`); return res.text(); })
+    .then((xml) => {
+      const { status, message, rows } = parseVOTable(xml);
+      if (status === 'ERROR') throw new Error(message);
+      return read(rows);
+    });
+  let rows;
+  try {
+    rows = await Promise.any([viaTap, viaCfa]);
+  } catch (err) {
+    throw err.errors?.[0] ?? err;
+  }
   return rows[0] ?? null;
 }
 
@@ -647,7 +687,7 @@ export async function surveySources(kind, { ra, dec, radiusDeg, limit }, { signa
  * ahead of the thousand star clusters catalogued inside it.
  */
 export async function fieldObjects({ ra, dec, radiusDeg }, { signal, limit = 25 } = {}) {
-  const body = await tap(SIMBAD_TAP, `SELECT TOP 400 main_id, otype, ra, dec, nbref, allfluxes.J AS j, allfluxes.V AS v
+  const body = await simbadTap(`SELECT TOP 400 main_id, otype, ra, dec, nbref, allfluxes.J AS j, allfluxes.V AS v
     FROM basic LEFT JOIN allfluxes ON oid = allfluxes.oidref
     WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', ${ra.toFixed(6)}, ${dec.toFixed(6)}, ${radiusDeg.toFixed(5)})) = 1
     ORDER BY nbref DESC`, 'json', signal);
