@@ -918,11 +918,14 @@ export class Gate {
         ctx.globalAlpha = near ? 1 : 0.8;
         // A dark edge under the letters: a star behind a name struck it through.
         ctx.lineJoin = 'round';
-        ctx.lineWidth = 3 * dpr;
-        ctx.strokeStyle = this.tint(this.paint.well, 0.85);
-        ctx.strokeText(tgt.label, x + r + 7 * dpr, y);
+        ctx.lineWidth = 2 * dpr;
+        ctx.strokeStyle = this.tint(this.paint.well, 0.7);
+        // Past the reticle's ticks when this is the one picked, so the name and
+        // the crosshair do not cross.
+        const lx = x + (this.isSelected(tgt) ? 40 : r / dpr + 7) * dpr;
+        ctx.strokeText(tgt.label, lx, y);
         ctx.fillStyle = near ? ink : colour;
-        ctx.fillText(tgt.label, x + r + 7 * dpr, y);
+        ctx.fillText(tgt.label, lx, y);
       }
     }
     ctx.globalAlpha = 1;
@@ -979,7 +982,7 @@ export class Gate {
    * now the sky swings to it first.
    */
   lookAt({ ra, dec }, ms = 1100) {
-    if (!Number.isFinite(ra) || !Number.isFinite(dec)) return;
+    if (!Number.isFinite(ra) || !Number.isFinite(dec)) return Promise.resolve();
     cancelAnimationFrame(this.turnRaf);
     const from = { ra: this.cam.ra, dec: this.cam.dec };
     const dRA = ((ra - from.ra + 540) % 360) - 180;
@@ -988,9 +991,11 @@ export class Gate {
       this.cam.ra = ((from.ra + dRA) % 360 + 360) % 360;
       this.cam.dec = from.dec + dDec;
       this.draw();
-      return;
+      return Promise.resolve();
     }
     const t0 = performance.now();
+    let done;
+    const arrived = new Promise((r) => { done = r; });
     const step = (now) => {
       const k = Math.min(1, (now - t0) / ms);
       const e = k < 0.5 ? 4 * k ** 3 : 1 - (-2 * k + 2) ** 3 / 2;
@@ -998,64 +1003,94 @@ export class Gate {
       this.cam.dec = from.dec + dDec * e;
       if (!this.running) this.draw();
       if (k < 1) this.turnRaf = requestAnimationFrame(step);
+      else done();
     };
     this.turnRaf = requestAnimationFrame(step);
+    return arrived;
   }
 
   /** Mark what the card is about, or let it go with `null`. */
   select(hit) {
-    this.selected = hit ? { ra: hit.ra, dec: hit.dec, since: performance.now() } : null;
+    const now = performance.now();
+    // Letting go fades the reticle out where it stands rather than dropping it.
+    if (!hit && this.selected) this.leaving = { ...this.selected, out: now };
+    this.selected = hit ? { ra: hit.ra, dec: hit.dec, since: now } : null;
+    if (hit) this.leaving = null;
     this.draw();
   }
 
+  /** Whether a target is the one the card is about: its name steps aside. */
+  isSelected(tgt) {
+    const s = this.selected;
+    return Boolean(s) && Math.abs(s.ra - tgt.ra) < 1e-6 && Math.abs(s.dec - tgt.dec) < 1e-6;
+  }
+
   /**
-   * The selected object: a reticle that closes in once and then breathes
-   * slowly, so it reads as "this one" without flashing at you.
+   * The selected object: a finder's reticle that settles onto it. The ring
+   * closes and fades in together, easing out so it arrives rather than
+   * stops; the four ticks follow a beat later; then it only breathes, gently.
+   * A released reticle fades out in place.
    */
   drawSelected(ctx) {
-    const s = this.selected;
+    const now = performance.now();
+    const still = !this.running || REDUCED();
+    let s = this.selected;
+    let fade = 1;
+    if (!s && this.leaving) {
+      const out = still ? 1 : (now - this.leaving.out) / 280;
+      if (out >= 1) { this.leaving = null; return; }
+      s = this.leaving;
+      fade = 1 - out * out;
+    }
     if (!s) return;
     const p = this.projectV(direction(s.ra, s.dec));
     if (!p) return;
     const { dpr } = this.box;
-    // With motion turned down there is no loop to animate it: drawn settled.
-    const age = this.running && !REDUCED() ? (performance.now() - s.since) / 1000 : 1;
-    const settle = Math.min(1, age / 0.45);
-    const ease = 1 - (1 - settle) ** 3;
-    const breath = 0.5 + 0.5 * Math.sin(age * (2 * Math.PI / 2.8));
-    const r = (34 - 12 * ease) * dpr;
+    const age = still ? 10 : (now - s.since) / 1000;
+    const easeOut = (k, pow) => 1 - (1 - Math.min(1, Math.max(0, k))) ** pow;
+    const close = easeOut(age / 0.7, 3);
+    const shown = easeOut(age / 0.35, 2) * fade;
+    const ticks = easeOut((age - 0.2) / 0.5, 3) * fade;
+    // The breath starts once it has settled, and stays small.
+    const breath = close * (0.5 + 0.5 * Math.sin(age * (2 * Math.PI / 3.6)));
+    const r = (30 - 10 * close) * dpr;
 
     // A small glow on the object itself, not a wash over the sky around it.
     const glow = ctx.createRadialGradient(p[0], p[1], 0, p[0], p[1], r * 0.7);
-    glow.addColorStop(0, this.tint(this.paint.accent, 0.3 + 0.15 * breath));
+    glow.addColorStop(0, this.tint(this.paint.accent, (0.22 + 0.08 * breath) * shown));
     glow.addColorStop(1, this.tint(this.paint.accent, 0));
     ctx.globalCompositeOperation = 'lighter';
     ctx.fillStyle = glow;
     ctx.fillRect(p[0] - r, p[1] - r, r * 2, r * 2);
     ctx.globalCompositeOperation = 'source-over';
 
-    // Four ticks outside the ring, like the crosshair of a finder.
     const a = r + 4 * dpr;
-    const b = r + 12 * dpr;
-    const reticle = () => {
+    const b = r + 4 * dpr + 8 * dpr * ticks;
+    const ring = () => { ctx.beginPath(); ctx.arc(p[0], p[1], r, 0, Math.PI * 2); ctx.stroke(); };
+    const finder = () => {
+      if (ticks <= 0.01) return;
       ctx.beginPath();
-      ctx.arc(p[0], p[1], r, 0, Math.PI * 2);
       for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
         ctx.moveTo(p[0] + dx * a, p[1] + dy * a);
         ctx.lineTo(p[0] + dx * b, p[1] + dy * b);
       }
       ctx.stroke();
     };
-    // Drawn twice: a dark edge first, so it reads over the bright band of the
-    // Milky Way as well as over black sky.
-    ctx.globalAlpha = ease * 0.5;
+    ctx.lineCap = 'round';
+    // A thin dark edge first, so it reads over the bright band of the Milky
+    // Way as well as over black sky.
     ctx.strokeStyle = this.paint.well;
-    ctx.lineWidth = 3.5 * dpr;
-    reticle();
-    ctx.globalAlpha = ease * (0.8 + 0.2 * breath);
+    ctx.lineWidth = 3 * dpr;
+    ctx.globalAlpha = 0.35 * shown;
+    ring();
+    ctx.globalAlpha = 0.35 * ticks;
+    finder();
     ctx.strokeStyle = this.paint.ink;
     ctx.lineWidth = 1.5 * dpr;
-    reticle();
+    ctx.globalAlpha = shown * (0.88 + 0.12 * breath);
+    ring();
+    ctx.globalAlpha = ticks * (0.88 + 0.12 * breath);
+    finder();
     ctx.globalAlpha = 1;
   }
 
@@ -1370,7 +1405,7 @@ export class Gate {
       // A sky that is not moving and has nothing breathing on it only needs
       // redrawing now and then; a moving one gets every display frame, since
       // thirty a second is where a slow pan starts to judder.
-      const still = g.speed < 0.002 && !this.selected && !this.drag;
+      const still = g.speed < 0.002 && !this.selected && !this.leaving && !this.drag;
       if (still && now - last < 100) { this.raf = requestAnimationFrame(tick); return; }
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
@@ -1379,7 +1414,7 @@ export class Gate {
       // looking at something you picked, and eases in and out of the stop
       // rather than snapping.
       const hold = this.pointer || this.drag || this.selected;
-      g.speed += ((hold ? 0 : 1) - g.speed) * (1 - Math.exp(-dt / (hold ? 0.35 : 1.2)));
+      g.speed += ((hold ? 0 : 1) - g.speed) * (1 - Math.exp(-dt / (hold ? 0.6 : 1.2)));
       if (!this.drag && g.speed > 0.0005) {
         const w = (2 * Math.PI) / g.period;
         const step = dt * g.speed;

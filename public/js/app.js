@@ -3242,7 +3242,13 @@ function jumpButton(f) {
   if (why) go.title = why;
   go.addEventListener('click', () => {
     const hit = { kind: 'field', key: f.key, ra: f.ra, dec: f.dec, fov: f.fov, band: f.band ?? 'all', label: name };
-    if (gate) { gate.lookAt(hit); gate.select(hit); showCard(hit, { focus: true }); return; }
+    if (gate) {
+      // The sky turns to it first; the reticle settles once it has arrived.
+      gate.select(null);
+      gate.lookAt(hit).then(() => gate.select(hit));
+      showCard(hit, { focus: true });
+      return;
+    }
     // Pressed before the sky has been built: straight in, without the flight.
     if (hit.fov) { state.fov = nearestFov(hit.fov); $('fov').value = String(state.fov); }
     closeGate();
