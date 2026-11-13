@@ -29,7 +29,7 @@ import { seasonChunks, chunkAt, forStack, averaged } from './stack.js';
 import { linkSeasons, parallaxArc, distanceGrid, arcPoint, ARC_TICKS_AU, NEAR_AU, FAR_AU, separationArcsec } from './seasons.js';
 import { TangentGrid, separation, deltaRA } from './wcs.js';
 import { loadStamp, loadWavelength } from './stamp.js';
-import { nearestExposures, fluxPoint, placeInBand } from './spectrum.js';
+import { motionOf, visitPool, chooseMeasured, visitPoint, placeInBand } from './spectrum.js';
 import { spectrumBlock } from './spectrum-view.js';
 import { trackCSV } from './export.js';
 import { SkyView, shortName, mostlySaturated } from './sky.js';
@@ -2523,7 +2523,7 @@ function renderMarks() {
 
     li.append(n, body, kill);
     // The numbers behind the verdict, to check or to take elsewhere.
-    if (m.track?.length) {
+    if (m.track?.length || measuredExposures(m).length) {
       const csv = document.createElement('button');
       csv.type = 'button';
       csv.className = 'link mark__csv';
@@ -2541,83 +2541,113 @@ function renderMarks() {
 
 /* ---------------------------------------------------------------- spectrum */
 
-/** An exposure's pixels on the field's grid: the visit already loaded, or read now. */
-function stampFor(frame, signal) {
-  const loaded = sky.visits.find((v) => v.frame.url === frame.url);
-  return loaded ? Promise.resolve(loaded.stamp) : readStamp(toS3(frame.url), sky.grid, { signal });
+/**
+ * The patch read around a mark from an exposure that is not on the plate:
+ * three arcminutes, cut at the field's own scale so the aperture, its
+ * annulus and the detector-noise floor are the ones `measure` uses on the
+ * field. About thirty detector rows instead of the field's few hundred.
+ */
+const SPOT_ARCSEC = 180;
+
+function spotGrid(ra, dec) {
+  const scale = sky.grid.scale;
+  const side = Math.max(48, Math.ceil(SPOT_ARCSEC / (scale * 3600)));
+  return new TangentGrid(ra, dec, side * scale, side, side);
 }
 
 /**
- * One band's point: the nearest exposure that has pixels at the position,
- * measured the way a mark is, with the wavelength that exposure saw it at.
- * Null when none of the exposures tried covers the position.
+ * One exposure measured at a position: the visit on the plate if it is one,
+ * else a spot read for it. The spot is measured by the plate's own
+ * photometry, only on the spot's grid.
  */
-async function readBand(row, at, signal) {
-  for (const frame of row.frames) {
-    // A wavelength that cannot be read does not cost the point its flux: it
-    // is then drawn across the whole band and the caption says so.
-    const wave = loadWavelength(toS3(frame.url), at.ra, at.dec, { signal }).catch(() => null);
-    const stamp = await stampFor(frame, signal);
-    const point = stamp ? fluxPoint(sky.measure({ frame, stamp }, at.ra, at.dec, { orLimit: true })) : null;
-    if (point) return { frame, point, place: placeInBand(frame, await wave) };
-  }
-  return null;
+async function measureExposure(item, signal) {
+  const { frame, at } = item;
+  const loaded = sky.visits.find((v) => v.frame.url === frame.url && v.stamp);
+  if (loaded) return sky.measure(loaded, at.ra, at.dec, { orLimit: true });
+  const grid = spotGrid(at.ra, at.dec);
+  const stamp = await loadStamp(toS3(frame.url), grid, { signal, minCoverage: 0.3 });
+  if (!stamp) return null;
+  state.bytes += stamp.meta.bytesRead;
+  renderBytes();
+  const spot = Object.create(sky);
+  spot.grid = grid;
+  return spot.measure({ frame, stamp }, at.ra, at.dec, { orLimit: true });
 }
 
 /**
- * A fresh spectrum for a mark: one row per band, each with the exposures
- * nearest in time to the visit on the plate. A source that moves is looked
- * for where it was measured in that visit, not where the click landed.
+ * A fresh spectrum for a mark: the exposures whose wavelength will be looked
+ * up, each with where the source is expected in it. A retry keeps whatever
+ * the last attempt already settled.
  */
-function planSpectrum(mark, ref) {
-  const seen = mark.track.find((p) => p.obsId === ref.obsId) ?? mark;
+function planSpectrum(mark, previous) {
+  const motion = motionOf(mark, { pixelArcsec: DETECTOR_ARCSEC });
+  const loaded = new Set(sky.visits.map((v) => v.frame.url));
+  const kept = new Map((previous?.items ?? [])
+    .filter((i) => ['done', 'none', 'off', 'skipped'].includes(i.status))
+    .map((i) => [i.frame.url, i]));
+  const frames = visitPool(state.frames, { from: motion.from, to: motion.to, loaded });
   return {
-    ref,
-    at: { ra: seen.ra, dec: seen.dec },
+    motion: motion.kind,
     busy: false,
-    rows: nearestExposures(state.frames, ref.mjd).map(({ band, frames }) => ({
-      band, frames, range: bandRange(state.frames, band), status: frames.length ? 'waiting' : 'absent',
-    })),
+    phase: 'waves',
+    lambda: previous?.lambda ?? null,
+    items: frames.map((frame) => kept.get(frame.url) ?? {
+      frame, at: motion.at(frame.mjd), loaded: loaded.has(frame.url), status: 'waiting',
+    }),
   };
 }
 
 /**
- * Read a mark's spectrum, or only the bands that failed last time. The frames
- * come through the same workers and the same abort as the field's own visits,
- * so opening another field stops them.
+ * Read a mark's spectrum from every exposure there is time for. Two steps:
+ * the wavelength each exposure saw the source at (a header and a small
+ * table, cached per file), then the pixels of the ones chosen — every visit
+ * on the plate, the wavelengths seen most often in full, the rest spread
+ * across the bands. The reads share the field's abort, so opening another
+ * field stops them.
  */
 async function readSpectrum(mark) {
-  if (mark.spectrum?.busy) return;
-  const failed = mark.spectrum?.rows.filter((r) => r.status === 'failed') ?? [];
-  if (failed.length) {
-    for (const row of failed) row.status = 'waiting';
-  } else {
-    const ref = sky.current?.frame;
-    if (!ref) return;
-    mark.spectrum = planSpectrum(mark, ref);
-  }
-  const spectrum = mark.spectrum;
+  if (mark.spectrum?.busy || !sky.visits.length) return;
+  const retry = mark.spectrum?.items.some((i) => i.status === 'failed');
+  const spectrum = planSpectrum(mark, retry ? mark.spectrum : null);
+  mark.spectrum = spectrum;
   const signal = state.abort?.signal;
   const redraw = () => { if (mark.spectrum === spectrum) spectrumBlock(mark); };
-
-  spectrum.busy = true;
-  redraw();
-  await pool(spectrum.rows.filter((r) => r.status === 'waiting'), 2, async (row) => {
-    // A band cut short by a new field is a band not read, never one left "reading".
-    if (signal?.aborted) { row.status = 'failed'; return; }
-    row.status = 'reading';
-    redraw();
+  const settle = async (items, limit, work) => pool(items, limit, async (item) => {
+    // An exposure cut short by a new field is one not read, never one left reading.
+    if (signal?.aborted) { item.status = 'failed'; return; }
     try {
-      const got = await readBand(row, spectrum.at, signal);
-      if (got) Object.assign(row, got, { status: 'done' });
-      else row.status = 'none';
+      await work(item);
     } catch {
-      row.status = 'failed';
+      item.status = 'failed';
     }
     redraw();
   });
-  spectrum.busy = false;
+
+  spectrum.busy = true;
   redraw();
+  await settle(spectrum.items.filter((i) => i.status === 'waiting'), 6, async (item) => {
+    const wave = await loadWavelength(toS3(item.frame.url), item.at.ra, item.at.dec, { signal });
+    // No wavelength at the position means the position is off this detector.
+    item.place = wave ? placeInBand(item.frame, wave) : null;
+    item.status = item.place ? 'placed' : 'off';
+  });
+
+  spectrum.phase = 'measure';
+  const placed = spectrum.items.filter((i) => i.status === 'placed' || i.status === 'skipped');
+  const chosen = new Set(chooseMeasured([...placed, ...spectrum.items.filter((i) => i.status === 'done')]));
+  for (const item of placed) item.status = chosen.has(item) ? 'queued' : 'skipped';
+  redraw();
+  await settle(spectrum.items.filter((i) => i.status === 'queued'), 3, async (item) => {
+    item.status = 'reading';
+    const measurement = await measureExposure(item, signal);
+    item.point = visitPoint(measurement);
+    item.measurement = measurement;
+    item.status = item.point ? 'done' : 'none';
+  });
+  spectrum.busy = false;
+  spectrum.phase = 'done';
+  redraw();
+  renderMarks();
 }
 
 /* ------------------------------------------------------------ season link */
@@ -3547,11 +3577,14 @@ function showLatestMark() {
   for (const ms of [400, 1200, 2500]) setTimeout(show, ms);
 }
 
+/** The exposures a mark's spectrum measured, for the CSV beside its track. */
+const measuredExposures = (mark) => mark.spectrum?.items.filter((i) => i.status === 'done') ?? [];
+
 /** Save one mark's per-visit measurements as a CSV file. */
 function saveTrack(mark, n) {
   const link = document.createElement('a');
   link.download = `muninn_${state.ra.toFixed(4)}_${state.dec.toFixed(4)}_mark${n}.csv`;
-  link.href = `data:text/csv;charset=utf-8,${encodeURIComponent(trackCSV(mark.track))}`;
+  link.href = `data:text/csv;charset=utf-8,${encodeURIComponent(trackCSV(mark.track, measuredExposures(mark)))}`;
   link.click();
 }
 
