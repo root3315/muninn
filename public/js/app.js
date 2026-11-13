@@ -3032,6 +3032,7 @@ function hideCard() {
   cardLive?.abort();
   clearInterval(cardBlink);
   cardHit = null;
+  gate?.select(null);
   const card = $('gate-card');
   if (card.hidden) return;
   delete card.dataset.on;
@@ -3150,7 +3151,7 @@ function closeGate() {
 async function buildGate() {
   gate = new Gate($('gate-sky'), {
     // A press shows what was pressed. The flight starts from the card.
-    onPick: (hit) => showCard(hit),
+    onPick: (hit) => { gate.select(hit); showCard(hit); },
     onName: nameOnSky,
   });
   window.addEventListener('resize', () => { if (!$('gate').hidden) gate.resize(); });
@@ -3169,6 +3170,9 @@ async function buildGate() {
   state.skyLayers = { stars: Boolean(stars), deep: Boolean(deep) };
   relabel();
   gate.resize();
+  // The sky was opened before it existed: boot shows the gate first and builds
+  // it after, so the sweep starts here or not at all.
+  if (!$('gate').hidden) gate.start();
   renderGateJump();
   // On a wide screen the sky opens with its proof beside it: the field this
   // tool was tested on, two real visits blinking. A phone has no room for both.
@@ -3223,7 +3227,7 @@ function jumpButton(f) {
   if (why) go.title = why;
   go.addEventListener('click', () => {
     const hit = { kind: 'field', key: f.key, ra: f.ra, dec: f.dec, fov: f.fov, band: f.band ?? 'all', label: name };
-    if (gate) { showCard(hit, { focus: true }); return; }
+    if (gate) { gate.select(hit); showCard(hit, { focus: true }); return; }
     // Pressed before the sky has been built: straight in, without the flight.
     if (hit.fov) { state.fov = nearestFov(hit.fov); $('fov').value = String(state.fov); }
     closeGate();
