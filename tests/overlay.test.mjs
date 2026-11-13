@@ -243,3 +243,17 @@ test('a brighter source gets a larger mark, within bounds', () => {
   assert.equal(markRadius(8.2, 17), 7);
   assert.ok(markRadius(14, 17) > markRadius(16, 17));
 });
+
+test('MAST Gaia rows keep the exact source id and are cut like the ADQL', async () => {
+  const { mastGaiaRows } = await import('../public/js/overlay.js');
+  const data = [
+    { designation: 'Gaia DR3 4472832130942575872', source_id: 4472832130942576000, ra: 269.4485, dec: 4.7394, phot_g_mean_mag: 8.19, pmra: -801.55, pmdec: 10362.39 },
+    { designation: 'Gaia DR3 1', source_id: 1, ra: 269.45, dec: 4.74, phot_g_mean_mag: 19.5 },
+    { designation: 'Gaia DR3 2', source_id: 2, ra: 269.45, dec: 4.74, phot_g_mean_mag: 12.0 },
+    { designation: 'Gaia DR3 3', source_id: 3, ra: 269.45, dec: 4.74, phot_g_mean_mag: null },
+  ];
+  const rows = mastGaiaRows(data, { limit: 15, top: 5 });
+  assert.deepEqual(rows.map((r) => r.Source), ['4472832130942575872', '2']);
+  assert.equal(rows[0].pmDE, 10362.39);
+  assert.equal(mastGaiaRows(data, { limit: null, top: 1 }).length, 1);
+});
