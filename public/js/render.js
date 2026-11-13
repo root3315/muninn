@@ -138,7 +138,7 @@ export function rampFromToken(el, token) {
  * the frame's edge, which meets sky, stays blank; the measured data are not
  * touched.
  */
-export function fillCores(data, width, ceiling, passes = 12) {
+export function fillCores(data, width, ceiling, passes = 64) {
   let cur = data;
   for (let pass = 0; pass < passes; pass++) {
     let next = null;

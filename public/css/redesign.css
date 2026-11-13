@@ -1061,3 +1061,25 @@ body { font-size: var(--text-base); line-height: 1.5; }
 /* NEOSSat's newest frame in the other-archives panel: shown as delivered. */
 .neossat { display: grid; gap: var(--space-2xs); margin: 0; }
 .neossat img { inline-size: 100%; block-size: auto; border-radius: var(--radius-sm, 10px); background: var(--color-well); image-rendering: auto; }
+
+/* A mark whose catalogues are still out: a status line of its own, apart from
+   what was measured, so waiting does not read as a result. */
+.mark__asking {
+  display: flex; align-items: center; gap: var(--space-xs);
+  margin-block-start: var(--space-2xs); padding: var(--space-2xs) var(--space-sm);
+  border-radius: 999px; background: color-mix(in oklab, var(--color-accent) 10%, transparent);
+  font-size: var(--text-xs); color: var(--color-neutral); line-height: 1.35;
+}
+.mark__asking-dot {
+  flex: none; inline-size: 7px; block-size: 7px; border-radius: 50%;
+  background: var(--color-accent); animation: asking-pulse 1.4s ease-in-out infinite;
+}
+@keyframes asking-pulse { 0%, 100% { opacity: 0.35; transform: scale(0.8); } 50% { opacity: 1; transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .mark__asking-dot { animation: none; } }
+
+/* The run, scrolling: frames keep their size and it runs off to the right. */
+.run__scroll { overflow-x: hidden; }
+.run__scroll[data-scroll="true"] { overflow-x: auto; scroll-behavior: smooth; scrollbar-width: thin; scrollbar-color: color-mix(in oklab, var(--color-ink) 25%, transparent) transparent; }
+.run__scroll[data-scroll="true"] .run__canvas { inline-size: auto; max-inline-size: none; }
+.key--fit svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.key--fit[aria-pressed="true"] { background: var(--color-accent); color: var(--color-on-accent, #08131c); }

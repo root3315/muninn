@@ -61,10 +61,11 @@ const toMjd = (date) => date.getTime() / 86400000 + MJD_UNIX;
  * @returns {{x:number, y:number, w:number, h:number, i:number}[]}
  */
 export function drawStrip(canvas, {
-  slots, sectors, index, hover = -1, lang = 'ru', paint, now = 0, motion = true, bands = false,
+  slots, sectors, index, hover = -1, lang = 'ru', paint, now = 0, motion = true, bands = false, width = null,
 }) {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const cssW = canvas.clientWidth || 1;
+  // A given width is the scrolling run's: wider than its box, frames at full size.
+  const cssW = width ?? (canvas.clientWidth || 1);
   const P = paint;
 
   /* ---- what fits ------------------------------------------------------ */
