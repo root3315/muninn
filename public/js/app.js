@@ -13,7 +13,7 @@
  * the mission was built around is something you should be able to see.
  */
 
-import { t, setLanguage, getLanguage, applyTranslations, fmt, fmtDate, fmtDay, fmtTime } from './i18n.js';
+import { t, tIn, setLanguage, getLanguage, applyTranslations, fmt, fmtDate, fmtDay, fmtTime } from './i18n.js';
 import { skySigma, stackDepth, shortfall, limitAB, PLANET_NINE_V } from './depth.js';
 import { scoreSectors, standouts, peakIndex, sectorBounds, SECTOR_COUNT } from './sectors.js';
 import { Gate, loadStars } from './gate.js';
@@ -42,6 +42,8 @@ import {
 import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP, propagate, epochOfMjd } from './overlay.js';
 import { spread, nextVisits, VISITS_PER_BATCH } from './visits.js';
 import { encodeHash, decodeHash, FOV_CHOICES } from './hash.js';
+import { buildIndex, suggest } from './suggest.js';
+import { attachSuggest } from './suggest-box.js';
 
 /* The reprojected grid is shaped like the viewport so the sky can fill it. 640
    across is already four times finer than SPHEREx's 6.15" pixel, so the canvas
@@ -4111,6 +4113,71 @@ function jumpButton(f) {
   return go;
 }
 
+/* ------------------------------------------------------- search suggestions */
+
+/** What the search boxes can offer, rebuilt when the language or the data changes. */
+let suggestCache = { key: '', index: [] };
+
+function suggestIndex() {
+  const lang = getLanguage();
+  const stars = gate?.stars ?? null;
+  const key = `${lang}|${Boolean(stars)}|${Boolean(gateDeep)}|${state.presets.length}`;
+  if (suggestCache.key !== key) {
+    suggestCache = {
+      key,
+      index: buildIndex({ presets: state.presets, stars, deep: gateDeep, planets: planetsNow(), lang, say: tIn }),
+    };
+  }
+  return suggestCache.index;
+}
+
+const suggestFor = (text) => suggest(text, suggestIndex());
+
+/** A row as the sky's own hit, the same shape a press on the sky gives. */
+function hitOfRow(row) {
+  const ref = row.ref;
+  if (row.kind === 'target' || row.kind === 'field') {
+    return { kind: 'field', key: ref.key, ra: ref.ra, dec: ref.dec, fov: ref.fov, band: ref.band ?? 'all', label: row.label };
+  }
+  if (row.kind === 'position') return { kind: 'sky', ra: row.ra, dec: row.dec, label: null };
+  if (row.kind === 'star') {
+    return {
+      kind: 'star', ra: row.ra, dec: row.dec, label: row.label,
+      sub: ref.name ? ref.bayer : '', mag: ref.mag, bv: ref.bv,
+    };
+  }
+  // Planets and Messier objects are markers on the sky already: the same one.
+  const key = row.kind === 'planet' ? ref.key : ref.id;
+  const marker = gate?.targets?.find((m) => m.key === key && m.kind === (row.kind === 'planet' ? 'planet' : 'deep'));
+  if (marker) return { ...marker, item: marker, label: row.label };
+  return { kind: row.kind === 'planet' ? 'planet' : 'deep', key, ra: row.ra, dec: row.dec, label: row.label, fov: 0.3, band: 'all' };
+}
+
+/** Picked on the opening sky: the sky turns to it and its card opens. */
+function pickOnSky(row) {
+  const hit = hitOfRow(row);
+  $('gate-target').value = row.label;
+  $('gate-note').textContent = '';
+  if (!gate) {
+    if (hit.fov) { state.fov = nearestFov(hit.fov); $('fov').value = String(state.fov); }
+    closeGate();
+    openField({ ra: hit.ra, dec: hit.dec, label: hit.label ?? '', band: hit.band ?? null });
+    return;
+  }
+  gate.select(null);
+  gate.lookAt(hit).then(() => gate.select(hit));
+  showCard(hit, { focus: true });
+}
+
+/** Picked in the field's header: that field opens. */
+function pickInField(row) {
+  const hit = hitOfRow(row);
+  $('target').value = row.label;
+  $('find-note').textContent = '';
+  if (hit.kind === 'field' && hit.fov) { state.fov = nearestFov(hit.fov); $('fov').value = String(state.fov); }
+  openField({ ra: hit.ra, dec: hit.dec, label: hit.label ?? '', band: hit.kind === 'field' ? hit.band : null });
+}
+
 /* --------------------------------------------------------------------- wiring */
 
 const MODE_HINT = { blink: 'mode.blinkHint', wipe: 'mode.wipeHint', difference: 'mode.diffHint', single: 'mode.singleHint' };
@@ -4526,6 +4593,10 @@ function jumpToNearest(mjd) {
 function wire() {
   $('find').addEventListener('submit', (e) => { e.preventDefault(); submitTarget($('target').value); });
   $('target').addEventListener('focus', function () { this.select(); });
+  attachSuggest($('target'), { query: suggestFor, pick: pickInField, say: t });
+  // The sky's search sits at the foot of the screen: its list opens upward,
+  // over the title, and does not flip as it grows and shrinks.
+  attachSuggest($('gate-target'), { query: suggestFor, pick: pickOnSky, say: t, up: true });
   $('gate-find').addEventListener('submit', (e) => {
     e.preventDefault();
     const text = $('gate-target').value;

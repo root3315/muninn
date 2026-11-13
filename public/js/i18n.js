@@ -159,6 +159,17 @@ const STRINGS = {
     'target.badCoords': 'Not a position. Enter a name (Vega) or RA and Dec as two numbers.',
     'target.notFound': 'No object of that name in SIMBAD. Check the spelling, or enter coordinates.',
     'target.offline': 'Name lookup is unreachable. Enter coordinates instead.',
+    'suggest.label': 'Suggestions',
+    'suggest.coordsHint': 'Coordinates: 148.145 +1.003 (degrees) or 10 00 34.7 +01 00 11',
+    'suggest.position': 'This position',
+    'suggest.kind.position': 'position',
+    'suggest.kind.target': 'target',
+    'suggest.kind.field': 'field',
+    'suggest.kind.star': 'star',
+    'suggest.kind.galaxy': 'galaxy',
+    'suggest.kind.nebula': 'nebula',
+    'suggest.kind.cluster': 'cluster',
+    'suggest.kind.planet': 'planet',
 
     'field.ra': 'RA',
     'field.dec': 'Dec',
@@ -679,6 +690,17 @@ const STRINGS = {
     'target.badCoords': 'Не похоже на координаты. Введите название (Vega) или два числа: прямое восхождение и склонение.',
     'target.notFound': 'SIMBAD не знает такого названия. Проверьте написание или введите координаты.',
     'target.offline': 'Служба названий недоступна. Введите координаты.',
+    'suggest.label': 'Подсказки',
+    'suggest.coordsHint': 'Координаты: 148.145 +1.003 (в градусах) или 10 00 34.7 +01 00 11',
+    'suggest.position': 'Эта точка неба',
+    'suggest.kind.position': 'координаты',
+    'suggest.kind.target': 'цель',
+    'suggest.kind.field': 'поле',
+    'suggest.kind.star': 'звезда',
+    'suggest.kind.galaxy': 'галактика',
+    'suggest.kind.nebula': 'туманность',
+    'suggest.kind.cluster': 'скопление',
+    'suggest.kind.planet': 'планета',
 
     'field.ra': 'RA',
     'field.dec': 'Dec',
@@ -1059,6 +1081,9 @@ export function setLanguage(lang) {
 }
 
 export const getLanguage = () => current;
+
+/** A string in a given language, whatever the page is in: the search matches both. */
+export const tIn = (lang, key) => STRINGS[lang]?.[key] ?? STRINGS[FALLBACK][key] ?? key;
 
 /**
  * Russian nouns agree with the number before them in three forms — 1 заход,
