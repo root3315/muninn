@@ -968,6 +968,35 @@ export class Gate {
     }
   }
 
+  /**
+   * Turn the camera onto a position, the short way round, without diving.
+   * A target picked from the buttons below the sky was marked off-screen;
+   * now the sky swings to it first.
+   */
+  lookAt({ ra, dec }, ms = 1100) {
+    if (!Number.isFinite(ra) || !Number.isFinite(dec)) return;
+    cancelAnimationFrame(this.turnRaf);
+    const from = { ra: this.cam.ra, dec: this.cam.dec };
+    const dRA = ((ra - from.ra + 540) % 360) - 180;
+    const dDec = Math.max(-80, Math.min(80, dec)) - from.dec;
+    if (REDUCED()) {
+      this.cam.ra = ((from.ra + dRA) % 360 + 360) % 360;
+      this.cam.dec = from.dec + dDec;
+      this.draw();
+      return;
+    }
+    const t0 = performance.now();
+    const step = (now) => {
+      const k = Math.min(1, (now - t0) / ms);
+      const e = k < 0.5 ? 4 * k ** 3 : 1 - (-2 * k + 2) ** 3 / 2;
+      this.cam.ra = ((from.ra + dRA * e) % 360 + 360) % 360;
+      this.cam.dec = from.dec + dDec * e;
+      if (!this.running) this.draw();
+      if (k < 1) this.turnRaf = requestAnimationFrame(step);
+    };
+    this.turnRaf = requestAnimationFrame(step);
+  }
+
   /** Mark what the card is about, or let it go with `null`. */
   select(hit) {
     this.selected = hit ? { ra: hit.ra, dec: hit.dec, since: performance.now() } : null;

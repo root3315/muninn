@@ -87,11 +87,30 @@ export function formatDec(deg) {
 }
 
 /** SIMBAD name resolution through the CDS Sesame service. */
-export async function resolveName(name, { signal } = {}) {
-  const url = `https://cds.unistra.fr/cgi-bin/nph-sesame/-oI/SNV?${encodeURIComponent(name)}`;
-  const res = await fetch(url, { signal: deadline(signal, CATALOG_DEADLINE_MS) });
+/**
+ * Sesame at CDS, and its mirror at the CfA. In November 2026 the CDS address
+ * began answering with a redirect to a mirror that sends no CORS headers, so
+ * a browser could resolve no name at all; both are asked and the first
+ * answer is taken.
+ */
+const SESAME = [
+  'https://cds.unistra.fr/cgi-bin/nph-sesame/-oI/SNV?',
+  'https://vizier.cfa.harvard.edu/viz-bin/nph-sesame/-oI/SNV?',
+];
+
+async function askSesame(base, name, signal) {
+  const res = await fetch(base + encodeURIComponent(name), { signal: deadline(signal, CATALOG_DEADLINE_MS) });
   if (!res.ok) throw new Error(`Sesame ${res.status}`);
-  const body = await res.text();
+  return res.text();
+}
+
+export async function resolveName(name, { signal } = {}) {
+  let body;
+  try {
+    body = await Promise.any(SESAME.map((base) => askSesame(base, name, signal)));
+  } catch (err) {
+    throw err.errors?.[0] ?? err;
+  }
   const m = /^%J\s+([\d.+-]+)\s+([\d.+-]+)/m.exec(body);
   if (!m) return null;
   // SIMBAD pads designations for column alignment ("M  51"); collapse that.

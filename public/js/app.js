@@ -3242,7 +3242,7 @@ function jumpButton(f) {
   if (why) go.title = why;
   go.addEventListener('click', () => {
     const hit = { kind: 'field', key: f.key, ra: f.ra, dec: f.dec, fov: f.fov, band: f.band ?? 'all', label: name };
-    if (gate) { gate.select(hit); showCard(hit, { focus: true }); return; }
+    if (gate) { gate.lookAt(hit); gate.select(hit); showCard(hit, { focus: true }); return; }
     // Pressed before the sky has been built: straight in, without the flight.
     if (hit.fov) { state.fov = nearestFov(hit.fov); $('fov').value = String(state.fov); }
     closeGate();
@@ -3379,7 +3379,10 @@ function placeTools() {
   tools.style.setProperty('--at-x', `${box.left}px`);
   tools.style.setProperty('--at-y', `${box.top}px`);
   tools.style.setProperty('--at-w', `${box.width}px`);
-  tools.style.setProperty('--at-h', `${box.height}px`);
+  // No lower than the run strip's top: below that it covered the mode pills.
+  const run = $('run');
+  const floor = run && !run.hidden ? run.getBoundingClientRect().top - 8 : innerHeight - 8;
+  tools.style.setProperty('--at-h', `${Math.max(160, Math.min(box.height, floor - box.top))}px`);
 }
 
 function setTools(open) {
