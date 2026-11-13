@@ -111,3 +111,24 @@ test('a body that moved too far off the arc for any distance is not linked', () 
   const out = linkSeasons(syntheticSky({ nudge: 300 }));
   assert.ok(!out.link || Math.abs(out.link.d - 300) / 300 > 0.15);
 });
+
+test('a source still at the mark in season B is a star: no candidate is offered', () => {
+  // The same sky that links a body at 300 AU, with the marked source also
+  // sitting at the anchor in two of the three season-B visits.
+  const sky = syntheticSky();
+  const still = new Set(['b1', 'b3']);
+  const out = linkSeasons({ ...sky, anchorInB: (v) => still.has(v.id) });
+  assert.equal(out.link, null, 'the body on the arc is not offered as where the star went');
+  assert.deepEqual(out.star, { stillThere: 2, saturated: false });
+
+  // Seen at the anchor once in three is not enough to call it a star.
+  const once = linkSeasons({ ...sky, anchorInB: (v) => v.id === 'b2' });
+  assert.equal(once.star, null);
+  assert.ok(once.link, 'the link stands');
+});
+
+test('a saturated source at the mark is a star whatever season B shows', () => {
+  const out = linkSeasons({ ...syntheticSky(), anchorSaturated: true });
+  assert.equal(out.link, null);
+  assert.deepEqual(out.star, { stillThere: 0, saturated: true });
+});

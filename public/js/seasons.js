@@ -165,6 +165,15 @@ function denseDistances(near, far, steps = DENSE_STEPS) {
  *   sources    (bVisit) → [{ ra, dec, snr, mag }] — what stands ≥ 5σ in it
  *   occupied   (aVisit, ra, dec) → boolean — is something there in season A
  *   inField    (ra, dec) → boolean — can this position be measured at all
+ *   anchorInB  (bVisit) → boolean — is the season-A source still at the anchor
+ *   anchorSaturated  the season-A source saturated the detector
+ *
+ * First, the anchor itself. A source still at the same spot in at least half
+ * of season B's visits sits still: at 2000 AU the parallax over half a year
+ * is still a hundred arcseconds, so nothing that stays inside a pixel and a
+ * half is a body in the outer solar system. Nor is a source that saturates
+ * the detector: nothing out there is that bright. Either way the answer is a
+ * star, and no detection on the arc is offered as its next position.
  *
  * A detection on the arc counts only if the same spot is empty in every
  * season-A visit: a star there in both seasons is a star. With two or more
@@ -174,10 +183,18 @@ function denseDistances(near, far, steps = DENSE_STEPS) {
  */
 export function linkSeasons({
   anchor, aVisits, bVisits, sources, occupied, inField,
+  anchorInB = () => false, anchorSaturated = false,
   near = NEAR_AU, far = FAR_AU, pixelArcsec = 6.15,
 }) {
   const ds = denseDistances(near, far);
   const need = Math.min(2, bVisits.length);
+  const stillThere = bVisits.filter((v) => anchorInB(v)).length;
+  if (anchorSaturated || (stillThere > 0 && 2 * stillThere >= bVisits.length)) {
+    return {
+      need, covered: null, checked: bVisits.length, staticCount: 0, link: null,
+      star: { stillThere, saturated: Boolean(anchorSaturated) },
+    };
+  }
 
   // Each season-B visit's own arc, and which of its points the field holds.
   const arcs = bVisits.map((visit) => {
@@ -234,6 +251,7 @@ export function linkSeasons({
     checked: bVisits.length,
     staticCount,
     link: links[0] ?? null,
+    star: null,
   };
 }
 
@@ -275,7 +293,7 @@ function summarise(group, common, arcs, ds) {
     near: range.near,
     far: range.far,
     mag: mags.length ? mags.reduce((s, m) => s + m, 0) / mags.length : null,
-    snr: group.reduce((s, g) => s + g.source.snr, 0),
+    snr: group.reduce((s, g) => s + (g.source.snr ?? 0), 0),
     visits: group
       .map((g) => ({ ...arcs[g.b].visit, at: g.source, arc: arcs[g.b].points[best] }))
       .sort((x, y) => x.mjd - y.mjd),

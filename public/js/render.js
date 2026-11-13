@@ -160,10 +160,30 @@ export function fillCores(data, width, ceiling, passes = 12) {
   return cur;
 }
 
+/**
+ * For the eye only, like fillCores: a pixel the detector flagged OVERFLOW ran
+ * past its well, so whatever value the ramp left in it (often low, sometimes
+ * nonsense) is not the sky. Shown at least at the top of the stretch, the
+ * core of a bright star is white instead of a black dot in a white disc, and
+ * the blanked pixels it walls in are filled from it. `quality` is the stamp's
+ * plane (bit 1, OVERFLOW); every other pixel is left as it is, and the
+ * measured data are not touched.
+ */
+export function whitenOverflow(data, quality, ceiling) {
+  if (!quality || !(ceiling === ceiling)) return data;
+  let out = null;
+  for (let i = 0; i < data.length; i++) {
+    if (!(quality[i] & 1) || data[i] >= ceiling) continue;
+    out ??= Float32Array.from(data);
+    out[i] = ceiling;
+  }
+  return out ?? data;
+}
+
 export function paint(target, data, lut, {
-  lo, hi, stretch = 'asinh', softening, blank = [0, 0, 0], blankAlpha = 0,
+  lo, hi, stretch = 'asinh', softening, blank = [0, 0, 0], blankAlpha = 0, quality = null,
 } = {}) {
-  data = fillCores(data, target.width, hi);
+  data = fillCores(whitenOverflow(data, quality, hi), target.width, hi);
   const fn = STRETCHES[stretch] ?? STRETCHES.asinh;
   const span = hi - lo || 1e-6;
   const px = target.data;

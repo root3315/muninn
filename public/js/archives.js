@@ -38,6 +38,52 @@ export function archivesQuery({ ra, dec, radiusDeg }) {
     GROUP BY o.collection`;
 }
 
+/** Where CADC serves a file by its URI. */
+export const CADC_FILES = 'https://ws-uv.canfar.net/minoc/files/';
+
+/**
+ * The CSA's NEOSSat, a small asteroid-hunting telescope, is in CADC's index
+ * at calibration level 1: frames as delivered, with no sky coordinates. They
+ * cannot be laid on the field's grid, so the newest one is shown as it is.
+ */
+export function neossatQuery({ ra, dec, radiusDeg, last }) {
+  const r = Math.min(ARCHIVE_RADIUS.max, Math.max(ARCHIVE_RADIUS.min, Number(radiusDeg)));
+  // The newest time comes from the count's own answer: asking CADC to sort
+  // for it took longer than the relay will wait.
+  return `SELECT TOP 1 o.observationID, o.target_name, p.time_bounds_lower, p.time_exposure, p.planeID
+    FROM caom2.Observation AS o JOIN caom2.Plane AS p ON o.obsID = p.obsID
+    WHERE o.collection = 'NEOSSAT' AND o.intent = 'science'
+      AND p.time_bounds_lower >= ${fixed(Number(last) - 1e-6, 7)}
+      AND INTERSECTS(CIRCLE('ICRS', ${fixed(ra, 6)}, ${fixed(dec, 6)}, ${fixed(r, 5)}), p.position_bounds) = 1`;
+}
+
+/** The files of that one observation's plane: asked apart, since a sorted join over files does not finish. */
+export function neossatFilesQuery(planeID) {
+  // A UUID, and nothing else: it is written into the ADQL.
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(planeID))) throw new Error('not a plane id');
+  return `SELECT uri FROM caom2.Artifact WHERE planeID = '${planeID}'`;
+}
+
+/** The newest NEOSSat observation, and its files: its preview and its FITS. */
+export function readNeossat(obs, files) {
+  if (!obs) return null;
+  const uris = files.map((r) => String(r.uri ?? ''));
+  const file = (re) => uris.find((u) => re.test(u));
+  const preview = file(/_prev_256\.png$/) ?? file(/_prev\.png$/);
+  const fits = file(/\.fits$/);
+  const mjd = Number(obs.time_bounds_lower);
+  const safe = (u) => Boolean(u) && /^cadc:NEOSSAT\/[\w.-]+$/.test(u);
+  if (!safe(preview)) return null;
+  return {
+    id: String(obs.observationID),
+    target: String(obs.target_name ?? '').trim() || null,
+    iso: Number.isFinite(mjd) ? new Date((mjd - 40587) * 86400000).toISOString().slice(0, 10) : null,
+    exposure: Number(obs.time_exposure) || null,
+    preview: CADC_FILES + preview,
+    fits: safe(fits) ? CADC_FILES + fits : null,
+  };
+}
+
 /** MJD → calendar year, or null for an archive that keeps no dates. */
 const year = (mjd) => {
   const m = Number(mjd);
@@ -67,5 +113,5 @@ export async function fieldArchives({ ra, dec, radiusDeg }, { signal } = {}) {
   if (!(res.headers.get('content-type') ?? '').includes('json')) throw new Error(`relay: HTTP ${res.status}`);
   const body = await res.json();
   if (!body.ok) throw new Error(body.error ?? 'CADC did not answer');
-  return readArchives(body.rows);
+  return { list: readArchives(body.rows), neossat: body.neossat ?? null };
 }

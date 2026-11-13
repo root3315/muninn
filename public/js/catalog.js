@@ -116,7 +116,10 @@ export async function resolveName(name, { signal } = {}) {
   // SIMBAD pads designations for column alignment ("M  51"); collapse that.
   const label = /^%I\.0\s+(.+)$/m.exec(body) ?? /^#\s*(\S.*?)\t/m.exec(body);
   const resolved = (label ? label[1] : name).trim().replace(/\s+/g, ' ');
-  return { ra: +m[1], dec: +m[2], name: resolved };
+  // SIMBAD's proper motion in mas a year, when it has one: the %J position is
+  // for J2000, and a fast star has left it since.
+  const pm = /^%P\s+([\d.+-]+)\s+([\d.+-]+)/m.exec(body);
+  return { ra: +m[1], dec: +m[2], name: resolved, ...(pm ? { pm: [+pm[1], +pm[2]] } : {}) };
 }
 
 /* -------------------------------------------------------------- SPHEREx index */

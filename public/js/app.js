@@ -31,14 +31,16 @@ import { loadStamp, loadWavelength } from './stamp.js';
 import { nearestExposures, fluxPoint, placeInBand } from './spectrum.js';
 import { spectrumBlock } from './spectrum-view.js';
 import { trackCSV } from './export.js';
-import { SkyView, shortName } from './sky.js';
+import { SkyView, shortName, mostlySaturated } from './sky.js';
 import { loadWise, WISE_BANDS } from './wise.js';
 import { fieldArchives, CADC_SEARCH } from './archives.js';
 import {
   searchFrames, NoRelayError, UpstreamError, groupVisits, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, identifySource, fieldObjects, toS3, surveySources,
 } from './catalog.js';
-import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP } from './overlay.js';
+import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP, propagate, epochOfMjd } from './overlay.js';
+import { spread, nextVisits, VISITS_PER_BATCH } from './visits.js';
+import { encodeHash, decodeHash, FOV_CHOICES } from './hash.js';
 
 /* The reprojected grid is shaped like the viewport so the sky can fill it. 640
    across is already four times finer than SPHEREx's 6.15" pixel, so the canvas
@@ -55,10 +57,9 @@ const GRID_MAX_W = 1024;
 
 const gridWidthFor = (fovDeg) => Math.min(GRID_MAX_W, Math.max(GRID_MIN_W,
   Math.round(((fovDeg * 3600) / DETECTOR_ARCSEC) * SAMPLES_PER_PIXEL)));
-const MAX_VISITS = 10;
+const MAX_VISITS = VISITS_PER_BATCH;
 const FETCH_CONCURRENCY = 4;
 const SKYBOT_CONCURRENCY = 2;
-const FOV_CHOICES = [0.1, 0.15, 0.2, 0.3, 0.45, 0.6];
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 /** Snap any field width to the nearest one the selector offers. */
@@ -71,10 +72,21 @@ const mjdToDate = (mjd) => new Date((mjd - 40587) * 86400000);
 const state = {
   ra: null, dec: null, fov: 0.3, band: 'all', label: '',
   frames: [], visits: [], truncated: false, partial: false,
+  /** Every visit the archive has for this field and band; `visits` is the part being read. */
+  allVisits: [],
+  /** A visit index from a link, held until that visit has landed. */
+  wantVisit: null,
+  readingSince: 0, huntAgain: false,
+  /** Visits being read in the background, and how many the field is meant to reach. */
+  filling: false, visitGoal: 0,
+  /** A drag on the picture, the run or the scrubber; background reading waits for it. */
+  dragging: false,
   playing: false, rate: 2, timer: null, abort: null, presets: [], bytes: 0, bare: false,
   depth: null, examined: [], sectors: null, candidates: null, hunting: false, loading: false, failed: false, view: 'sky',
   facts: null, bodies: 0,
   survey: 'off',
+  /** The object the field was opened for, marked on the plate (see fieldTarget). */
+  target: null,
   /** The AllWISE band shown as B of the wipe (1 or 2), or null. */
   reference: null,
   skyLayers: { stars: false, deep: false },
@@ -163,14 +175,6 @@ function readStamp(url, grid, { signal } = {}) {
   });
 }
 
-/** Keep the ends, spread the rest — a sample that still spans the full baseline. */
-function spread(list, max) {
-  if (list.length <= max) return list.slice();
-  const out = [];
-  for (let k = 0; k < max; k++) out.push(list[Math.round((k * (list.length - 1)) / (max - 1))]);
-  return [...new Set(out)];
-}
-
 const fovLabel = (deg) => (deg >= 1 / 60 ? `${fmt(deg * 60, 1)}′` : `${fmt(deg * 3600, 0)}″`);
 /** Both sides of the field, because the shorter one is what crops an object. */
 const fieldLabel = () => {
@@ -181,32 +185,42 @@ const fieldLabel = () => {
 
 /* -------------------------------------------------------------------- state */
 
-function writeHash() {
-  if (state.ra == null) return;
-  const p = new URLSearchParams({
-    ra: state.ra.toFixed(5), dec: state.dec.toFixed(5),
-    fov: String(state.fov), band: state.band, lang: getLanguage(),
+/**
+ * The link to what is on screen, kept in the address bar. The marks, the mode
+ * and the visit held still go in with the field, so a copied link puts the
+ * next person in front of the same picture rather than the same coordinates.
+ */
+function hashNow() {
+  const held = heldVisit();
+  return encodeHash({
+    ra: state.ra, dec: state.dec, fov: state.fov, band: state.band, lang: getLanguage(),
+    name: state.label, survey: state.survey, mode: sky?.mode ?? null,
+    // A named object's motion, when the name came with one and is not a preset's.
+    pm: state.target?.key == null && Number.isFinite(state.target?.pmRA) ? [state.target.pmRA, state.target.pmDE] : null,
+    visit: state.wantVisit ?? held,
+    marks: sky?.marks ?? [],
   });
-  if (state.label) p.set('name', state.label);
-  if (state.survey !== 'off') p.set('cat', state.survey);
-  history.replaceState(null, '', `#${p}`);
 }
 
-function readHash() {
-  const p = new URLSearchParams(location.hash.slice(1));
-  // Number(null) is 0, which would read an empty hash as a valid position at the
-  // vernal equinox. Absent means absent.
-  const ra = p.has('ra') ? Number(p.get('ra')) : NaN;
-  const dec = p.has('dec') ? Number(p.get('dec')) : NaN;
-  return {
-    lang: p.get('lang'),
-    band: p.get('band') ?? 'all',
-    fov: FOV_CHOICES.includes(Number(p.get('fov'))) ? Number(p.get('fov')) : null,
-    name: p.get('name') ?? '',
-    survey: SURVEY_CHOICES.includes(p.get('cat')) ? p.get('cat') : 'off',
-    position: Number.isFinite(ra) && Number.isFinite(dec) && ra >= 0 && ra < 360 && Math.abs(dec) <= 90
-      ? { ra, dec } : null,
-  };
+function writeHash() {
+  if (state.ra == null) return;
+  const next = `#${hashNow()}`;
+  // Playback moves the visit twice a second; the address bar is only touched
+  // when what it says has actually changed.
+  if (location.hash !== next) history.replaceState(null, '', next);
+}
+
+const readHash = () => decodeHash(location.hash);
+
+/**
+ * The visit held on screen, as its place in the archive's own list of the
+ * field's visits. Its place among the visits read so far moves as more land;
+ * this does not, so a link copied mid-load opens on the same frame.
+ */
+function heldVisit() {
+  if (!sky?.visits.length || !sky.indexed || state.playing) return null;
+  const at = state.allVisits.indexOf(sky.current?.frame);
+  return at >= 0 ? at : null;
 }
 
 /* ------------------------------------------------------------------ chrome */
@@ -327,11 +341,18 @@ function updateIdentity() {
 
   // One quiet line of monospace instead of five figures at headline size. The
   // numbers still read; they no longer compete with the finding above them.
-  const mjds = ready.map((v) => v.frame.mjd);
+  // The count and the baseline are the run's as planned, from the moment the
+  // index answers: counted from the visits in hand they climbed while the
+  // field loaded ("9 over 367 d", then "10 over 397 d"), as if it had changed.
+  const planned = plannedVisits();
+  const mjds = planned.map((v) => v.frame.mjd);
+  const loaded = ready.length;
   const bands = [...new Set(ready.map((v) => v.frame.band))];
   const span = `${fmt(Math.min(...ready.map((v) => v.frame.emMin)), 2)}–${fmt(Math.max(...ready.map((v) => v.frame.emMax)), 2)} ${t('unit.um')}`;
   state.facts = {
-    visits: ready.length,
+    visits: planned.length,
+    loaded,
+    total: Math.max(planned.length, state.allVisits.length),
     days: Math.round(Math.max(...mjds) - Math.min(...mjds)),
     band: bands.length === 1 ? `${bands[0]} ${span}` : span,
   };
@@ -351,7 +372,10 @@ function renderFacts() {
   const box = $('stat-line');
   box.replaceChildren();
   if (!f) return;
-  const rows = [[t('facts.visits'), t('facts.visitsV', { n: f.visits, days: f.days })], [t('facts.band'), f.band]];
+  // The archive's count beside the count read, everywhere a count is said:
+  // "10 of 55" while the field opens, "loaded 23 of 55" while the rest come
+  // in, and past the cap the way to read them all.
+  const rows = [[t('facts.visits'), ...visitsFact(f)], [t('facts.band'), f.band]];
   // The same count the run's headline gives: every cell at 4σ or more, not
   // the twelve the hunt goes on to check or the eight the headline used to
   // stop at — two caps side by side read as two answers to one question.
@@ -372,23 +396,20 @@ function renderFacts() {
   }
   const unread = state.visits.filter((v) => v.status === 'failed').length;
   // A visit that was not read can be asked for again, here, where it is said.
-  if (unread && !state.loading) {
+  // While the background reading is on, it asks again by itself at the end.
+  if (unread && !state.loading && !state.filling) {
     rows.push([t('facts.unread'), String(unread), null, {
       label: t('epochs.retry'),
-      run: () => openField({ ra: state.ra, dec: state.dec, label: state.label }),
+      run: retryUnread,
     }]);
   }
   // The count grows as SkyBoT answers visit by visit; while it is still
   // answering, the row says how far it has got, so "caught 3" at fifteen
   // seconds and "caught 11" at forty-five do not read as two different fields.
-  const visits = sky?.visits.length ?? 0;
-  const answered = sky ? sky.visits.filter((v) => sky.knownObjects.has(v.frame.obsId) || skybot.failed.has(v.frame.obsId)).length : 0;
-  const asking = skybotOn() && visits > 0 && answered < visits;
-  if (state.bodies || asking) {
-    rows.push([t('facts.bodies'), asking
-      ? t('facts.bodiesAsking', { n: state.bodies ?? 0, done: answered, total: visits })
-      : String(state.bodies)]);
-  }
+  // Past the cap it stops saying "checking" and names the visits that were
+  // not answered, which is the part someone can act on.
+  const bodies = bodiesLine();
+  if (bodies) rows.push([t('facts.bodies'), bodies]);
   for (const [name, value, tone, action] of rows) {
     const row = document.createElement('div');
     const dt = document.createElement('dt');
@@ -407,6 +428,36 @@ function renderFacts() {
     row.append(dt, dd);
     box.append(row);
   }
+}
+
+/** The visits row: value, tone and the action offered beside it. */
+function visitsFact(f) {
+  if (state.filling) return [t('facts.visitsLoading', { n: f.loaded, total: f.total, days: f.days }), null, null];
+  if (f.total > f.visits) {
+    const all = !state.loading
+      ? { label: t('visits.all', { n: f.total }), run: () => fillVisits(Infinity) } : null;
+    return [t('facts.visitsOf', { n: state.loading ? f.visits : f.loaded, total: f.total, days: f.days }), null, all];
+  }
+  return [t('facts.visitsV', { n: state.loading ? f.visits : f.loaded, days: f.days }), null, null];
+}
+
+/** The named-bodies row: a count, how far SkyBoT has got, or which visits it left unanswered. */
+function bodiesLine() {
+  if (!sky || !skybotOn()) return state.bodies ? String(state.bodies) : '';
+  const planned = plannedVisits();
+  if (!planned.length || !state.visits.some((v) => v.status === 'ready')) return '';
+  const waiting = skybotWaiting();
+  const n = state.bodies ?? 0;
+  if (waiting.length && !skybot.capped) {
+    return t('facts.bodiesChecking', { n, done: planned.length - waiting.length, total: planned.length });
+  }
+  const unanswered = planned.filter((v) => skybot.failed.has(v.frame.obsId) || waiting.includes(v));
+  if (unanswered.length) {
+    return t('facts.bodiesUnanswered', {
+      n, k: unanswered.length, dates: unanswered.map((v) => dateLabel(v.frame.iso)).join(', '),
+    });
+  }
+  return n ? String(n) : '';
 }
 
 /* ----------------------------------------------------------------- presets */
@@ -455,11 +506,16 @@ function renderPresets() {
  * tens of arcseconds an hour, and anything out where the Planet X predictions
  * live crawls at a fraction of one.
  */
-async function huntField() {
-  // Tracking needs every visit it will ever have: a mover found in six frames
-  // and re-found in ten is one search done twice.
-  if (!sky?.visits.length || !state.sectors || state.loading) return;
+async function huntField({ quiet = false } = {}) {
+  if (!sky?.visits.length || !state.sectors) return;
+  // Asked again while a search is out (the last visits landed mid-search):
+  // it runs once more when this one is done, over everything then in hand.
+  if (state.hunting) { state.huntAgain = true; return; }
+  const gen = fieldSeq;
   state.hunting = true;
+  // A search over more visits replaces the last one when it is ready; until
+  // then the last one stays on screen, and the headline keeps its answer.
+  if (!quiet) state.candidates = null;
   renderHunt();
   try {
     await runHunt();
@@ -467,11 +523,34 @@ async function huntField() {
     // A search that fell over has to say so; leaving the button spinning for
     // ever is the one outcome that tells the user nothing.
     console.error('hunt failed', err);
-    state.candidates = { checked: 0, list: [], all: [], error: err.message };
+    if (gen === fieldSeq) state.candidates = { checked: 0, list: [], all: [], error: err.message };
   } finally {
     state.hunting = false;
     renderHunt();
   }
+  if (state.huntAgain && gen === fieldSeq) {
+    state.huntAgain = false;
+    huntField({ quiet: true });
+  }
+}
+
+/**
+ * How long Hunter X waits for every visit before it starts on the ones in
+ * hand. One slow file used to hold the search back for half a minute; now the
+ * search runs on what has arrived, says how many visits it used, and runs
+ * again once the rest are in.
+ */
+const HUNT_PATIENCE_MS = 12_000;
+
+const plannedVisits = () => state.visits.filter((v) => !isGone(v));
+
+/** Start the search early, if the field has been loading long enough and most of it is in. */
+function maybeHuntEarly() {
+  if (!state.loading || state.candidates || state.hunting || !state.sectors || !sky) return;
+  const inHand = sky.visits.length;
+  if (inHand < 3 || inHand * 2 < plannedVisits().length) return;
+  if (performance.now() - state.readingSince < HUNT_PATIENCE_MS) return;
+  huntField();
 }
 
 /**
@@ -506,9 +585,12 @@ async function runHunt() {
   const hits = standouts(state.sectors, { minScore: 4, limit: 12 });
   const seen = [];
   const cos = Math.cos((state.dec * Math.PI) / 180);
+  // The visits the sector scores were taken over. More can land while the
+  // search runs, and they shift the indexes the scores are in.
+  const visits = sky.visits.slice();
 
   for (const hit of hits) {
-    const visit = sky.visits[hit.visit];
+    const visit = visits[hit.visit];
     if (!visit) continue;
     const at = peakIndex(
       visit.stamp.data, visit.stamp.width, visit.stamp.height, sectorBounds(hit.sector),
@@ -527,7 +609,9 @@ async function runHunt() {
     if (gen !== fieldSeq) return;
   }
 
-  state.candidates = { checked: hits.length, all: seen, list: rankCandidates(seen), flashes: flashesOf(seen) };
+  state.candidates = {
+    checked: hits.length, all: seen, list: rankCandidates(seen), flashes: flashesOf(seen), used: visits.length,
+  };
   renderVerdict();
 }
 
@@ -582,15 +666,23 @@ function renderHunt() {
     ? t('hunt.count', { n: found.list.length, checked: found.checked })
     : '';
   count.dataset.tone = found?.list?.length ? 'counter' : '';
-  $('hunt-note').textContent = state.loading
-    ? t('hunt.waiting')
-    : !found
-    ? t('hunt.idle')
+  const planned = plannedVisits().length;
+  // A search made before every visit was in says how many it used, so its
+  // answer is read as an answer about those visits.
+  const coming = state.loading || state.filling;
+  const whole = state.filling ? state.visitGoal : planned;
+  const from = found && !found.error && found.used < whole
+    ? ` ${t(coming ? 'hunt.fromSoFar' : 'hunt.from', { used: found.used, total: whole })}`
+    : '';
+  // Run again over newly landed visits, the last answer stays and says so.
+  const updating = state.hunting && found ? ` ${t('hunt.updating')}` : '';
+  $('hunt-note').textContent = !found
+    ? (state.loading ? t('hunt.waiting', { s: Math.round(HUNT_PATIENCE_MS / 1000) }) : t('hunt.idle'))
     : found.error
       ? t('hunt.failed', { why: found.error })
-      : found.list.length
-      ? t('hunt.found', { n: found.list.length, checked: found.checked })
-      : t('hunt.none', { checked: found.checked });
+      : (found.list.length
+        ? t('hunt.found', { n: found.list.length, checked: found.checked })
+        : t('hunt.none', { checked: found.checked })) + from + updating;
 
   // Named at drawing time, not at hunting time: SkyBoT's answers keep arriving
   // after the hunt has finished, and a name that came late still counts.
@@ -674,7 +766,9 @@ function renderHunt() {
  * body itself, and not a star it happened to pass in front of.
  */
 function caughtAsteroids() {
-  if (!sky?.grid || sky.visits.length < 2 || state.loading) return [];
+  // With visits still arriving it works on those in hand, as the search does:
+  // a body caught in one of them is caught whether or not the rest are in.
+  if (!sky?.grid || sky.visits.length < 3) return [];
   const { width, height } = sky.grid;
   const out = [];
   for (const v of sky.visits) {
@@ -909,15 +1003,19 @@ function pickCell(sector, visit) {
 function measureSectors(sigmas, { final = true } = {}) {
   const visits = sky?.visits ?? [];
   state.sectors = visits.length >= 3 ? scoreSectors(visits, { sigmas }) : null;
-  state.candidates = null;
+  // A search already made stays on screen while more visits land; it is
+  // replaced by the next one, not blanked by every arrival.
+  if (!state.sectors) state.candidates = null;
   renderMatrix();
   renderHunt();
   renderVerdict();
   // The search the project is named for ran only when pressed, which left the
   // findings column empty on arrival and made the headline feature a button
-  // with no reason to press it. It runs once the last visit is in, because
-  // that is when it can.
-  if (final && state.sectors) huntField();
+  // with no reason to press it. It runs once the last visit is in, or earlier
+  // on the visits in hand when the last ones are slow (see maybeHuntEarly).
+  if (!state.sectors) return;
+  if (final) huntField({ quiet: true });
+  else maybeHuntEarly();
 }
 
 /* ------------------------------------------------------------------ depth */
@@ -1152,11 +1250,17 @@ function drawAxis() {
     index: shown,
     hover: runHover,
     lang: getLanguage(),
+    bands: state.band === 'all',
     paint: runPaint,
     now: performance.now(),
     motion: !matchMedia('(prefers-reduced-motion: reduce)').matches,
   });
   runHeight = box.offsetHeight || runHeight;
+  // The run's own name says how much of the archive it is.
+  const read = visits.length;
+  const total = state.allVisits.length;
+  box.querySelector('.run__k').textContent = total > read && read
+    ? t('run.legendSome', { n: read, total }) : t('run.legend');
   animateRun(slots);
 }
 
@@ -1218,6 +1322,7 @@ function syncScrub() {
   fillSlots();
   // The stack's line carries the season's own numbers, which change with it.
   if (sky?.mode === 'stack') refreshStack();
+  writeHash();
 }
 
 /** The A/B pickers — one line, instead of two buttons on every visit. */
@@ -1387,9 +1492,46 @@ function updateReadout(sample) {
  * failed. Without them "no match" was said wherever no answer had arrived yet —
  * for the first minute of every field, and for good wherever SkyBoT timed out.
  */
-let skybot = { asking: new Set(), failed: new Set() };
+const newSkybot = () => ({ asking: new Set(), failed: new Set(), capped: false, settled: false, clock: 0 });
+let skybot = newSkybot();
 
 const skybotOn = () => $('ov-skybot').checked;
+
+/**
+ * How long the named-bodies line goes on saying "checking" before it says
+ * which visits have not been answered. SkyBoT answers in seconds; JPL, asked
+ * alongside, can take a minute on a field it has not seen. An answer that
+ * arrives after this still counts.
+ */
+const SKYBOT_CAP_MS = 45_000;
+
+/** The visits of this field SkyBoT has not answered for yet. */
+const skybotWaiting = () => (sky ? plannedVisits().filter((v) => !sky.knownObjects.has(v.frame.obsId)
+  && !skybot.failed.has(v.frame.obsId)) : []);
+
+/**
+ * Whether SkyBoT has had its say about the field as it opened: every visit
+ * answered, or the cap reached. Once true it stays true for the field, so the
+ * headline does not go back to "still checking" each time visits read in the
+ * background are asked about.
+ */
+function skybotSettled() {
+  if (!skybot.settled && (skybot.capped || (sky?.visits.length && !skybotWaiting().length))) skybot.settled = true;
+  return skybot.settled;
+}
+
+/** Start (or restart, for visits added later) the clock the named-bodies line is capped by. */
+function startSkybotClock() {
+  const asked = skybot;
+  asked.capped = false;
+  clearTimeout(asked.clock);
+  asked.clock = setTimeout(() => {
+    if (asked !== skybot) return;
+    asked.capped = true;
+    renderFacts();
+    renderVerdict();
+  }, SKYBOT_CAP_MS);
+}
 
 /** How many distinct catalogued objects pass through the field across all visits. */
 function reportKnownObjects() {
@@ -1443,10 +1585,17 @@ async function askSkybot(v, signal) {
  */
 async function prefetchKnownObjects(signal) {
   if (!skybotOn()) return;
-  const shown = sky.current;
-  const pending = sky.visits
-    .filter((v) => !sky.knownObjects.has(v.frame.obsId))
-    .sort((a, b) => (b === shown) - (a === shown));
+  // Every visit the field will have, not only those whose pixels are in: the
+  // question needs a date and a place, and both are known from the index. Asked
+  // while the frames are still being read, the answers are mostly in by the
+  // time the pictures are.
+  const shown = sky.current?.frame;
+  const pending = plannedVisits()
+    .filter((v) => !sky.knownObjects.has(v.frame.obsId) && !skybot.asking.has(v.frame.obsId))
+    .sort((a, b) => (b.frame === shown) - (a.frame === shown));
+  if (!pending.length) return;
+  startSkybotClock();
+  renderFacts();
   await pool(pending, SKYBOT_CONCURRENCY, (v) => (signal?.aborted ? null : askSkybot(v, signal)));
 }
 
@@ -1569,6 +1718,7 @@ function retrackMarks() {
   nameMarks();
   sky.draw();
   renderMarks();
+  writeHash();
 }
 
 /** Match every mark against SkyBoT's answers so far, and ask who the still ones are. */
@@ -1605,12 +1755,19 @@ function tagOf(m) {
  * and asking a star catalogue about it first would name whatever faint star
  * happens to lie near its path — so it waits until SkyBoT has said no.
  */
-const IDENTIFY = new Set(['fixed', 'intermittent', 'transient']);
+const IDENTIFY = new Set(['fixed', 'saturated', 'intermittent', 'transient']);
+const STILL = new Set(['fixed', 'saturated']);
+/** When "asking" becomes "still asking", and when it gives up and says no answer came. */
+const IDENTIFY_SLOW_MS = 10_000;
+const IDENTIFY_CAP_MS = 75_000;
 
 function identifyMark(m) {
+  // While visits are still landing the measured centre moves a little with
+  // each one; the catalogues are asked once, about the centre of the whole run.
+  if (state.loading) return;
   const a = m.analysis;
   const ready = a && IDENTIFY.has(a.kind)
-    && (a.kind === 'fixed' || ['none', 'failed', 'off'].includes(m.catalog?.state));
+    && (STILL.has(a.kind) || ['none', 'failed', 'off'].includes(m.catalog?.state));
   if (!ready) { m.who = null; return; }
 
   // The measured centre, not the click: that is what a catalogue should be asked about.
@@ -1629,18 +1786,37 @@ function identifyMark(m) {
     dec: pts.reduce((s, p) => s + p.dec, 0) / pts.length,
     epoch: Number.isFinite(mjd) && mjd > 0 ? 2000 + (mjd - 51544.5) / 365.25 : 2026,
   };
-  const key = `${at.ra.toFixed(5)} ${at.dec.toFixed(5)}`;
+  // To 0.4″: the centre settles as visits land, and a new key is a new question.
+  const key = `${at.ra.toFixed(4)} ${at.dec.toFixed(4)}`;
   if (m.who?.key === key) return;
-  m.who = { key, state: 'asking' };
-  const signal = state.abort?.signal;
+  const who = { key, state: 'asking', slow: false };
+  m.who = who;
+  const field = state.abort?.signal;
+  // Every question ends in an answer, a failure or "no answer": the relays to
+  // IRSA can take a minute, and a line that says "asking" for ever reads as a
+  // page that has hung. Past a few seconds it says it is still asking.
+  const signal = deadline(field, IDENTIFY_CAP_MS);
+  const settle = (next) => {
+    clearTimeout(slowTimer);
+    if (m.who !== who) return;
+    m.who = next;
+    if (!sky.marks.includes(m)) return;
+    m.tag = tagOf(m);
+    sky.draw();
+    renderMarks();
+  };
+  const slowTimer = setTimeout(() => {
+    if (m.who !== who || who.state !== 'asking') return;
+    who.slow = true;
+    if (sky.marks.includes(m)) renderMarks();
+  }, IDENTIFY_SLOW_MS);
   identifySource(at, { signal })
-    .then((result) => { if (m.who?.key === key) m.who = { key, state: 'done', result }; })
-    .catch(() => { if (m.who?.key === key && !signal?.aborted) m.who = { key, state: 'failed' }; })
-    .finally(() => {
-      if (!sky.marks.includes(m)) return;
-      m.tag = tagOf(m);
-      sky.draw();
-      renderMarks();
+    .then((result) => settle({ key, state: 'done', result }))
+    .catch(() => {
+      // The field was closed under the question: nobody is waiting for this
+      // answer, and a mark carried into the next field asks afresh.
+      if (field?.aborted) settle(null);
+      else settle({ key, state: signal.aborted ? 'timeout' : 'failed' });
     });
 }
 
@@ -1677,8 +1853,9 @@ function gaiaKind(g) {
  * A line appears only when a catalogue had something to say.
  */
 function whoLines(who, kind) {
-  if (who.state === 'asking') return [whoP(t('mark.whoAsking'))];
+  if (who.state === 'asking') return [whoP(t(who.slow ? 'mark.whoSlow' : 'mark.whoAsking'))];
   if (who.state === 'failed') return [whoP(t('mark.whoFailed'))];
+  if (who.state === 'timeout') return [whoP(t('mark.whoTimeout', { s: Math.round(IDENTIFY_CAP_MS / 1000) }))];
   const r = who.result;
   const lines = [];
   // Beyond a couple of arcsec the name is a neighbour's, and it should say so.
@@ -1759,7 +1936,6 @@ async function loadFieldCatalog(signal) {
 
 /* ------------------------------------------ other missions' catalogues */
 
-const SURVEY_CHOICES = ['off', 'gaia', 'wise', 'both'];
 const SURVEY_KINDS = ['gaia', 'wise'];
 const SURVEY_NAMES = { gaia: 'Gaia DR3', wise: 'AllWISE' };
 const SURVEY_BAND = { gaia: 'G', wise: 'W1' };
@@ -1964,6 +2140,7 @@ const CALL = {
   transient: 'mark.callTransient',
   moving: 'mark.callMoving',
   fixed: 'mark.callFixed',
+  saturated: 'mark.callSaturated',
   intermittent: 'mark.callIntermittent',
 };
 
@@ -1982,6 +2159,7 @@ function verdict(a) {
     return t('mark.moving', { rate: fmt(a.ratePerHour, 2), seen: a.seen, days: fmt(a.spanDays, 1), rms: fmt(a.rms, 1) });
   }
   if (a.kind === 'fixed') return t('mark.fixed', { total: a.total, rms: fmt(a.rms, 1) });
+  if (a.kind === 'saturated') return t('mark.saturated', { n: a.saturated, total: a.total });
   // Two points always fit a straight line perfectly, so quoting a scatter would be
   // a number with no information in it. Name the dates instead.
   if (a.seen <= 3) {
@@ -1989,6 +2167,33 @@ function verdict(a) {
     return t('mark.intermittentDates', { seen: a.seen, total: a.total, dates });
   }
   return t('mark.intermittent', { seen: a.seen, total: a.total, rms: fmt(a.rms, 1) });
+}
+
+/**
+ * A saturated source cannot be centred well enough to see it move, but a
+ * catalogue that knows its motion can say how far it went over these visits,
+ * against the one detector pixel a blink could ever show. The motion is the
+ * identification's (Gaia, else CatWISE2020), or the named target's when the
+ * mark sits on it.
+ */
+function saturatedMotion(m) {
+  const a = m.analysis;
+  if (a?.kind !== 'saturated' || !(a.spanDays > 0)) return null;
+  const r = m.who?.state === 'done' ? m.who.result : null;
+  const tg = state.target;
+  const when = a.track.reduce((s, p) => s + p.mjd, 0) / a.track.length;
+  const target = tg && Number.isFinite(tg.epoch)
+    && separationArcsec(propagate(tg, epochOfMjd(when), tg.epoch), m) <= 3 * DETECTOR_ARCSEC ? tg : null;
+  const source = [r?.gaia, r?.catwise, target].find((s) => Number.isFinite(s?.pmRA) && Number.isFinite(s?.pmDE));
+  if (!source) return null;
+  const pm = Math.hypot(source.pmRA, source.pmDE) / 1000;
+  // An ordinary star's motion rounds to nothing here; only a fast one is worth a line.
+  if (pm < 0.1) return null;
+  const shift = (pm * a.spanDays) / 365.25;
+  return t(shift < DETECTOR_ARCSEC ? 'mark.saturatedUnder' : 'mark.saturatedOver', {
+    pm: fmt(pm, pm < 1 ? 2 : 1), shift: fmt(shift, 1), days: fmt(a.spanDays, 0),
+    px: fmt(DETECTOR_ARCSEC, 2), n: fmt(shift / DETECTOR_ARCSEC, 1),
+  });
 }
 
 /**
@@ -2084,6 +2289,13 @@ function renderMarks() {
     const detail = document.createElement('p');
     detail.className = 'mark__detail';
     detail.textContent = verdict(m.analysis);
+    // A mark kept from before a reload has no measurement until the new
+    // field's visits are in; it says so rather than "nothing here".
+    if (!m.analysis) {
+      call.textContent = t('mark.measuring');
+      call.dataset.kind = 'none';
+      detail.textContent = t('mark.measuringWhy');
+    }
 
     const id = document.createElement('p');
     id.className = 'mark__id';
@@ -2113,7 +2325,14 @@ function renderMarks() {
     // "no match in SkyBoT" under it only raised the question of why anyone
     // asked. What it is comes from the star catalogues instead.
     body.append(call, detail);
-    if (m.analysis?.kind !== 'fixed') body.append(id);
+    const motion = saturatedMotion(m);
+    if (motion) {
+      const p = document.createElement('p');
+      p.className = 'mark__detail';
+      p.textContent = motion;
+      body.append(p);
+    }
+    if (!STILL.has(m.analysis?.kind)) body.append(id);
     if (m.who) body.append(...whoLines(m.who, m.analysis?.kind));
 
     const curve = m.analysis?.seen ? markCurve(m.analysis) : null;
@@ -2142,6 +2361,7 @@ function renderMarks() {
       if (sky.link?.mark === m) sky.link = null;
       sky.draw();
       renderMarks();
+      writeHash();
     });
 
     li.append(n, body, kill);
@@ -2330,8 +2550,10 @@ async function linkStamps(frames, onEach) {
 async function runLink(m, visitsA, visitsB) {
   // Where the mark is in season A, measured: the strongest detection of it.
   let anchorHit = null;
+  const hitsA = [];
   for (const v of visitsA) {
     const hit = sky.measure(v, m.ra, m.dec);
+    if (hit) hitsA.push(hit);
     if (hit && (!anchorHit || hit.snr > anchorHit.snr)) anchorHit = hit;
   }
   const refMjd = visitsA.find((v) => v.frame.obsId === m.obsId)?.frame.mjd ?? visitsA[0].frame.mjd;
@@ -2359,6 +2581,11 @@ async function runLink(m, visitsA, visitsB) {
     return Boolean(hit) && separationArcsec(hit, { ra, dec }) <= 1.5 * DETECTOR_ARCSEC;
   };
   const asVisit = (v) => ({ id: v.frame.obsId, mjd: v.frame.mjd, item: v });
+  // The source at the mark, still at the same spot in a season-B visit.
+  const anchorInB = (v) => {
+    const hit = sky.measure(v.item, anchor.ra, anchor.dec);
+    return Boolean(hit) && separationArcsec(hit, anchor) <= 1.5 * DETECTOR_ARCSEC;
+  };
   const result = linkSeasons({
     anchor,
     aVisits: visitsA.map(asVisit),
@@ -2366,13 +2593,13 @@ async function runLink(m, visitsA, visitsB) {
     sources: (v) => sourcesOf.get(v.id) ?? [],
     occupied,
     inField,
+    anchorInB: anchorHit ? anchorInB : undefined,
+    anchorSaturated: mostlySaturated(hitsA),
     pixelArcsec: DETECTOR_ARCSEC,
   });
   // A source at the mark that is still there in season B sits still: a star.
-  const stillThere = anchorHit ? visitsB.filter((v) => {
-    const hit = sky.measure(v, anchor.ra, anchor.dec);
-    return hit && separationArcsec(hit, anchor) <= 1.5 * DETECTOR_ARCSEC;
-  }).length : 0;
+  const stillThere = result.star?.stillThere
+    ?? (anchorHit ? visitsB.filter((v) => anchorInB(asVisit(v))).length : 0);
   const limits = visitsB.map((v) => limitAB(v.stamp.meta?.detectorSigma)).filter((x) => x != null).sort((x, y) => x - y);
   return {
     anchor,
@@ -2392,7 +2619,8 @@ async function runLink(m, visitsA, visitsB) {
  */
 function showLink(m) {
   const link = m?.link;
-  if (!link || link.state !== 'done' || !link.shown) {
+  // A star has no arc to follow.
+  if (!link || link.state !== 'done' || !link.shown || link.result.star) {
     sky.link = null;
     sky.draw();
     return;
@@ -2448,6 +2676,15 @@ function linkLines(m) {
 
   const r = link.result;
   const dateB = fmtDate(link.visitsB[0].iso);
+  // A star at the mark is the whole answer: nothing on the arc is offered
+  // as where it went, because it did not go anywhere.
+  if (r.star) {
+    line(t(r.star.saturated ? 'link.starSaturated' : 'link.star', {
+      n: r.star.stillThere, total: r.checked, date: dateB,
+    }));
+    if (r.star.stillThere) line(t('link.starWhy'), 'quiet');
+    return out;
+  }
   if (!r.covered) {
     line(t('link.outside', { near: fmt(NEAR_AU, 0), far: fmt(FAR_AU, 0) }));
   } else if (r.link) {
@@ -2565,8 +2802,273 @@ function fieldGrid(ra, dec) {
   return grid;
 }
 
-async function openField({ ra, dec, label = '', band = null }) {
+/** The preset centred on this spot, if one is. */
+function presetAt(ra, dec) {
+  const cos = Math.cos((dec * Math.PI) / 180);
+  return state.presets.find((p) => Number.isFinite(p.ra)
+    && Math.hypot(deltaRA(p.ra, ra) * cos, p.dec - dec) < 0.01) ?? null;
+}
+
+/**
+ * The object a field is opened for, to be marked on the plate: a preset's
+ * catalogue position and motion; a name's, as the name service gave it (a
+ * J2000 position, its motion if SIMBAD has one); the same target again when
+ * the same field is reopened in another band or width. A field opened at
+ * bare coordinates has none.
+ */
+function fieldTarget({ ra, dec, label, target, pm }) {
+  if (target !== undefined) return target;
+  const preset = presetAt(ra, dec);
+  if (preset?.target) return { ...preset.target, key: preset.key, label: t(`preset.${preset.key}`) };
+  const kept = state.target;
+  if (kept?.field && kept.label === label && Math.abs(kept.field.ra - ra) < 1e-6 && Math.abs(kept.field.dec - dec) < 1e-6) {
+    return kept;
+  }
+  if (!label) return null;
+  const moving = Number.isFinite(pm?.[0]) && Number.isFinite(pm?.[1]);
+  return moving ? { ra, dec, epoch: 2000, pmRA: pm[0], pmDE: pm[1], label } : { ra, dec, label };
+}
+
+/**
+ * Marks carried over to a field opened again — a new size, a new band, a
+ * link — placed at once and measured as the visits land, instead of being
+ * dropped with the old field's pixels.
+ */
+function placeMarks(list) {
+  for (const m of list) {
+    sky.marks.push({ ra: m.ra, dec: m.dec, obsId: m.obsId ?? null, track: [], analysis: null, known: null });
+  }
+}
+
+/** The marks as places, for carrying across a reload. */
+const markPlaces = () => (sky?.marks ?? []).map(({ ra, dec, obsId }) => ({ ra, dec, obsId }));
+
+/** Open the same field again, as it is now: a new size or band keeps the marks and the visit held. */
+function reopenField() {
+  if (state.ra == null) return;
+  openField({ ra: state.ra, dec: state.dec, label: state.label, marks: markPlaces(), visit: state.wantVisit ?? heldVisit() });
+}
+
+/**
+ * Add a visit, keeping the frame on screen and the frames A and B of the wipe
+ * where they were: the list is in date order, so a visit landing earlier than
+ * any of them moves its index, and the index is moved with it.
+ */
+function addVisitInPlace(frame, stamp) {
+  const a = sky.visits[sky.a];
+  const b = sky.visits[sky.b];
+  const entry = sky.addVisit(frame, stamp);
+  if (a && b && a !== b) sky.setAB(sky.visits.indexOf(a), sky.visits.indexOf(b));
+  // The sorted copy of the pixels is only needed to cut them again at a new
+  // clip; the cut made on arrival is kept. Sixty visits of it was a third of
+  // the page's memory.
+  entry.sorted = undefined;
+}
+
+/**
+ * Read one visit's pixels onto the field's grid and lay it in. While the
+ * field opens, the reading (sectors, depth) is taken as each visit lands;
+ * while it fills in the background, that is left to fillRefresh, which runs
+ * every few seconds instead of on every frame.
+ */
+async function readOne(entry, grid, signal) {
+  entry.status = 'reading';
+  drawAxis();
+  renderPlateLog();
+  try {
+    const stamp = await readStamp(toS3(entry.frame.url), grid, { signal });
+    await afterDive();
+    if (signal.aborted) return 0;
+    if (!stamp) {
+      entry.status = 'dropped';
+      return 0;
+    }
+    entry.status = 'ready';
+    entry.landedAt = performance.now();
+    entry.bytes = stamp.meta.bytesRead;
+    addVisitInPlace(entry.frame, stamp);
+    if (sky.visits.length === 1) setPlateState('', { hidden: true });
+    syncScrub();
+    if (state.filling) {
+      scheduleFillRefresh();
+    } else {
+      // With three in hand the sectors can already be scored, and a field whose
+      // slowest frame takes half a minute should not show nothing until then.
+      measureDepth({ final: false });
+      // Marks carried over are measured as the visits come, not only at the end.
+      if (sky.marks.length && sky.visits.length >= 3) retrackMarks();
+    }
+    return stamp.meta.bytesRead;
+  } catch {
+    // Not the same as a frame that misses the field: this one was never read.
+    if (!signal.aborted) entry.status = 'failed';
+    return 0;
+  }
+}
+
+/**
+ * Read a batch of visits, four at a time, each shown as it lands. Returns the
+ * bytes read.
+ */
+async function readVisits(entries, grid, signal) {
+  let done = 0;
+  let bytes = 0;
+  const total = entries.length;
+  await pool(entries, FETCH_CONCURRENCY, async (entry) => {
+    if (signal.aborted) return;
+    bytes += await readOne(entry, grid, signal);
+    done++;
+    if (signal.aborted) return;
+    if (!sky.visits.length) {
+      setPlateState(t('epochs.loading', { done, total }), { progress: done / total });
+    } else {
+      renderPlateLog();
+    }
+    drawAxis();
+    updateIdentity();
+  });
+  return bytes;
+}
+
+/* --------------------------------------------------- the rest of the visits */
+
+/*
+ * A field opens with ten visits spread across the whole baseline, so motion
+ * between seasons shows at once. The rest are then read in the background,
+ * a few at a time, widest gap in the baseline first: both seasons fill in
+ * early, then the run gets denser. Everything that reads the run (playback,
+ * the strip, the marks, Hunter X, the stack) takes them in as they land,
+ * without moving the frame on screen.
+ *
+ * It stops at a cap, so a polar field with two hundred visits does not take
+ * the tab's memory with it; past the cap the field offers to read the rest.
+ * It pauses while the tab is hidden, while the view dives in from the sky,
+ * and while someone is dragging on the picture, the run or the scrubber.
+ */
+const FILL_CAP = 60;
+/** Phones and small-memory machines stop sooner. */
+const FILL_CAP_SMALL = 30;
+/** Pixels of visit (data and picture) the page keeps at most; a wide field reaches it before the cap. */
+const FILL_PIXEL_BUDGET = 30e6;
+/** The heavy readings are taken again at most this often while visits land. */
+const FILL_REFRESH_MS = 4000;
+
+const fillLimit = () => (matchMedia('(max-width: 40rem)').matches || (navigator.deviceMemory ?? 8) <= 4
+  ? FILL_CAP_SMALL : FILL_CAP);
+
+function fillCap() {
+  const px = (sky.grid?.width ?? 1) * (sky.grid?.height ?? 1);
+  return Math.max(MAX_VISITS, Math.min(fillLimit(), Math.floor(FILL_PIXEL_BUDGET / px)));
+}
+
+const fillWaiters = [];
+const fillPaused = () => document.hidden || flying || state.dragging;
+
+/** Resolves when background reading may go on. */
+function fillMayRun() {
+  return fillPaused() ? new Promise((resolve) => { fillWaiters.push(resolve); }) : Promise.resolve();
+}
+
+/** Something that paused the reading has ended: let it go on, if nothing else holds it. */
+function wakeFill() {
+  if (!fillPaused()) fillWaiters.splice(0).forEach((resolve) => resolve());
+}
+
+let fillTimer = 0;
+let fillLast = 0;
+
+/** At most every few seconds, the readings over the run as it now is. */
+function scheduleFillRefresh() {
+  if (fillTimer) return;
+  const wait = Math.max(0, FILL_REFRESH_MS - (performance.now() - fillLast));
+  const gen = fieldSeq;
+  fillTimer = setTimeout(() => {
+    fillTimer = 0;
+    if (gen !== fieldSeq) return;
+    fillLast = performance.now();
+    fillRefresh();
+  }, wait);
+}
+
+/** Sectors, depth, marks, SkyBoT, the stack and Hunter X, taken again over every visit in hand. */
+function fillRefresh({ final = false } = {}) {
+  measureDepth({ final });
+  // The final pass hunts again by itself (measureSectors); this one has to ask.
+  if (!final && state.sectors) huntField({ quiet: true });
+  if (sky.marks.length) retrackMarks();
+  if (sky.mode === 'stack') refreshStack();
+  prefetchKnownObjects(state.abort?.signal);
+  updateIdentity();
+  drawAxis();
+}
+
+/**
+ * Read the field's other visits in the background, up to `limit` in all.
+ * Failed frames are skipped and asked for once more at the end.
+ */
+async function fillVisits(limit) {
+  if (state.filling || state.loading || !sky?.grid || !state.abort) return;
+  const { signal } = state.abort;
+  const gen = fieldSeq;
+  const grid = sky.grid;
+  const live = () => !signal.aborted && gen === fieldSeq;
+  state.visitGoal = Math.min(state.allVisits.length, limit);
+  if (state.visits.length >= state.visitGoal && !state.visits.some((v) => v.status === 'failed')) {
+    updateIdentity();
+    return;
+  }
+  state.filling = true;
+  updateIdentity();
+
+  const next = () => {
+    if (state.visits.length >= state.visitGoal) return null;
+    const [frame] = nextVisits(state.allVisits, state.visits.map((v) => v.frame), 1);
+    if (!frame) return null;
+    const entry = { frame, status: 'pending' };
+    state.visits.push(entry);
+    return entry;
+  };
+  const read = async (entry) => {
+    state.bytes += await readOne(entry, grid, signal);
+    if (!live()) return;
+    renderBytes();
+    drawAxis();
+    updateIdentity();
+  };
+  const worker = async () => {
+    for (;;) {
+      await fillMayRun();
+      if (!live()) return;
+      const entry = next();
+      if (!entry) return;
+      await read(entry);
+    }
+  };
+  await Promise.all(Array.from({ length: FETCH_CONCURRENCY }, worker));
+
+  // Once more for the frames that failed; a slow server often answers the
+  // second time. What fails again is counted, and offered again by hand.
+  const failed = state.visits.filter((v) => v.status === 'failed');
+  await pool(failed, FETCH_CONCURRENCY, async (entry) => {
+    await fillMayRun();
+    if (live()) await read(entry);
+  });
+  if (!live()) return;
+
+  state.filling = false;
+  clearTimeout(fillTimer);
+  fillTimer = 0;
+  fillRefresh({ final: true });
+}
+
+/** Ask again, by hand, for the visits that were not read. */
+function retryUnread() {
+  fillVisits(Math.max(state.visitGoal, state.visits.length));
+}
+
+async function openField({ ra, dec, label = '', band = null, target, pm, marks = [], visit = null }) {
   fieldSeq += 1;
+  const gen = fieldSeq;
   state.abort?.abort();
   const ctrl = new AbortController();
   state.abort = ctrl;
@@ -2575,8 +3077,12 @@ async function openField({ ra, dec, label = '', band = null }) {
   state.ra = ra;
   state.dec = dec;
   state.label = label;
+  state.target = fieldTarget({ ra, dec, label, target, pm });
+  if (state.target) state.target.field = { ra, dec };
   if (band) state.band = band;
   state.visits = [];
+  state.allVisits = [];
+  state.wantVisit = visit;
   state.truncated = false;
   state.partial = false;
   // What the last field measured goes with it: the reading is now built up as
@@ -2586,23 +3092,32 @@ async function openField({ ra, dec, label = '', band = null }) {
   state.depth = null;
   state.sectors = null;
   state.candidates = null;
-  writeHash();
-  renderPresets();
-  updateIdentity();
+  state.huntAgain = false;
+  state.filling = false;
+  state.visitGoal = 0;
+  clearTimeout(fillTimer);
+  fillTimer = 0;
 
   // The field is cut to the room the plate has, and all of it is shown. See
   // fieldGrid for why its short side is the one the size control sets.
   let grid = fieldGrid(ra, dec);
   sky.reset(grid);
+  sky.target = state.target;
+  placeMarks(marks);
+  writeHash();
+  renderPresets();
+  updateIdentity();
   // The mount names the frame on the plate; with none on it yet it must not
   // go on naming the last field's.
   renderWhen();
   sky.setCatalog([]);
   resetSurveys();
   archives = null;
+  archivesNeossat = null;
   renderArchives();
   showTip(null);
-  skybot = { asking: new Set(), failed: new Set() };
+  clearTimeout(skybot.clock);
+  skybot = newSkybot();
   stackPlanned = [];
   stackAsking = new Set();
   stackDropped = new Set();
@@ -2647,7 +3162,12 @@ async function openField({ ra, dec, label = '', band = null }) {
   state.partial = partial;
   populateBands();
 
-  const chosen = spread(groupVisits(frames, { ra, dec, band: state.band }), MAX_VISITS);
+  state.allVisits = groupVisits(frames, { ra, dec, band: state.band });
+  const chosen = spread(state.allVisits, MAX_VISITS);
+  // A visit a link holds is read with the first ten, wherever it falls.
+  const wanted = state.allVisits[visit];
+  if (wanted && !chosen.includes(wanted)) chosen.push(wanted);
+  chosen.sort((p, q) => p.mjd - q.mjd);
   state.visits = chosen.map((frame) => ({ frame, status: 'pending' }));
   drawAxis();
   // The run has just taken its place at the foot of the page, which changes the
@@ -2657,7 +3177,7 @@ async function openField({ ra, dec, label = '', band = null }) {
   if (Math.abs(refit.width / refit.height - grid.width / grid.height) > 0.03) {
     grid = refit;
     sky.reset(grid);
-    skybot = { asking: new Set(), failed: new Set() };
+    placeMarks(marks);
     stackAsking = new Set();
     stackDropped = new Set();
     renderMarks();
@@ -2666,48 +3186,17 @@ async function openField({ ra, dec, label = '', band = null }) {
 
   if (!chosen.length) { state.loading = false; setPlateState(t('epochs.none')); return; }
   if (state.reference) loadReference(ctrl.signal);
+  // SkyBoT is asked about every planned visit now, alongside the pixels, rather
+  // than after the last of them: the question needs only a date and a place.
+  prefetchKnownObjects(ctrl.signal);
   setPlateState(t('epochs.loading', { done: 0, total: chosen.length }), { progress: 0 });
 
-  let done = 0;
-  let bytes = 0;
-  await pool(state.visits, FETCH_CONCURRENCY, async (entry) => {
-    if (ctrl.signal.aborted) return;
-    entry.status = 'reading';
-    drawAxis();
-    renderPlateLog();
-    try {
-      const stamp = await readStamp(toS3(entry.frame.url), grid, { signal: ctrl.signal });
-      await afterDive();
-      if (ctrl.signal.aborted) return;
-      if (!stamp) {
-        entry.status = 'dropped';
-      } else {
-        entry.status = 'ready';
-        entry.landedAt = performance.now();
-        entry.bytes = stamp.meta.bytesRead;
-        bytes += stamp.meta.bytesRead;
-        sky.addVisit(entry.frame, stamp);
-        if (sky.visits.length === 1) setPlateState('', { hidden: true });
-        syncScrub();
-        // The reading is taken as the visits land, not after the last one: with
-        // three in hand the sectors can already be scored, and a field whose
-        // slowest frame takes half a minute should not show nothing until then.
-        measureDepth({ final: false });
-      }
-    } catch {
-      // Not the same as a frame that misses the field: this one was never read.
-      if (!ctrl.signal.aborted) entry.status = 'failed';
-    }
-    done++;
-    if (ctrl.signal.aborted) return;
-    if (!sky.visits.length) {
-      setPlateState(t('epochs.loading', { done, total: chosen.length }), { progress: done / chosen.length });
-    } else {
-      renderPlateLog();
-    }
-    drawAxis();
-    updateIdentity();
-  });
+  // Hunter X starts on the visits in hand if the last ones are slow; the clock
+  // is checked again when it runs out, in case nothing lands after that.
+  state.readingSince = performance.now();
+  setTimeout(() => { if (gen === fieldSeq) maybeHuntEarly(); }, HUNT_PATIENCE_MS + 50);
+
+  const bytes = await readVisits(state.visits, grid, ctrl.signal);
 
   if (ctrl.signal.aborted) return;
   if (!sky.visits.length) {
@@ -2722,12 +3211,19 @@ async function openField({ ra, dec, label = '', band = null }) {
 
   setPlateState('', { hidden: true });
   sky.setAB(0, Math.max(0, sky.visits.length - 1));
+  // A visit asked for by a link is held on screen, which is a single frame.
+  const held = sky.visits.findIndex((v) => v.frame === state.allVisits[state.wantVisit]);
+  state.wantVisit = null;
+  if (held >= 0) {
+    stopPlayback();
+    if (sky.mode === 'blink') selectMode('single');
+    sky.setIndex(held);
+  }
   syncScrub();
   // The marks card offers a one-press demonstration, which only makes sense once
   // there are visits to measure — so it is re-rendered when they arrive.
   renderMarks();
   refreshKnownObjects();
-  prefetchKnownObjects(ctrl.signal);
   loadFieldCatalog(ctrl.signal);
   loadArchives(ctrl.signal);
   applySurvey();
@@ -2740,7 +3236,9 @@ async function openField({ ra, dec, label = '', band = null }) {
   if (sky.marks.length) retrackMarks();
 
   const stillness = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (sky.visits.length > 1 && !state.playing && !stillness && sky.mode === 'blink') startPlayback();
+  if (held < 0 && sky.visits.length > 1 && !state.playing && !stillness && sky.mode === 'blink') startPlayback();
+  // The rest of the field's visits, in the background (see fillVisits).
+  fillVisits(fillCap());
 }
 
 /** How little of the archive this field actually cost. */
@@ -2853,7 +3351,7 @@ async function submitTarget(raw, { note = $('find-note'), onFound } = {}) {
     if (!hit) { note.textContent = t('target.notFound'); return; }
     note.textContent = '';
     onFound?.();
-    openField({ ra: hit.ra, dec: hit.dec, label: hit.name });
+    openField({ ra: hit.ra, dec: hit.dec, label: hit.name, pm: hit.pm });
   } catch {
     if (ticket !== askSeq) return;
     note.textContent = movedOn() ? '' : t('target.offline');
@@ -2909,13 +3407,16 @@ function savePNG() {
 
 async function copyLink(btn) {
   writeHash();
+  // The language travels in the fragment; a `?lang=` the page was opened with
+  // would say it a second time, and the two could disagree.
+  const href = `${location.origin}${location.pathname}#${hashNow()}`;
   try {
-    await navigator.clipboard.writeText(location.href);
+    await navigator.clipboard.writeText(href);
     btn.dataset.state = 'done';
     btn.textContent = t('export.linkDone');
     setTimeout(() => { delete btn.dataset.state; btn.textContent = t('export.link'); }, 1800);
   } catch {
-    btn.textContent = location.href;
+    btn.textContent = href;
   }
 }
 
@@ -2963,30 +3464,29 @@ function renderVerdict() {
   }
 
   line.dataset.state = '';
-  if (state.loading) {
-    const total = state.visits.filter((v) => !isGone(v)).length;
-    line.textContent = t('verdict.reading', { done: ready.length, total });
-    line.dataset.found = 'false';
-    line.dataset.state = 'reading';
-  } else if (state.hunting || !state.candidates) {
-    line.textContent = t('verdict.working');
-    line.dataset.found = 'false';
+  line.dataset.found = 'false';
+  const found = state.candidates;
+  if (!found) {
+    // Until the first search is in there is no answer to give, only progress.
+    const total = plannedVisits().length;
+    line.textContent = state.loading ? t('verdict.reading', { done: ready.length, total }) : t('verdict.working');
     line.dataset.state = 'reading';
   } else {
+    // The headline says what is known as soon as it is known. SkyBoT's check
+    // goes on underneath, in the facts, and changes the headline only when it
+    // names something; it no longer holds the answer back for half a minute.
     // Unnamed one-visit flashes are mostly cosmic-ray hits, and a headline is
     // no place for "probably nothing". A known asteroid caught is a finding.
-    const moved = state.candidates.list?.length ?? 0;
+    const moved = found.list?.length ?? 0;
     const caught = [...new Set((state.caught ?? []).map((c) => c.catalog.name))];
-    // "Nothing moved" is only true once SkyBoT has answered for every visit:
-    // said earlier, a field with a catalogued asteroid in it opens by denying it.
-    const asking = skybotOn() && sky.visits.some((v) => !sky.knownObjects.has(v.frame.obsId)
-      && !skybot.failed.has(v.frame.obsId));
+    const flashes = found.flashes?.length ?? 0;
     line.textContent = moved
       ? t('verdict.moved', { n: moved })
       : caught.length
         ? t(caught.length === 1 ? 'verdict.caught' : 'verdict.caughtMany', { name: caught[0], n: caught.length })
-        : asking ? t('verdict.asking') : t('verdict.still');
-    if (!moved && !caught.length && asking) line.dataset.state = 'reading';
+        : flashes && !skybotSettled()
+          ? t('verdict.flashesOpen', { n: flashes })
+          : t('verdict.still');
     // The signal colour is for what nobody has catalogued; a known asteroid
     // caught is the check working, not a discovery.
     line.dataset.found = String(moved > 0);
@@ -3159,7 +3659,22 @@ async function showCard(hit, { focus = false } = {}) {
   const coarse = (text) => text.split(' ').slice(0, 2).join(' ');
   const where = cardFact(t('card.pos'), `${coarse(formatRA(hit.ra))} ${coarse(formatDec(hit.dec))}`);
   const facts = [];
-  if (preset?.visits) facts.push(cardFact(t('card.visits'), t('card.visitsValue', { n: preset.visits, d: preset.spanDays })));
+  if (preset?.visits) {
+    facts.push(cardFact(t('card.visits'), t('card.visitsValue', { n: preset.visits, d: preset.spanDays })));
+    // The archive's count is not what the field opens with; said here, the
+    // "Visits 10" on the field does not read as a different answer.
+    // Open already: how many are in. Not yet: how the field will load them.
+    const here = state.ra != null && Math.abs(deltaRA(state.ra, preset.ra)) < 1e-3 && Math.abs(state.dec - preset.dec) < 1e-3;
+    const loaded = here ? state.visits.filter((v) => v.status === 'ready').length : 0;
+    if (loaded) {
+      facts.push(cardFact(t('card.loaded'), t('card.loadedValue', { n: loaded, total: Math.max(loaded, state.allVisits.length) })));
+    } else if (preset.visits > MAX_VISITS) {
+      const cap = fillLimit();
+      facts.push(cardFact(t('card.opens'), preset.visits <= cap
+        ? t('card.opensAll', { shown: MAX_VISITS, rest: preset.visits - MAX_VISITS })
+        : t('card.opensValue', { shown: MAX_VISITS, cap, n: preset.visits })));
+    }
+  }
   if (hit.kind === 'star' && hit.sub) facts.push(cardFact(t('card.name'), hit.sub));
   if ((hit.kind === 'deep' || hit.kind === 'star') && hit.mag != null) {
     facts.push(cardFact(t('card.mag'), `V ${fmt(hit.mag, 1)}`));
@@ -3320,7 +3835,7 @@ async function previewLive(hit, where) {
       const picture = ctx.createImageData(CARD_PX, CARD_PX);
       const { lo, hi } = limitsFromSorted(sortedFinite(stamp.data));
       paint(picture, stamp.data, rampFromToken(document.documentElement, '--cmap-deep'), {
-        lo, hi, stretch: 'asinh', blankAlpha: 255,
+        lo, hi, stretch: 'asinh', blankAlpha: 255, quality: stamp.quality,
       });
       ctx.putImageData(picture, 0, 0);
       frame.dataset.live = 'shown';
@@ -3383,6 +3898,7 @@ function afterDive() {
 }
 
 function releaseDiveWaiters() {
+  wakeFill();
   const next = diveWaiters.shift();
   if (!next) return;
   next();
@@ -3803,6 +4319,8 @@ function syncLambda() {
 
 /** What CADC said about the open field: null, 'asking', 'failed' or a list. */
 let archives = null;
+/** The newest NEOSSat frame of the field, when CADC has one. */
+let archivesNeossat = null;
 
 async function loadArchives(signal) {
   const at = { ra: state.ra, dec: state.dec };
@@ -3811,7 +4329,8 @@ async function loadArchives(signal) {
   try {
     const list = await fieldArchives({ ...at, radiusDeg: Math.min(0.3, sky.grid.spanDeg / 2) }, { signal });
     if (signal?.aborted || state.ra !== at.ra || state.dec !== at.dec) return;
-    archives = list;
+    archives = list.list;
+    archivesNeossat = list.neossat;
   } catch {
     if (signal?.aborted) return;
     archives = 'failed';
@@ -3844,6 +4363,25 @@ function renderArchives() {
   const link = $('archives-link');
   link.hidden = !list.length;
   link.href = CADC_SEARCH;
+  renderNeossat(Array.isArray(archives) ? archivesNeossat : null);
+}
+
+/**
+ * NEOSSat's newest frame of the field, as delivered: a raw frame with no sky
+ * coordinates, so it is shown beside the list, not laid over the plate.
+ */
+function renderNeossat(n) {
+  const box = $('archives-neossat');
+  box.hidden = !n;
+  if (!n) return;
+  $('archives-neossat-img').src = n.preview;
+  $('archives-neossat-img').alt = t('neossat.alt', { target: n.target ?? '' });
+  $('archives-neossat-cap').textContent = t('neossat.cap', {
+    date: n.iso ? fmtDate(n.iso) : '—', target: n.target ?? '—', s: n.exposure ? fmt(n.exposure, 1) : '—',
+  });
+  const fitsLink = $('archives-neossat-fits');
+  fitsLink.hidden = !n.fits;
+  if (n.fits) fitsLink.href = n.fits;
 }
 
 /* ------------------------------------------------- AllWISE beside the frame */
@@ -3967,15 +4505,17 @@ function wire() {
     openField({ ra, dec, label: '' });
   });
 
+  // A new size or band is the same field read again: the marks stay, and are
+  // measured again on the new grid as its visits land.
   $('fov').addEventListener('change', (e) => {
     state.fov = Number(e.target.value);
     updateIdentity();
-    if (state.ra != null) openField({ ra: state.ra, dec: state.dec, label: state.label });
+    reopenField();
   });
   $('band').addEventListener('change', (e) => {
     state.band = e.target.value;
     syncLambda();
-    if (state.ra != null) openField({ ra: state.ra, dec: state.dec, label: state.label });
+    reopenField();
   });
 
   const run = $('run-canvas');
@@ -4070,7 +4610,13 @@ function wire() {
     });
   }
 
-  $('clear-marks').addEventListener('click', () => { sky.marks = []; sky.link = null; sky.draw(); renderMarks(); });
+  $('clear-marks').addEventListener('click', () => {
+    sky.marks = [];
+    sky.link = null;
+    sky.draw();
+    renderMarks();
+    writeHash();
+  });
   $('mark-centre').addEventListener('click', () => {
     if (state.ra == null || !sky.visits.length) return;
     addMark(state.ra, state.dec);
@@ -4098,7 +4644,16 @@ function wire() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !$('tools').hidden && !$('about').open) { setTools(false); $('tools-toggle').focus(); }
   });
-  $('hunt-run').addEventListener('click', huntField);
+  $('hunt-run').addEventListener('click', () => huntField());
+  // Background reading waits while the tab is hidden and while something is
+  // being dragged, so the drag keeps the frame rate it had.
+  document.addEventListener('visibilitychange', wakeFill);
+  document.addEventListener('pointerdown', (e) => {
+    if (e.target instanceof Element && e.target.closest('#sky, #scrub, #run-canvas')) state.dragging = true;
+  });
+  const endDrag = () => { if (state.dragging) { state.dragging = false; wakeFill(); } };
+  window.addEventListener('pointerup', endDrag);
+  window.addEventListener('pointercancel', endDrag);
   $('plate-retry').addEventListener('click', () => {
     if (state.ra != null) openField({ ra: state.ra, dec: state.dec, label: state.label });
   });
@@ -4151,6 +4706,7 @@ function wire() {
     if (next.lang && next.lang !== getLanguage()) { setLanguage(next.lang); relabel(); }
     if (!next.position) return;
     if (next.survey !== state.survey) chooseSurvey(next.survey);
+    if (next.mode && sky.mode !== next.mode) selectMode(next.mode);
     const moved = state.ra == null
       || Math.abs(deltaRA(next.position.ra, state.ra)) > 1e-4
       || Math.abs(next.position.dec - state.dec) > 1e-4
@@ -4163,7 +4719,7 @@ function wire() {
     // sky has to get past the sky: without this the frames load underneath it
     // and nothing appears to happen.
     closeGate();
-    openField({ ...next.position, label: next.name, band: next.band });
+    openField({ ...next.position, label: next.name, band: next.band, marks: next.marks, visit: next.visit });
   });
 
   let resizeTimer = null;
@@ -4198,6 +4754,8 @@ function wire() {
 /** The words the picture draws itself, in the reader's language. */
 function labelSky() {
   sky.labels.rate = (r) => t('overlay.rate', { rate: fmt(r, r < 10 ? 1 : 0) });
+  // A preset's name is the reader's language's; a looked-up name is SIMBAD's.
+  if (state.target?.key) state.target.label = t(`preset.${state.target.key}`);
 }
 
 function relabel() {
@@ -4270,9 +4828,10 @@ async function boot() {
   await loadPresets();
 
   // A shared link goes straight to its field; anyone else starts at the sky.
+  if (hash.mode) selectMode(hash.mode);
   if (hash.position) {
     closeGate();
-    openField({ ...hash.position, label: hash.name, band: hash.band });
+    openField({ ...hash.position, label: hash.name, band: hash.band, pm: hash.pm, marks: hash.marks, visit: hash.visit });
   } else {
     openGate();
     setPlateState(t('status.idle'));

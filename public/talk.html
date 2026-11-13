@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Muninn — the talk</title>
-<meta name="description" content="Muninn in seventeen slides: every feature of the tool, the evidence from real SPHEREx frames, and what it cannot find.">
+<meta name="description" content="Muninn in ten slides and an appendix: the problem, the evidence from real SPHEREx frames, what it cannot find, and what is next.">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#171721">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23171721'/%3E%3Ccircle cx='11' cy='13' r='2.5' fill='%23e6f0f7'/%3E%3Ccircle cx='21' cy='19' r='2.5' fill='%2356c1f5'/%3E%3C/svg%3E">
@@ -24,6 +24,7 @@
   </a>
   <p class="bar__event" data-t="event"></p>
   <nav class="bar__acts">
+    <a class="bar__link" id="pdf" href="talk.pdf" data-t="pdf"></a>
     <a class="bar__link" href="./" data-t="openTool"></a>
     <button type="button" class="bar__lang" id="lang"></button>
   </nav>
@@ -31,10 +32,34 @@
 
 <main class="deck" id="deck">
 
-  <!-- 1 · what it is, with the frames themselves on the slide -->
+  <!-- 1 · the problem, and who the tool is for -->
+  <section class="slide slide--problem" data-slide>
+    <div class="slide__text">
+      <h1 class="slide__claim" data-t="p.claim"></h1>
+      <p class="slide__say" data-t="p.say"></p>
+      <p class="slide__src" data-t="p.src"></p>
+    </div>
+    <figure class="exhibit">
+      <dl class="claims">
+        <div class="claims__row"><dt data-t="p.f1"></dt><dd data-t="p.f1v"></dd></div>
+        <div class="claims__row"><dt data-t="p.f2"></dt><dd data-t="p.f2v"></dd></div>
+        <div class="claims__row"><dt data-t="p.f3"></dt><dd data-t="p.f3v"></dd></div>
+      </dl>
+      <div class="audience">
+        <p class="exhibit__k" data-t="p.for"></p>
+        <ul class="audience__list">
+          <li data-t="p.for1"></li>
+          <li data-t="p.for2"></li>
+          <li data-t="p.for3"></li>
+        </ul>
+      </div>
+    </figure>
+  </section>
+
+  <!-- 2 · the frames themselves, read live -->
   <section class="slide slide--live" data-slide>
     <div class="slide__text">
-      <h1 class="slide__claim" data-t="s1.claim"></h1>
+      <h2 class="slide__claim" data-t="s1.claim"></h2>
       <p class="slide__say" data-t="s1.say"></p>
       <p class="slide__src" data-t="s1.src"></p>
     </div>
@@ -67,9 +92,218 @@
     </figure>
   </section>
 
+  <!-- 3 · a mover found, and named -->
+  <section class="slide slide--run" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="s3.claim"></h2>
+      <p class="slide__say" data-t="s3.say"></p>
+      <p class="slide__src" data-t="s3.src"></p>
+    </div>
+    <figure class="exhibit">
+      <p class="exhibit__k" data-t="s3.head"></p>
+      <ol class="snr num" id="snr"></ol>
+    </figure>
+  </section>
 
-  <!-- 2 · the way in: the real sky, turning, and a card for what is pressed -->
-  <section class="slide slide--sky" data-slide>
+  <!-- 4 · a discovery refused -->
+  <section class="slide slide--duel" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="s4.claim"></h2>
+      <p class="slide__say" data-t="s4.say"></p>
+      <p class="slide__src" data-t="s4.src"></p>
+    </div>
+    <figure class="exhibit">
+      <p class="exhibit__k" data-t="s4.head"></p>
+      <div class="verdicts">
+        <div class="verdicts__one">
+          <p class="verdicts__k" data-t="s4.before"></p>
+          <p class="verdicts__v verdicts__v--alarm num" data-n="140" data-digits="0"></p>
+          <p class="verdicts__say" data-t="s4.beforeSay"></p>
+        </div>
+        <div class="verdicts__one">
+          <p class="verdicts__k" data-t="s4.after"></p>
+          <p class="verdicts__v num" data-n="1.2" data-digits="1"></p>
+          <p class="verdicts__say" data-t="s4.afterSay"></p>
+        </div>
+      </div>
+      <dl class="flags num">
+        <div><dt>FLAGS</dt><dd>0x45</dd></div>
+        <div><dt>bit 0</dt><dd>TRANSIENT</dd></div>
+        <div><dt>bit 2</dt><dd>SUR_ERROR</dd></div>
+        <div><dt>bit 6</dt><dd>NONFUNC</dd></div>
+      </dl>
+    </figure>
+  </section>
+
+  <!-- 5 · AllWISE 2010 beside a SPHEREx visit, the star marked on both -->
+  <section class="slide slide--wise" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="wise.claim"></h2>
+      <p class="slide__say" data-t="wise.say"></p>
+      <p class="slide__src" data-t="wise.src"></p>
+    </div>
+    <figure class="exhibit exhibit--wise">
+      <div class="wipe">
+        <img class="wipe__b" src="img/talk/barnard-wise.png" alt="">
+        <img class="wipe__a" src="img/talk/barnard-spherex.png" alt="">
+        <span class="wipe__divider" aria-hidden="true"></span>
+        <!-- Where the star stood for each telescope, measured on these two pictures. -->
+        <svg class="wipe__marks" viewBox="0 0 900 676" aria-hidden="true">
+          <path class="wipe__path" d="M436.1 507.3 L446.1 372.2" pathLength="1"/>
+          <path class="wipe__head" d="M446.1 372.2 L437.1 385.6 L453.1 386.8 Z"/>
+          <circle class="wipe__at wipe__at--b" cx="433.6" cy="541.2" r="30"/>
+          <circle class="wipe__at wipe__at--a" cx="448.6" cy="338.3" r="30"/>
+          <path class="wipe__span" d="M398 541.2 h-14 v-69.8 h14"/>
+        </svg>
+        <span class="wipe__tag wipe__tag--b" style="--x: 48.18%; --y: 80.06%" data-t="wise.tagB"></span>
+        <span class="wipe__tag wipe__tag--a" style="--x: 49.85%; --y: 50.04%" data-t="wise.tagA"></span>
+        <span class="wipe__tag wipe__tag--span num" style="--x: 42.6%; --y: 74.9%" data-t="wise.f1v"></span>
+      </div>
+      <div class="wipe__legend">
+        <p><span class="slotchip slotchip--a">A</span><span data-t="wise.a"></span></p>
+        <p><span class="slotchip slotchip--b">B</span><span data-t="wise.b"></span></p>
+      </div>
+      <dl class="wise__facts">
+        <div><dt data-t="wise.f1"></dt><dd class="num" data-t="wise.f1v"></dd></div>
+        <div><dt data-t="wise.f2"></dt><dd class="num" data-t="wise.f2v"></dd></div>
+        <div><dt data-t="wise.f3"></dt><dd class="num" data-t="wise.f3v"></dd></div>
+      </dl>
+    </figure>
+  </section>
+
+  <!-- 6 · the challenge's own targets, each one marked -->
+  <section class="slide slide--targets" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="s5.claim"></h2>
+      <p class="slide__say" data-t="s5.say"></p>
+      <p class="slide__src" data-t="s5.src"></p>
+    </div>
+    <figure class="exhibit">
+      <p class="exhibit__k" data-t="s5.head"></p>
+      <ol class="targets" id="targets"></ol>
+    </figure>
+  </section>
+
+  <!-- 7 · blind within a season; the season link checks the parallax arc -->
+  <section class="slide slide--hunt" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="hunt.claim"></h2>
+      <p class="slide__say" data-t="hunt.say"></p>
+      <p class="slide__src" data-t="hunt.src"></p>
+    </div>
+    <figure class="exhibit exhibit--hunt">
+      <div class="rate">
+        <p class="exhibit__k" data-t="hunt.head"></p>
+        <svg class="rate__chart" id="rate" role="img" data-t-label="hunt.alt"></svg>
+      </div>
+      <div class="season">
+        <p class="exhibit__k" data-t="link.head"></p>
+        <ol class="link__steps">
+          <li data-t="link.s1"></li>
+          <li data-t="link.s2"></li>
+          <li data-t="link.s3"></li>
+        </ol>
+        <p class="link__test" data-t="link.test"></p>
+      </div>
+    </figure>
+  </section>
+
+  <!-- 8 · how far SPHEREx is from Planet X -->
+  <section class="slide slide--reach" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="s6.claim"></h2>
+      <p class="slide__say" data-t="s6.say"></p>
+      <p class="slide__src" data-t="s6.src"></p>
+    </div>
+    <figure class="exhibit">
+      <p class="exhibit__k" data-t="s6.head"></p>
+      <svg class="reach" id="reach" role="img" data-t-label="s6.alt"></svg>
+      <dl class="reach__rows num" id="reach-rows"></dl>
+      <p class="reach__assume" data-t="s6.assume"></p>
+    </figure>
+  </section>
+
+  <!-- 9 · every resource, credited by name -->
+  <section class="slide slide--sources" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="src.claim"></h2>
+      <p class="slide__src" data-t="src.src"></p>
+    </div>
+    <figure class="exhibit">
+      <div class="sources">
+        <div>
+          <p class="exhibit__k" data-t="src.nasa"></p>
+          <dl class="sources__list" id="sources-nasa"></dl>
+        </div>
+        <div>
+          <p class="exhibit__k" data-t="src.csa"></p>
+          <dl class="sources__list" id="sources-csa"></dl>
+        </div>
+        <div>
+          <p class="exhibit__k" data-t="src.also"></p>
+          <dl class="sources__list" id="sources-also"></dl>
+        </div>
+      </div>
+    </figure>
+  </section>
+
+  <!-- 10 · what it does, what it does not, where to find it -->
+  <section class="slide slide--close" data-slide>
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="end.claim"></h2>
+      <ul class="ends">
+        <li><span data-t="end.live"></span><a class="num" href="https://muninn.mydevbox.xyz">muninn.mydevbox.xyz</a></li>
+        <li><span data-t="end.repo"></span><a class="num" href="https://github.com/root3315/muninn">github.com/root3315/muninn</a></li>
+      </ul>
+      <div class="team">
+        <p class="exhibit__k" data-t="end.team"></p>
+        <ul class="team__who">
+          <li>Khurshiddinov Timur Khurshiddinovich <span data-t="end.owner"></span></li>
+          <li>Stepan Ionichev</li>
+          <li>Muhammadyusuf Bahtiyarov</li>
+          <li>Edem</li>
+          <li>Temur Kholjigitov</li>
+          <li>Khamidkhodjayeva Fayziya</li>
+        </ul>
+      </div>
+    </div>
+    <figure class="exhibit">
+      <div class="ledger">
+        <div>
+          <p class="exhibit__k" data-t="s7.does"></p>
+          <ul>
+            <li data-t="s7.does1"></li>
+            <li data-t="s7.does2"></li>
+            <li data-t="s7.does3"></li>
+            <li data-t="s7.does4"></li>
+          </ul>
+        </div>
+        <div>
+          <p class="exhibit__k" data-t="s7.not"></p>
+          <ul>
+            <li data-t="s7.not1"></li>
+            <li data-t="s7.not2"></li>
+            <li data-t="s7.not3"></li>
+          </ul>
+        </div>
+      </div>
+      <p class="next"><strong data-t="end.nextK"></strong> <span data-t="end.next"></span></p>
+    </figure>
+  </section>
+
+  <!-- 11 · the appendix -->
+  <section class="slide slide--divider" data-slide data-part="appendix">
+    <div class="slide__text">
+      <h2 class="slide__claim" data-t="app.claim"></h2>
+      <p class="slide__say" data-t="app.say"></p>
+    </div>
+    <figure class="exhibit">
+      <ol class="contents" id="contents"></ol>
+    </figure>
+  </section>
+
+  <!-- 12 · the way in: the real sky -->
+  <section class="slide slide--sky" data-slide data-part="appendix">
     <div class="slide__text">
       <h2 class="slide__claim" data-t="sky.claim"></h2>
       <p class="slide__say" data-t="sky.say"></p>
@@ -104,8 +338,8 @@
     </figure>
   </section>
 
-  <!-- 3 · five ways to compare one grid -->
-  <section class="slide slide--modes" data-slide>
+  <!-- 13 · five ways to compare one grid -->
+  <section class="slide slide--modes" data-slide data-part="appendix">
     <div class="slide__text">
       <h2 class="slide__claim" data-t="modes.claim"></h2>
       <p class="slide__say" data-t="modes.say"></p>
@@ -125,8 +359,8 @@
     </figure>
   </section>
 
-  <!-- 4 · six bands, a width, and the address that carries them -->
-  <section class="slide slide--bands" data-slide>
+  <!-- 14 · six bands, a width, the address -->
+  <section class="slide slide--bands" data-slide data-part="appendix">
     <div class="slide__text">
       <h2 class="slide__claim" data-t="bands.claim"></h2>
       <p class="slide__say" data-t="bands.say"></p>
@@ -146,8 +380,8 @@
     </figure>
   </section>
 
-  <!-- 5 · how little of the archive that took -->
-  <section class="slide slide--bytes" data-slide>
+  <!-- 15 · how little of the archive that took -->
+  <section class="slide slide--bytes" data-slide data-part="appendix">
     <div class="slide__text">
       <h2 class="slide__claim" data-t="s2.claim"></h2>
       <p class="slide__say" data-t="s2.say"></p>
@@ -169,53 +403,8 @@
     </figure>
   </section>
 
-  <!-- 6 · a mover found, and named -->
-  <section class="slide slide--run" data-slide>
-    <div class="slide__text">
-      <h2 class="slide__claim" data-t="s3.claim"></h2>
-      <p class="slide__say" data-t="s3.say"></p>
-      <p class="slide__src" data-t="s3.src"></p>
-    </div>
-    <figure class="exhibit">
-      <p class="exhibit__k" data-t="s3.head"></p>
-      <ol class="snr num" id="snr"></ol>
-    </figure>
-  </section>
-
-  <!-- 7 · a discovery refused -->
-  <section class="slide slide--duel" data-slide>
-    <div class="slide__text">
-      <h2 class="slide__claim" data-t="s4.claim"></h2>
-      <p class="slide__say" data-t="s4.say"></p>
-      <p class="slide__src" data-t="s4.src"></p>
-    </div>
-    <figure class="exhibit">
-      <p class="exhibit__k" data-t="s4.head"></p>
-      <div class="verdicts">
-        <div class="verdicts__one">
-          <p class="verdicts__k" data-t="s4.before"></p>
-          <p class="verdicts__v verdicts__v--alarm num" data-n="140" data-digits="0"></p>
-          <p class="verdicts__say" data-t="s4.beforeSay"></p>
-        </div>
-        <div class="verdicts__one">
-          <p class="verdicts__k" data-t="s4.after"></p>
-          <p class="verdicts__v num" data-n="1.2" data-digits="1"></p>
-          <p class="verdicts__say" data-t="s4.afterSay"></p>
-        </div>
-      </div>
-      <dl class="flags num">
-        <div><dt>FLAGS</dt><dd>0x45</dd></div>
-        <div><dt>bit 0</dt><dd>TRANSIENT</dd></div>
-        <div><dt>bit 2</dt><dd>SUR_ERROR</dd></div>
-        <div><dt>bit 6</dt><dd>NONFUNC</dd></div>
-      </dl>
-      <p class="exhibit__note" data-t="s4.note"></p>
-    </figure>
-  </section>
-
-
-  <!-- 8 · a mark, measured in every visit, and its spectrum -->
-  <section class="slide slide--mark" data-slide>
+  <!-- 16 · a mark, measured in every visit, and its spectrum -->
+  <section class="slide slide--mark" data-slide data-part="appendix">
     <div class="slide__text">
       <h2 class="slide__claim" data-t="mark.claim"></h2>
       <p class="slide__say" data-t="mark.say"></p>
@@ -229,8 +418,8 @@
     </figure>
   </section>
 
-  <!-- 9 · other missions' catalogues, over the frame -->
-  <section class="slide slide--overlay" data-slide>
+  <!-- 17 · other missions' catalogues, over the frame -->
+  <section class="slide slide--overlay" data-slide data-part="appendix">
     <div class="slide__text">
       <h2 class="slide__claim" data-t="ov.claim"></h2>
       <p class="slide__say" data-t="ov.say"></p>
@@ -252,68 +441,8 @@
     </figure>
   </section>
 
-  <!-- 10 · AllWISE 2010 beside a SPHEREx visit, under the wipe -->
-  <section class="slide slide--wise" data-slide>
-    <div class="slide__text">
-      <h2 class="slide__claim" data-t="wise.claim"></h2>
-      <p class="slide__say" data-t="wise.say"></p>
-      <p class="slide__src" data-t="wise.src"></p>
-    </div>
-    <figure class="exhibit exhibit--wise">
-      <div class="wipe">
-        <img class="wipe__b" src="img/talk/barnard-wise.png" alt="">
-        <img class="wipe__a" src="img/talk/barnard-spherex.png" alt="">
-        <span class="wipe__divider" aria-hidden="true"></span>
-      </div>
-      <div class="wipe__legend">
-        <p><span class="slotchip slotchip--a">A</span><span data-t="wise.a"></span></p>
-        <p><span class="slotchip slotchip--b">B</span><span data-t="wise.b"></span></p>
-      </div>
-      <dl class="wise__facts">
-        <div><dt data-t="wise.f1"></dt><dd class="num" data-t="wise.f1v"></dd></div>
-        <div><dt data-t="wise.f2"></dt><dd class="num" data-t="wise.f2v"></dd></div>
-        <div><dt data-t="wise.f3"></dt><dd class="num" data-t="wise.f3v"></dd></div>
-      </dl>
-    </figure>
-  </section>
-
-  <!-- 11 · Hunter X: a distance read out of slowness -->
-  <section class="slide slide--hunt" data-slide>
-    <div class="slide__text">
-      <h2 class="slide__claim" data-t="hunt.claim"></h2>
-      <p class="slide__say" data-t="hunt.say"></p>
-      <p class="slide__src" data-t="hunt.src"></p>
-    </div>
-    <figure class="exhibit exhibit--hunt">
-      <div class="rate">
-        <p class="exhibit__k" data-t="hunt.head"></p>
-        <svg class="rate__chart" id="rate" role="img" data-t-label="hunt.alt"></svg>
-        <ol class="guards">
-          <li data-t="hunt.g1"></li>
-          <li data-t="hunt.g2"></li>
-          <li data-t="hunt.g3"></li>
-        </ol>
-      </div>
-      <div class="shot shot--panel"><img data-src-lang="img/talk/hunt.{lang}.png" alt=""></div>
-    </figure>
-  </section>
-
-  <!-- 12 · the challenge's own targets -->
-  <section class="slide slide--targets" data-slide>
-    <div class="slide__text">
-      <h2 class="slide__claim" data-t="s5.claim"></h2>
-      <p class="slide__say" data-t="s5.say"></p>
-      <p class="slide__src" data-t="s5.src"></p>
-    </div>
-    <figure class="exhibit">
-      <p class="exhibit__k" data-t="s5.head"></p>
-      <ol class="targets" id="targets"></ol>
-    </figure>
-  </section>
-
-
-  <!-- 13 · which other telescopes looked here -->
-  <section class="slide slide--archives" data-slide>
+  <!-- 18 · which other telescopes looked here -->
+  <section class="slide slide--archives" data-slide data-part="appendix">
     <div class="slide__text">
       <h2 class="slide__claim" data-t="arc.claim"></h2>
       <p class="slide__say" data-t="arc.say"></p>
@@ -322,48 +451,11 @@
     <figure class="exhibit">
       <p class="exhibit__k" data-t="arc.head"></p>
       <ol class="archives" id="archives"></ol>
-      <p class="exhibit__note" data-t="arc.note"></p>
     </figure>
   </section>
 
-  <!-- 14 · how far SPHEREx is from Planet Nine -->
-  <section class="slide slide--reach" data-slide>
-    <div class="slide__text">
-      <h2 class="slide__claim" data-t="s6.claim"></h2>
-      <p class="slide__say" data-t="s6.say"></p>
-      <p class="slide__src" data-t="s6.src"></p>
-    </div>
-    <figure class="exhibit">
-      <p class="exhibit__k" data-t="s6.head"></p>
-      <svg class="reach" id="reach" role="img" data-t-label="s6.alt"></svg>
-      <dl class="reach__rows num" id="reach-rows"></dl>
-    </figure>
-  </section>
-
-  <!-- 15 · where every pixel and every name comes from -->
-  <section class="slide slide--sources" data-slide>
-    <div class="slide__text">
-      <h2 class="slide__claim" data-t="src.claim"></h2>
-      <p class="slide__say" data-t="src.say"></p>
-      <p class="slide__src" data-t="src.src"></p>
-    </div>
-    <figure class="exhibit">
-      <div class="sources">
-        <div>
-          <p class="exhibit__k" data-t="src.nasa"></p>
-          <dl class="sources__list" id="sources-nasa"></dl>
-        </div>
-        <div>
-          <p class="exhibit__k" data-t="src.partners"></p>
-          <dl class="sources__list" id="sources-partners"></dl>
-        </div>
-      </div>
-    </figure>
-  </section>
-
-
-  <!-- 16 · a new release is one line -->
-  <section class="slide slide--release" data-slide>
+  <!-- 19 · a new release is one line -->
+  <section class="slide slide--release" data-slide data-part="appendix">
     <div class="slide__text">
       <h2 class="slide__claim" data-t="rel.claim"></h2>
       <p class="slide__say" data-t="rel.say"></p>
@@ -378,38 +470,6 @@
         <li><span class="num">npm run bake</span><span data-t="rel.step2"></span></li>
         <li><span class="num">npm test</span><span data-t="rel.step3"></span></li>
       </ol>
-    </figure>
-  </section>
-
-  <!-- 17 · what is left, said plainly -->
-  <section class="slide slide--ledger" data-slide>
-    <div class="slide__text">
-      <h2 class="slide__claim" data-t="s7.claim"></h2>
-      <p class="slide__say" data-t="s7.say"></p>
-      <p class="slide__src"><a href="./" data-t="s7.link"></a></p>
-    </div>
-    <figure class="exhibit">
-      <div class="ledger">
-        <div>
-          <p class="exhibit__k" data-t="s7.does"></p>
-          <ul>
-            <li data-t="s7.does1"></li>
-            <li data-t="s7.does2"></li>
-            <li data-t="s7.does3"></li>
-            <li data-t="s7.does4"></li>
-            <li data-t="s7.does5"></li>
-          </ul>
-        </div>
-        <div>
-          <p class="exhibit__k" data-t="s7.not"></p>
-          <ul>
-            <li data-t="s7.not1"></li>
-            <li data-t="s7.not2"></li>
-            <li data-t="s7.not3"></li>
-          </ul>
-        </div>
-      </div>
-      <p class="exhibit__note" data-t="s7.credit"></p>
     </figure>
   </section>
 

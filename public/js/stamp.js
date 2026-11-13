@@ -77,6 +77,16 @@ const MASK_BITS = {
   STREAK: 25, SNOWBALL: 27,
 };
 const FLAG_MASK = Object.values(MASK_BITS).reduce((m, bit) => m | (1 << bit), 0);
+
+/**
+ * OVERFLOW is left in the picture but not forgotten: a pixel whose ramp ran
+ * past the detector's well holds no brightness and no position worth
+ * quoting. The measurement is told through a per-sample quality plane, cut
+ * on the same grid as the pixels and taken from the nearest detector pixel
+ * (a flag is a statement about one pixel; averaging it means nothing).
+ */
+const OVERFLOW_BIT = 1;
+export const QUALITY = { OVERFLOW: 1, HOLE: 2 };
 const FLAGS_HEADER_PROBE = 5 * 2880 * 4;
 
 /**
@@ -225,6 +235,7 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15 } = {}) 
   // "found".
   const read = await flagsRead;
   const flagged = read ? maskFlagged(plane, read) : null;
+  const flagRows = read?.values ?? null;
 
   // The sky noise of the detector's own pixels, over the columns the field
   // covers. The depth is a statement about detector pixels (6.15″, the pixel
@@ -244,6 +255,8 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15 } = {}) 
   const gw = grid.width;
   const gh = grid.height;
   const out = new Float32Array(gw * gh).fill(NaN);
+  const quality = new Uint8Array(gw * gh);
+  let overflow = 0;
   let inside = 0;
   for (let j = 0; j < gh; j++) {
     for (let i = 0; i < gw; i++) {
@@ -260,6 +273,10 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15 } = {}) 
       const tx = fx - ix;
       const ty = fy - iy;
       const base = iy * nx + ix;
+      const nearest = base + (tx >= 0.5 ? 1 : 0) + (ty >= 0.5 ? nx : 0);
+      let q = plane[nearest] === plane[nearest] ? 0 : QUALITY.HOLE;
+      if (flagRows && flagRows[nearest] & (1 << OVERFLOW_BIT)) { q |= QUALITY.OVERFLOW; overflow++; }
+      quality[j * gw + i] = q;
       const a = plane[base];
       const b = plane[base + 1];
       const c = plane[base + nx];
@@ -285,6 +302,9 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15 } = {}) 
 
   return {
     data: out,
+    // Per sample: QUALITY.OVERFLOW where the nearest detector pixel saturated,
+    // QUALITY.HOLE where it holds no value (masked, or blanked by the pipeline).
+    quality,
     width: gw,
     height: gh,
     coverage,
@@ -300,6 +320,8 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15 } = {}) 
       pixelScale: wcs.scale * 3600,
       bytesRead: raw.byteLength + (flagged?.bytes ?? 0),
       flaggedPixels: flagged ? flagged.masked : null,
+      // Grid samples on saturated detector pixels; null when FLAGS was not read.
+      overflowSamples: flagRows ? overflow : null,
       detectorSigma,
     },
   };
