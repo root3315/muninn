@@ -818,3 +818,7 @@ a { color: inherit; }
   .bar, .foot { display: none; }
   .slide { position: static; visibility: visible; opacity: 1; break-after: page; min-block-size: 90vh; }
 }
+
+/* Where SPHEREx sees Planet X: a thick tick under the season's floor. */
+.rate__quad { stroke: var(--color-counter); stroke-width: 4; stroke-linecap: round; }
+.rate__quadk { fill: var(--color-counter); font-size: 0.75rem; }

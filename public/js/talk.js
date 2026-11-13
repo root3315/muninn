@@ -139,18 +139,19 @@ const WORDS = {
     'wise.f1v': '56″',
     'wise.f2': 'from Gaia carried back to 2010',
     'wise.f2v': '2.5″',
-    'wise.f3': 'Barnard’s Star moves',
+    'wise.f3': 'Barnard’s Star’s proper motion',
     'wise.f3v': '10.3″ a year',
     'hunt.claim': 'Hunter X reads a distance out of slowness.',
     'hunt.say': 'When the last visit is in, it measures the twelve places that stood out most in every visit, keeps what moves and sorts it by slowness: seen from the Earth, slow means far. Known asteroids are named at each exposure by SkyBoT and JPL.',
-    'hunt.src': 'The curve is hunt.js, computed on this slide: the fastest a body at that distance moves. Planet X at 400–800 AU would crawl at 0.18–0.35″ an hour; over 369 days the astrometry reaches 0.002″ an hour.',
+    'hunt.src': 'The curve is hunt.js, computed on this slide: the fastest a body at that distance can move, at opposition. Planet X at 400–800 AU tops out at 0.18–0.35″ an hour, and SPHEREx sees it near quadrature, at about 0.006–0.02″. Within one season Hunter X needs three pixels in eleven days, 0.07″ an hour: at those distances the motion test is blind, and the page says so.',
     'hunt.head': 'Apparent rate against distance from the Sun',
     'hunt.alt': 'Apparent motion falls from arcseconds an hour in the asteroid belt to a third of an arcsecond an hour at 400 AU.',
     'hunt.axisX': 'distance, AU',
     'hunt.axisY': '″ per hour',
     'hunt.px': 'Planet X',
     'hunt.perHour': '″/h',
-    'hunt.floor': 'astrometry over 369 d',
+    'hunt.floor': 'three pixels in one season',
+    'hunt.quad': 'near quadrature, where SPHEREx looks',
     'hunt.g1': 'The motion has to beat three times the scatter of the fit, or the rate is zero.',
     'hunt.g2': 'Four detections at least: two always fit a line.',
     'hunt.g3': 'A candidate is ranked only past three detector pixels, 18.45″.',
@@ -282,18 +283,19 @@ const WORDS = {
     'wise.f1v': '56″',
     'wise.f2': 'от Gaia, перенесённой назад на 2010 год',
     'wise.f2v': '2,5″',
-    'wise.f3': 'Звезда Барнарда смещается на',
+    'wise.f3': 'собственное движение звезды Барнарда',
     'wise.f3v': '10,3″ в год',
     'hunt.claim': 'Hunter X узнаёт расстояние по медлительности.',
     'hunt.say': 'Когда пришёл последний заход, он измеряет двенадцать самых заметных мест во всех заходах, оставляет движущееся и сортирует его по медлительности: с Земли медленное значит далёкое. Известные астероиды на момент каждой экспозиции называют SkyBoT и JPL.',
-    'hunt.src': 'Кривая — это hunt.js, посчитанный прямо на слайде: самое быстрое видимое движение тела на таком расстоянии. Планета X на 400–800 а.е. ползла бы на 0,18–0,35″ в час; за 369 дней астрометрия достаёт до 0,002″ в час.',
+    'hunt.src': 'Кривая — это hunt.js, посчитанный прямо на слайде: самое быстрое движение тела на таком расстоянии, у противостояния. Планета X на 400–800 а.е. движется не быстрее 0,18–0,35″ в час, а SPHEREx видит её около квадратуры, где это около 0,006–0,02″. Внутри одного сезона Hunter X нужны три пикселя за одиннадцать дней, 0,07″ в час: на таких расстояниях проверка движения слепа, и страница так и говорит.',
     'hunt.head': 'Видимая скорость против расстояния от Солнца',
     'hunt.alt': 'Видимое движение падает с угловых секунд в час в поясе астероидов до трети секунды в час на 400 а.е.',
     'hunt.axisX': 'расстояние, а.е.',
     'hunt.axisY': '″ в час',
     'hunt.px': 'Планета X',
     'hunt.perHour': '″/ч',
-    'hunt.floor': 'астрометрия за 369 дн.',
+    'hunt.floor': 'три пикселя за один сезон',
+    'hunt.quad': 'у квадратуры, куда смотрит SPHEREx',
     'hunt.g1': 'Сдвиг должен втрое превышать разброс подгонки, иначе скорость равна нулю.',
     'hunt.g2': 'Не меньше четырёх обнаружений: через две точки прямая проходит всегда.',
     'hunt.g3': 'Кандидат попадает в список, только сдвинувшись больше чем на три пикселя детектора, 18,45″.',
@@ -1326,8 +1328,8 @@ function renderAsks() {
 
 const RATE_AXIS = { au: [1.5, 2000], rate: [0.001, 100] };
 const PLANET_X_AU = [400, 800];
-/** README: over a 369-day baseline the astrometry reaches 0.002″ an hour. */
-const ASTROMETRY_FLOOR = 0.002;
+/** README: Hunter X's three-pixel floor (18.45″) inside one season of about eleven days, 264 h. */
+const ASTROMETRY_FLOOR = 0.07;
 
 function renderRate() {
   const NS = 'http://www.w3.org/2000/svg';
@@ -1374,6 +1376,12 @@ function renderRate() {
   for (const au of PLANET_X_AU) {
     parts.push(el('circle', { class: 'rate__pin', cx: lx(au), cy: ly(rateAtAU(au)), r: 4 }));
   }
+  // Where SPHEREx actually sees it: near quadrature, a twentieth of the rate
+  // at opposition and under the season's floor (README, Hunter X).
+  const q = { lo: 0.006, hi: 0.02 };
+  const qx = (lx(near) + lx(far)) / 2;
+  parts.push(el('line', { class: 'rate__quad', x1: qx, x2: qx, y1: ly(q.lo), y2: ly(q.hi) }));
+  parts.push(el('text', { class: 'rate__quadk', x: lx(near) - 8, y: ly(Math.sqrt(q.lo * q.hi)) + 4, 'text-anchor': 'end' }, t('hunt.quad')));
   const mid = rateAtAU(far);
   parts.push(el('text', { class: 'rate__val', x: lx(far) + 8, y: ly(mid) - 10 },
     `${num(rateAtAU(far), 2)}–${num(rateAtAU(near), 2)}${t('hunt.perHour')}`));
