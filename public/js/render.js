@@ -65,10 +65,48 @@ export function sortedFinite(data) {
   return valid;
 }
 
+/** The value at percentile `p` of values already sorted. */
+const percentile = (sorted, p) => sorted[Math.min(sorted.length - 1, Math.max(0, Math.round((p / 100) * (sorted.length - 1))))];
+
 /** The cut, read off values already sorted by sortedFinite. */
-export function limitsFromSorted(valid, { loPercent = 5, hiPercent = 99.5, floorSigma = 1 } = {}) {
-  if (valid.length < 8) return { lo: 0, hi: 1, valid: valid.length };
-  const at = (p) => valid[Math.min(valid.length - 1, Math.max(0, Math.round((p / 100) * (valid.length - 1))))];
+export function limitsFromSorted(valid, opts = {}) {
+  return limitsFrom((p) => percentile(valid, p), valid.length, opts);
+}
+
+/** The cut, read off a quantileTable. */
+export function limitsFromTable(table, opts = {}) {
+  return limitsFrom((p) => table.at(p), table.n, opts);
+}
+
+/**
+ * The few percentiles a cut is ever read from, kept in place of the sorted
+ * pixels: the median and the noise points exactly, the white-point slider's
+ * range (95 to 100) every 0.005, the rest every 0.1. Sixteen kilobytes a
+ * visit, where the sorted copy was megabytes and so was thrown away — and
+ * every step of the slider then sorted every visit again.
+ */
+const FINE_FROM = 95;
+const FINE_STEP = 0.005;
+const EXACT = [5, 15.87, 50];
+
+export function quantileTable(sorted) {
+  const n = sorted.length;
+  const pick = (p) => (n ? percentile(sorted, p) : NaN);
+  const coarse = Float64Array.from({ length: 1001 }, (_, i) => pick(i / 10));
+  const fine = Float64Array.from({ length: Math.round((100 - FINE_FROM) / FINE_STEP) + 1 }, (_, i) => pick(FINE_FROM + i * FINE_STEP));
+  const exact = new Map(EXACT.map((p) => [p, pick(p)]));
+  return {
+    n,
+    at(p) {
+      if (exact.has(p)) return exact.get(p);
+      if (p >= FINE_FROM) return fine[Math.min(fine.length - 1, Math.round((p - FINE_FROM) / FINE_STEP))];
+      return coarse[Math.max(0, Math.round(p * 10))];
+    },
+  };
+}
+
+function limitsFrom(at, n, { loPercent = 5, hiPercent = 99.5, floorSigma = 1 } = {}) {
+  if (n < 8) return { lo: 0, hi: 1, valid: n };
   const median = at(50);
   const sigma = Math.max(median - at(15.87), 0);
   let lo = median + floorSigma * sigma;
@@ -76,7 +114,7 @@ export function limitsFromSorted(valid, { loPercent = 5, hiPercent = 99.5, floor
   if (!(lo > floor)) lo = floor;
   let hi = Math.max(at(hiPercent), lo + 4 * sigma);
   if (!(hi > lo)) hi = lo + 1e-6;
-  return { lo, hi, sigma, valid: valid.length, median };
+  return { lo, hi, sigma, valid: n, median };
 }
 
 /**
@@ -126,68 +164,94 @@ export function rampFromToken(el, token) {
 }
 
 /**
- * Paint one frame into an ImageData.
- * `blank` is the colour used where the detector had no data (NaN) — the frame
- * edges after reprojection, and masked pixels.
- */
-/**
  * For the eye only: the hole the pipeline leaves in a saturated star's core,
  * filled from its rim. A bright star came out as a white disc with a black
- * square in it, which reads as a broken picture. Only holes walled in by
- * pixels at or above the top of the stretch are filled, so the blank beyond
- * the frame's edge, which meets sky, stays blank; the measured data are not
- * touched.
+ * square in it, which reads as a broken picture. A blank region is filled
+ * when at least half its rim is at or above the top of the stretch and it
+ * does not reach the frame's edge, so the blank beyond the detector, which
+ * meets sky, stays blank; the measured data are not touched.
+ *
+ * One pass over each region, where a pixel-at-a-time spread had taken up to
+ * sixty-four passes over the whole frame on every repaint, and had crept out
+ * along the frame's edge into the blank beyond it.
  */
-export function fillCores(data, width, ceiling, passes = 64) {
-  let cur = data;
-  for (let pass = 0; pass < passes; pass++) {
-    let next = null;
-    for (let i = 0; i < cur.length; i++) {
-      if (cur[i] === cur[i]) continue;
-      const x = i % width;
-      let best = -Infinity;
-      for (const j of [x > 0 ? i - 1 : -1, x < width - 1 ? i + 1 : -1, i - width, i + width]) {
-        const v = j >= 0 && j < cur.length ? cur[j] : NaN;
-        if (v === v && v >= ceiling && v > best) best = v;
+export function fillCores(data, width, ceiling) {
+  if (!(ceiling === ceiling)) return data;
+  const n = data.length;
+  const height = Math.floor(n / width);
+  const seen = new Uint8Array(n);
+  const queue = new Int32Array(n);
+  let out = null;
+
+  for (let s = 0; s < n; s++) {
+    if (seen[s] || data[s] === data[s]) continue;
+    let head = 0;
+    let tail = 0;
+    let rim = 0;
+    let bright = 0;
+    let top = -Infinity;
+    let edge = false;
+    seen[s] = 1;
+    queue[tail++] = s;
+    while (head < tail) {
+      const k = queue[head++];
+      const x = k % width;
+      const y = (k - x) / width;
+      if (x === 0 || y === 0 || x === width - 1 || y === height - 1) edge = true;
+      for (let d = 0; d < 4; d++) {
+        let j;
+        if (d === 0) { if (x === 0) continue; j = k - 1; }
+        else if (d === 1) { if (x === width - 1) continue; j = k + 1; }
+        else if (d === 2) { if (y === 0) continue; j = k - width; }
+        else { if (y === height - 1) continue; j = k + width; }
+        const v = data[j];
+        if (v === v) {
+          rim++;
+          if (v >= ceiling) { bright++; if (v > top) top = v; }
+        } else if (!seen[j]) {
+          seen[j] = 1;
+          queue[tail++] = j;
+        }
       }
-      if (best === -Infinity) continue;
-      next ??= Float32Array.from(cur);
-      next[i] = best;
     }
-    if (!next) break;
-    cur = next;
+    if (edge || bright * 2 < rim) continue;
+    out ??= Float32Array.from(data);
+    for (let i = 0; i < tail; i++) out[queue[i]] = top;
   }
-  // The seams between a whitened overflow and a filled hole: pixels the
-  // pipeline left low but did not flag, dark threads through a white core.
-  // Anything the top of the stretch walls in completely, so that it cannot be
-  // reached from the frame's edge without crossing it, is part of the core.
-  const height = Math.floor(cur.length / width);
-  const open = new Uint8Array(cur.length);
-  const queue = [];
-  const below = (k) => !(cur[k] >= ceiling);
-  for (let x = 0; x < width; x++) for (const y of [0, height - 1]) {
-    const k = y * width + x;
-    if (below(k) && !open[k]) { open[k] = 1; queue.push(k); }
-  }
-  for (let y = 0; y < height; y++) for (const x of [0, width - 1]) {
-    const k = y * width + x;
-    if (below(k) && !open[k]) { open[k] = 1; queue.push(k); }
-  }
-  while (queue.length) {
-    const k = queue.pop();
+  return fillWalled(out ?? data, width, height, ceiling);
+}
+
+/**
+ * The seams between a whitened overflow and a filled hole: pixels the
+ * pipeline left low but did not flag, dark threads through a white core.
+ * Anything the top of the stretch walls in completely, so that it cannot be
+ * reached from the frame's edge without crossing it, is part of the core.
+ */
+function fillWalled(cur, width, height, ceiling) {
+  const n = cur.length;
+  const open = new Uint8Array(n);
+  const queue = new Int32Array(n);
+  let tail = 0;
+  const seed = (k) => {
+    if (!open[k] && !(cur[k] >= ceiling)) { open[k] = 1; queue[tail++] = k; }
+  };
+  for (let x = 0; x < width; x++) { seed(x); seed((height - 1) * width + x); }
+  for (let y = 0; y < height; y++) { seed(y * width); seed(y * width + width - 1); }
+  for (let head = 0; head < tail; head++) {
+    const k = queue[head];
     const x = k % width;
-    for (const j of [x > 0 ? k - 1 : -1, x < width - 1 ? k + 1 : -1, k - width, k + width]) {
-      if (j >= 0 && j < cur.length && !open[j] && below(j)) { open[j] = 1; queue.push(j); }
-    }
+    if (x > 0) seed(k - 1);
+    if (x < width - 1) seed(k + 1);
+    if (k >= width) seed(k - width);
+    if (k + width < n) seed(k + width);
   }
   let walled = null;
-  for (let k = 0; k < cur.length; k++) {
+  for (let k = 0; k < n; k++) {
     if (open[k] || cur[k] >= ceiling) continue;
     walled ??= Float32Array.from(cur);
     walled[k] = ceiling;
   }
-  if (walled) cur = walled;
-  return cur;
+  return walled ?? cur;
 }
 
 /**
@@ -210,6 +274,11 @@ export function whitenOverflow(data, quality, ceiling) {
   return out ?? data;
 }
 
+/**
+ * Paint one frame into an ImageData.
+ * `blank` is the colour used where the detector had no data (NaN) — the frame
+ * edges after reprojection, and masked pixels.
+ */
 export function paint(target, data, lut, {
   lo, hi, stretch = 'asinh', softening, blank = [0, 0, 0], blankAlpha = 0, quality = null,
 } = {}) {

@@ -3080,12 +3080,8 @@ function reopenField() {
 function addVisitInPlace(frame, stamp) {
   const a = sky.visits[sky.a];
   const b = sky.visits[sky.b];
-  const entry = sky.addVisit(frame, stamp);
+  sky.addVisit(frame, stamp);
   if (a && b && a !== b) sky.setAB(sky.visits.indexOf(a), sky.visits.indexOf(b));
-  // The sorted copy of the pixels is only needed to cut them again at a new
-  // clip; the cut made on arrival is kept. Sixty visits of it was a third of
-  // the page's memory.
-  entry.sorted = undefined;
 }
 
 /**
@@ -5178,6 +5174,8 @@ async function boot() {
     onItem: (hit, x, y) => showTip(hit, x, y),
     // The Gaia model has moved to another visit's date; its caption names it.
     onReferenceMoved: () => { $('mode-hint').textContent = modeHint(sky.mode); },
+    // Every visit has the new cut: the run's thumbnails show it too.
+    onRepainted: () => { if (!$('run').hidden) drawAxis(); },
   });
   labelSky();
 
