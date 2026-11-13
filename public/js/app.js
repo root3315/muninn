@@ -119,26 +119,55 @@ async function pool(items, limit, worker) {
  *
  * The resampling is a third of a second of arithmetic per visit; on this thread
  * it stalled the blink and the pointer for as long as a field took to load. The
- * workers are kept and reused, one per fetch slot. Where a worker cannot start —
- * an old browser, a strict policy — the same function runs here instead.
+ * workers are kept and reused, one per fetch slot; a read that finds them all
+ * busy — a season link or a stack read beside the background fill — waits its
+ * turn for one, rather than doing the same work on this thread. Only where a
+ * worker cannot start at all — an old browser, a strict policy — does the
+ * same function run here instead.
  */
-const stampWorkers = { idle: [], count: 0, broken: false, seq: 0 };
+const stampWorkers = { idle: [], waiting: [], count: 0, broken: false, seq: 0 };
 
-function takeWorker() {
-  if (stampWorkers.idle.length) return stampWorkers.idle.pop();
-  if (stampWorkers.broken || stampWorkers.count >= FETCH_CONCURRENCY) return null;
-  try {
-    const w = new Worker(new URL('./stamp-worker.js', import.meta.url), { type: 'module' });
-    stampWorkers.count++;
-    return w;
-  } catch {
-    stampWorkers.broken = true;
-    return null;
+/** A worker for one read, as soon as one is free; null where workers cannot run. */
+function takeWorker(signal) {
+  if (stampWorkers.idle.length) return Promise.resolve(stampWorkers.idle.pop());
+  if (stampWorkers.broken) return Promise.resolve(null);
+  if (stampWorkers.count < FETCH_CONCURRENCY) {
+    try {
+      const w = new Worker(new URL('./stamp-worker.js', import.meta.url), { type: 'module' });
+      stampWorkers.count++;
+      return Promise.resolve(w);
+    } catch {
+      workersBroken();
+      return Promise.resolve(null);
+    }
   }
+  return new Promise((resolve, reject) => {
+    const aborted = () => {
+      stampWorkers.waiting = stampWorkers.waiting.filter((x) => x !== waiter);
+      reject(new DOMException('The read was cancelled', 'AbortError'));
+    };
+    const waiter = { give: (w) => { signal?.removeEventListener('abort', aborted); resolve(w); } };
+    if (signal?.aborted) { aborted(); return; }
+    signal?.addEventListener('abort', aborted, { once: true });
+    stampWorkers.waiting.push(waiter);
+  });
 }
 
-function readStamp(url, grid, { signal } = {}) {
-  const worker = takeWorker();
+/** A worker done with its read goes to the next read waiting, or back to the idle ones. */
+function releaseWorker(w) {
+  const next = stampWorkers.waiting.shift();
+  if (next) next.give(w);
+  else stampWorkers.idle.push(w);
+}
+
+/** Workers cannot run here: every read waiting for one does its work on this thread. */
+function workersBroken() {
+  stampWorkers.broken = true;
+  for (const waiter of stampWorkers.waiting.splice(0)) waiter.give(null);
+}
+
+async function readStamp(url, grid, { signal } = {}) {
+  const worker = await takeWorker(signal);
   if (!worker) return loadStamp(url, grid, { signal });
   const id = ++stampWorkers.seq;
   return new Promise((resolve, reject) => {
@@ -150,7 +179,7 @@ function readStamp(url, grid, { signal } = {}) {
     const onMessage = ({ data }) => {
       if (data.id !== id) return;
       settle();
-      stampWorkers.idle.push(worker);
+      releaseWorker(worker);
       if (data.error) {
         const err = new Error(data.error);
         if (data.error === 'AbortError') err.name = 'AbortError';
@@ -166,7 +195,7 @@ function readStamp(url, grid, { signal } = {}) {
       settle();
       worker.terminate();
       stampWorkers.count--;
-      stampWorkers.broken = true;
+      workersBroken();
       loadStamp(url, grid, { signal }).then(resolve, reject);
     };
     const onAbort = () => worker.postMessage({ type: 'abort', id });
