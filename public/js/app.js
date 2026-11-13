@@ -39,7 +39,7 @@ import { fieldArchives, CADC_SEARCH } from './archives.js';
 import {
   SIMBAD_PAGE, VIZIER_PAGE,
   searchFrames, NoRelayError, UpstreamError, groupVisits, bandsPresent, bandRange, parseCoordinates,
-  resolveName, formatRA, formatDec, knownBodies, identifySource, fieldObjects, toS3, surveySources,
+  resolveName, formatRA, formatDec, knownBodies, identifySource, arcsecBetween, fieldObjects, toS3, surveySources,
 } from './catalog.js';
 import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP, propagate, epochOfMjd } from './overlay.js';
 import { spread, nextVisits, VISITS_PER_BATCH } from './visits.js';
@@ -81,6 +81,8 @@ const state = {
   allVisits: [],
   /** A visit index from a link, held until that visit has landed. */
   wantVisit: null,
+  /** A held visit's date, carried to another band or size of the same field. */
+  wantMjd: null,
   readingSince: 0, huntAgain: false,
   /** Visits being read in the background, and how many the field is meant to reach. */
   filling: false, visitGoal: 0,
@@ -619,9 +621,10 @@ async function runHunt() {
   const hits = standouts(state.sectors, { minScore: 4, limit: 12 });
   const seen = [];
   const cos = Math.cos((state.dec * Math.PI) / 180);
-  // The visits the sector scores were taken over. More can land while the
-  // search runs, and they shift the indexes the scores are in.
-  const visits = sky.visits.slice();
+  // The visits the sector scores were taken over. More land while visits
+  // fill in, and they shift the indexes the scores are in; a search run again
+  // later must read the same list the scores came from.
+  const visits = state.sectors?.list ?? sky.visits.slice();
 
   for (const hit of hits) {
     const visit = visits[hit.visit];
@@ -1094,6 +1097,9 @@ function pickCell(sector, visit) {
 function measureSectors(sigmas, { final = true } = {}) {
   const visits = sky?.visits ?? [];
   state.sectors = visits.length >= 3 ? scoreSectors(visits, { sigmas }) : null;
+  // The scores name visits by index, and visits keep landing and re-sorting:
+  // the list they were taken over goes with them.
+  if (state.sectors) state.sectors.list = visits.slice();
   // A search already made stays on screen while more visits land; it is
   // replaced by the next one, not blanked by every arrival.
   if (!state.sectors) state.candidates = null;
@@ -1674,11 +1680,20 @@ function reportKnownObjects() {
   renderFacts();
 }
 
-/** Ask SkyBoT about one visit, once; a failure is remembered, not retried in a loop. */
+/**
+ * Ask SkyBoT about one visit, once; a failure is remembered, not retried in a
+ * loop. The blink and the background fill both ask every few seconds, and a
+ * failed visit was asked again each time while SkyBoT was down: now it waits
+ * a minute before it is asked again.
+ */
+const SKYBOT_RETRY_MS = 60_000;
+
 async function askSkybot(v, signal) {
   const id = v.frame.obsId;
   if (sky.knownObjects.has(id) || skybot.asking.has(id)) return;
   const asked = skybot;
+  asked.failedAt ??= new Map();
+  if (asked.failed.has(id) && Date.now() - (asked.failedAt.get(id) ?? 0) < SKYBOT_RETRY_MS) return;
   asked.asking.add(id);
   asked.failed.delete(id);
   try {
@@ -1694,7 +1709,7 @@ async function askSkybot(v, signal) {
     }, { signal });
     if (!signal?.aborted && asked === skybot) sky.setKnownObjects(id, objects);
   } catch {
-    if (!signal?.aborted) asked.failed.add(id);
+    if (!signal?.aborted) { asked.failed.add(id); asked.failedAt.set(id, Date.now()); }
   } finally {
     asked.asking.delete(id);
   }
@@ -1920,6 +1935,8 @@ const STILL = new Set(['fixed', 'saturated']);
 /** When "asking" becomes "still asking", and when it gives up and says no answer came. */
 const IDENTIFY_SLOW_MS = 10_000;
 const IDENTIFY_CAP_MS = 75_000;
+/** A mark's centre moved less than this asks the catalogues nothing new: a third of a detector pixel. */
+const SAME_SPOT_ARCSEC = 2;
 
 function identifyMark(m) {
   // While visits are still landing the measured centre moves a little with
@@ -1949,12 +1966,18 @@ function identifyMark(m) {
     dec: pts.reduce((s, p) => s + p.dec, 0) / pts.length,
     epoch: Number.isFinite(mjd) && mjd > 0 ? 2000 + (mjd - 51544.5) / 365.25 : 2026,
   };
-  // To 0.4″: the centre settles as visits land, and a new key is a new question.
+  // The centre settles as visits land. A move of a fraction of a pixel is
+  // the same question: asked again for every 0.4″, ten marks kept dozens of
+  // catalogue questions in flight while a field filled in.
   const key = `${at.ra.toFixed(4)} ${at.dec.toFixed(4)}`;
-  if (m.who?.key === key) return;
-  const who = { key, state: 'asking', slow: false };
+  if (m.who?.at && arcsecBetween(m.who.at.ra, m.who.at.dec, at.ra, at.dec) < SAME_SPOT_ARCSEC) return;
+  // The last question is moot: let it go.
+  m.whoStop?.abort();
+  const stop = new AbortController();
+  m.whoStop = stop;
+  const who = { key, at, state: 'asking', slow: false };
   m.who = who;
-  const field = state.abort?.signal;
+  const field = state.abort?.signal ? AbortSignal.any([state.abort.signal, stop.signal]) : stop.signal;
   // Every question ends in an answer, a failure or "no answer": the relays to
   // IRSA can take a minute, and a line that says "asking" for ever reads as a
   // page that has hung. Past a few seconds it says it is still asking.
@@ -1983,12 +2006,12 @@ function identifyMark(m) {
     renderMarks();
   };
   identifySource(at, { signal, onUpdate })
-    .then((result) => settle({ key, state: 'done', result }))
+    .then((result) => settle({ key, at, state: 'done', result }))
     .catch(() => {
       // The field was closed under the question: nobody is waiting for this
       // answer, and a mark carried into the next field asks afresh.
       if (field?.aborted) settle(null);
-      else settle({ key, state: signal.aborted ? 'timeout' : 'failed' });
+      else settle({ key, at, state: signal.aborted ? 'timeout' : 'failed' });
     });
 }
 
@@ -3127,7 +3150,12 @@ const markPlaces = () => (sky?.marks ?? []).map(({ ra, dec, obsId }) => ({ ra, d
 /** Open the same field again, as it is now: a new size or band keeps the marks and the visit held. */
 function reopenField() {
   if (state.ra == null) return;
-  openField({ ra: state.ra, dec: state.dec, label: state.label, marks: markPlaces(), visit: state.wantVisit ?? heldVisit() });
+  // Held by its date, not its place in the list: another band's list is
+  // another list, and its 25th visit is another night.
+  const held = heldVisit();
+  const visitMjd = state.wantVisit != null ? state.allVisits[state.wantVisit]?.mjd
+    : held != null ? state.allVisits[held]?.mjd : null;
+  openField({ ra: state.ra, dec: state.dec, label: state.label, marks: markPlaces(), visitMjd: visitMjd ?? null });
 }
 
 /**
@@ -3343,7 +3371,7 @@ function retryUnread() {
   fillVisits(Math.max(state.visitGoal, state.visits.length));
 }
 
-async function openField({ ra, dec, label = '', band = null, target, pm, marks = [], visit = null }) {
+async function openField({ ra, dec, label = '', band = null, target, pm, marks = [], visit = null, visitMjd = null }) {
   dropMarksUndo();
   fieldSeq += 1;
   const gen = fieldSeq;
@@ -3361,6 +3389,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.visits = [];
   state.allVisits = [];
   state.wantVisit = visit;
+  state.wantMjd = visitMjd;
   state.truncated = false;
   state.partial = false;
   // What the last field measured goes with it: the reading is now built up as
@@ -3490,8 +3519,13 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   setPlateState('', { hidden: true });
   sky.setAB(0, Math.max(0, sky.visits.length - 1));
   // A visit asked for by a link is held on screen, which is a single frame.
-  const held = sky.visits.findIndex((v) => v.frame === state.allVisits[state.wantVisit]);
+  let held = sky.visits.findIndex((v) => v.frame === state.allVisits[state.wantVisit]);
+  if (held < 0 && Number.isFinite(state.wantMjd) && sky.visits.length) {
+    held = sky.visits.reduce((best, v, i) => (Math.abs(v.frame.mjd - state.wantMjd)
+      < Math.abs(sky.visits[best].frame.mjd - state.wantMjd) ? i : best), 0);
+  }
   state.wantVisit = null;
+  state.wantMjd = null;
   if (held >= 0) {
     stopPlayback();
     if (sky.mode === 'blink') selectMode('single');
