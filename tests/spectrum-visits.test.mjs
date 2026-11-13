@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import {
   RESOLVING_POWER, MAX_POOL, SAME_RUN_DAYS,
   spreadPick, motionOf, visitPool, resolutionWidth, wavelengthWindows, chooseMeasured,
-  medianLine, magOfMJy, magErrOf, variability, visitPoint, placeInBand, nearSaturation, strayDetections,
+  medianLine, magOfMJy, magErrOf, variability, visitPoint, PHOTOMETRY_FLOOR_MAG, placeInBand, nearSaturation, strayDetections,
 } from '../public/js/spectrum.js';
 
 const close = (a, b, tol, what) => assert.ok(Math.abs(a - b) <= tol, `${what}: ${a} vs ${b}`);
@@ -181,13 +181,14 @@ test('variability: a change, a steady source, a limit that widens it, saturation
   const mira = variability([det(100, 1, 1), det(60, 1, 50), det(25, 0.5, 120)]);
   assert.equal(mira.state, 'varies');
   close(mira.amp, 2.5 * Math.log10(4), 1e-9, 'peak to peak');
-  close(mira.ampErr, Math.hypot(magErrOf(100, 1), magErrOf(25, 0.5)), 1e-12, 'errors in quadrature');
+  const withFloor = (mJy, err) => Math.hypot(magErrOf(mJy, err), PHOTOMETRY_FLOOR_MAG);
+  close(mira.ampErr, Math.hypot(withFloor(100, 1), withFloor(25, 0.5)), 1e-12, 'errors in quadrature, each with the floor');
   assert.equal(mira.lowerBound, false);
 
   // 1% scatter with 1% errors: steady, and "within" is half of 3σ of the difference.
   const steady = variability([det(50, 0.5, 1), det(50.5, 0.5, 2), det(49.6, 0.5, 3)]);
   assert.equal(steady.state, 'steady');
-  const err = Math.hypot(magErrOf(50.5, 0.5), magErrOf(49.6, 0.5));
+  const err = Math.hypot(withFloor(50.5, 0.5), withFloor(49.6, 0.5));
   close(steady.within, (3 * err) / 2, 1e-12, 'what these visits could have missed');
 
   // Seen at 20 mJy, then not at all with a 5σ limit of 2 mJy: at least 2.5 mag.
@@ -216,6 +217,10 @@ test('variability: a change, a steady source, a limit that widens it, saturation
   assert.equal(few.state, 'few');
   assert.equal(few.detections, 1);
   assert.equal(few.limits, 2);
+
+  // A steady bright star whose sky noise is tiny does not "vary" by a hundredth.
+  const bright = variability([det(2000, 0.5, 1), det(2020, 0.5, 2), det(1990, 0.5, 3)]);
+  assert.equal(bright.state, 'steady');
   assert.equal(variability([]).state, 'few');
 });
 
