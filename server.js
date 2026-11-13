@@ -21,7 +21,7 @@
 
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
-import { brotliCompressSync, gzipSync, constants as zlib } from 'node:zlib';
+import { brotliCompressSync, gzipSync, gunzipSync, constants as zlib } from 'node:zlib';
 import { readFile, writeFile, mkdir, stat, readdir } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -362,6 +362,136 @@ async function askIrsaTap(archive, field, key) {
   return { ok: true, cached: false, ...payload };
 }
 
+/* ------------------------------------------------- an AllWISE picture */
+
+/** The AllWISE Atlas tiles, one per 1.56° of sky, listed by IRSA's SIA. */
+const WISE_COLLECTION = 'wise_allwise';
+const WISE_TIMEOUT_MS = 60_000;
+/** Biggest cutout asked for: the widest field the page opens, with a margin. */
+const WISE_MAX_DEG = 0.6;
+const wiseInflight = new Map();
+
+/**
+ * The AllWISE image of a field, as a FITS file. IRSA cuts it from the Atlas
+ * tile that covers the position (the archive does the cut, so a few hundred
+ * kilobytes travel instead of a 64 MB tile) and sends it gzipped and without
+ * CORS headers; this relays it unzipped and keeps it on disk.
+ */
+async function handleWise(url, res) {
+  const at = position(url);
+  if (!at) return json(res, 400, BAD_POSITION);
+  const band = url.searchParams.get('band') === '2' ? 2 : 1;
+  const size = clamp(param(url, 'size') || 0.2, 0.02, WISE_MAX_DEG);
+  const key = safeKey(`wise_w${band}_${at.ra.toFixed(4)}_${at.dec.toFixed(4)}_${size.toFixed(3)}`);
+  const file = join(CACHE, `${key}.fits`);
+  try {
+    const info = await stat(file);
+    if (Date.now() - info.mtimeMs < CACHE_TTL_MS) return sendFits(res, await readFile(file));
+  } catch { /* not cut yet */ }
+
+  let pending = wiseInflight.get(key);
+  if (!pending && wiseInflight.size >= INFLIGHT_MAX) {
+    return json(res, 503, { ok: false, error: 'The archive relay is busy; try again in a moment.' });
+  }
+  if (!pending) {
+    pending = cutWise(at, band, size, file).finally(() => wiseInflight.delete(key));
+    wiseInflight.set(key, pending);
+  }
+  try {
+    return sendFits(res, await pending);
+  } catch (err) {
+    return json(res, 502, { ok: false, error: err.message });
+  }
+}
+
+async function cutWise({ ra, dec }, band, size, file) {
+  const pos = encodeURIComponent(`circle ${ra} ${dec} 0.002`);
+  const listed = await withTimeout(`${SIA}?COLLECTION=${WISE_COLLECTION}&POS=${pos}&MAXREC=40`, WISE_TIMEOUT_MS);
+  if (!listed.ok) throw new Error(`IRSA ${WISE_COLLECTION}: HTTP ${listed.status}`);
+  const { rows } = parseVOTable(await listed.text());
+  const want = `-w${band}-int-3.fits`;
+  // A position near a tile edge is in two tiles; the one whose centre is
+  // nearest leaves the most room around the field.
+  const tiles = rows.filter((r) => String(r.access_url ?? '').endsWith(want))
+    .map((r) => ({ url: r.access_url, d: Math.hypot((Number(r.s_ra) - ra) * Math.cos(dec * Math.PI / 180), Number(r.s_dec) - dec) }))
+    .sort((a, b) => a.d - b.d);
+  if (!tiles.length) throw new Error('AllWISE has no tile here');
+  const cut = await withTimeout(`${tiles[0].url}?center=${ra.toFixed(5)},${dec.toFixed(5)}&size=${size.toFixed(3)}deg`, WISE_TIMEOUT_MS);
+  if (!cut.ok) throw new Error(`IRSA cutout: HTTP ${cut.status}`);
+  let body = Buffer.from(await cut.arrayBuffer());
+  if (body[0] === 0x1f && body[1] === 0x8b) body = gunzipSync(body);
+  if (!body.subarray(0, 6).toString('latin1').startsWith('SIMPLE')) throw new Error('IRSA cutout: not a FITS file');
+  body = binFits(body, WISE_MAX_SIDE);
+  try {
+    await mkdir(CACHE, { recursive: true });
+    await writeFile(file, body);
+  } catch { /* served all the same */ }
+  return body;
+}
+
+/** Longest side of the picture sent on: more than the plate ever shows. */
+const WISE_MAX_SIDE = 640;
+
+/**
+ * Average a float FITS image down by a whole factor until its longer side
+ * fits `maxSide`, and rewrite the scale cards to match. An Atlas pixel is
+ * 1.375″ and the plate's grid is coarser than that, so a 0.6° cutout (10 MB)
+ * travels as about 1 MB with nothing visible lost. Blank pixels are left out
+ * of each average; a block of nothing but blanks stays blank.
+ */
+function binFits(buf, maxSide) {
+  const cards = [];
+  let at = 0;
+  for (;;) {
+    const card = buf.subarray(at, at + 80).toString('latin1');
+    cards.push(card);
+    at += 80;
+    if (card.startsWith('END ') || card.trimEnd() === 'END') break;
+    if (at >= buf.length) throw new Error('FITS header has no END');
+  }
+  const dataAt = Math.ceil(at / 2880) * 2880;
+  const value = (key) => {
+    const card = cards.find((c) => c.startsWith(key.padEnd(8)));
+    return card ? Number(card.slice(10, 80).split('/')[0]) : NaN;
+  };
+  const nx = value('NAXIS1');
+  const ny = value('NAXIS2');
+  const factor = Math.ceil(Math.max(nx, ny) / maxSide);
+  if (value('BITPIX') !== -32 || !(factor > 1)) return buf;
+  const mx = Math.floor(nx / factor);
+  const my = Math.floor(ny / factor);
+  const out = Buffer.alloc(Math.ceil((mx * my * 4) / 2880) * 2880);
+  for (let j = 0; j < my; j++) {
+    for (let i = 0; i < mx; i++) {
+      let sum = 0;
+      let n = 0;
+      for (let dy = 0; dy < factor; dy++) {
+        for (let dx = 0; dx < factor; dx++) {
+          const v = buf.readFloatBE(dataAt + (((j * factor + dy) * nx) + i * factor + dx) * 4);
+          if (Number.isFinite(v)) { sum += v; n += 1; }
+        }
+      }
+      out.writeFloatBE(n ? sum / n : NaN, (j * mx + i) * 4);
+    }
+  }
+  // Pixel centre k of the binned image sits at (k - 0.5) * factor + 0.5 of the old.
+  const set = (key, v) => {
+    const k = cards.findIndex((c) => c.startsWith(key.padEnd(8)));
+    if (k >= 0) cards[k] = `${key.padEnd(8)}= ${String(v).padStart(20)}`.padEnd(80);
+  };
+  set('NAXIS1', mx);
+  set('NAXIS2', my);
+  for (const axis of [1, 2]) set(`CRPIX${axis}`, (value(`CRPIX${axis}`) - 0.5) / factor + 0.5);
+  for (const key of ['CDELT1', 'CDELT2', 'CD1_1', 'CD1_2', 'CD2_1', 'CD2_2']) {
+    if (Number.isFinite(value(key))) set(key, value(key) * factor);
+  }
+  let head = Buffer.from(cards.join(''), 'latin1');
+  head = Buffer.concat([head, Buffer.alloc(Math.ceil(head.length / 2880) * 2880 - head.length, ' ')]);
+  return Buffer.concat([head, out]);
+}
+
+const sendFits = (res, body) => send(res, 200, body, { 'content-type': 'application/fits' });
+
 /* ---------------------------------------------------- small bodies at JPL */
 
 /** "2025-08-15T20:45:12" and nothing looser: it becomes part of a URL to JPL. */
@@ -545,6 +675,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/search') return await handleSearch(url, res);
     if (url.pathname === '/api/tap') return await handleTap(url, res);
     if (url.pathname === '/api/sbident') return await handleSbIdent(url, res);
+    if (url.pathname === '/api/wise') return await handleWise(url, res);
     if (url.pathname === '/api/targets') {
       const body = await readFile(join(PUBLIC, 'data', 'targets.json'));
       return send(res, 200, body, { 'content-type': TYPES['.json'] });

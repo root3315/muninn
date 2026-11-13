@@ -202,8 +202,33 @@ export class SkyView {
     this.stackUrls = null;
     // A lit sector belongs to the field it was lit in.
     this.sector = null;
+    // Another mission's picture of this field, for the wipe; and whether the
+    // wipe shows it as B.
+    this.ref = null;
+    this.useRef = false;
     this.draw();
   }
+
+  /**
+   * Another survey's image of the field on the same grid (an AllWISE cutout),
+   * or null. Cut on its own pixels, never shared with SPHEREx's: the units
+   * and the depth are another instrument's.
+   */
+  setReference(ref) {
+    if (ref) {
+      const cv = document.createElement('canvas');
+      cv.width = ref.stamp.width;
+      cv.height = ref.stamp.height;
+      this.ref = { ...ref, canvas: cv, ctx: cv.getContext('2d'), cut: null };
+      this.paintVisit(this.ref);
+    } else {
+      this.ref = null;
+    }
+    this.draw();
+  }
+
+  /** B of the wipe is the reference image, or the visit chosen as B. */
+  setUseRef(on) { this.useRef = on; this.draw(); }
 
   /** An exposure read only to be stacked: not a visit, not in the run. */
   addExtra(frame, stamp) {
@@ -322,6 +347,7 @@ export class SkyView {
     if (!this.visits.length) { this.draw(); return; }
     const shared = this.render.shared ? this.sharedLimits() : null;
     for (const v of this.visits) this.paintVisit(v, shared);
+    if (this.ref) this.paintVisit(this.ref);
     this.diffCache = null;
     this.stackCache = null;
     this.draw();
@@ -408,7 +434,7 @@ export class SkyView {
         if (stack) this.place(ctx, stack.canvas);
       } else if (this.mode === 'wipe') {
         const a = this.visits[this.a];
-        const b = this.visits[this.b] ?? a;
+        const b = (this.useRef && this.ref) || (this.visits[this.b] ?? a);
         if (a) this.place(ctx, a.canvas);
         const x = Math.round(this.cssW * this.wipe);
         ctx.save();
