@@ -216,14 +216,21 @@ export class SkyView {
     return { scale, offX: (this.cssW - gw * scale) / 2, offY: (this.cssH - gh * scale) / 2, gw, gh };
   }
 
+  /**
+   * Grid index to canvas point, and back. An index names a sample's centre
+   * (the grid's own convention, see wcs.js), and drawImage paints sample i
+   * across [i, i + 1] of the scaled grid: its centre is at i + ½. Without the
+   * half, every ring, square, label and mark sat half a sample up and to the
+   * left of the pixel it was about.
+   */
   toCanvas(i, j) {
     const { scale, offX, offY } = this.view;
-    return [offX + i * scale, offY + j * scale];
+    return [offX + (i + 0.5) * scale, offY + (j + 0.5) * scale];
   }
 
   toGrid(x, y) {
     const { scale, offX, offY } = this.view;
-    return [(x - offX) / scale, (y - offY) / scale];
+    return [(x - offX) / scale - 0.5, (y - offY) / scale - 0.5];
   }
 
   /* ----------------------------------------------------------------- state */
@@ -1105,8 +1112,9 @@ export class SkyView {
       const r = c.getBoundingClientRect();
       return [e.clientX - r.left, e.clientY - r.top];
     };
+    // Each sample covers half a step either side of its index.
     const inside = (i, j) => this.grid
-      && i >= 0 && j >= 0 && i <= this.grid.width - 1 && j <= this.grid.height - 1;
+      && i >= -0.5 && j >= -0.5 && i < this.grid.width - 0.5 && j < this.grid.height - 0.5;
 
     c.addEventListener('pointermove', (e) => {
       if (!this.grid) return;

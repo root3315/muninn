@@ -845,6 +845,16 @@ body { font-size: var(--text-base); line-height: 1.5; }
     min-block-size: calc(var(--plate-h) + 2 * var(--pad));
   }
   .room { place-items: start center; }
+  /* A wide, low room: the plate is held to twice its height (a strip hides
+     what moves out of it), and the width it leaves was an empty band either
+     side of the board. Up to 6rem a side of it goes to the label and the
+     band list instead, which then read at ease; any more stays as margin. */
+  .mount {
+    --grow: clamp(0px, calc((var(--avail-w) - var(--plate-w)) / 2), 6rem);
+    grid-template-columns:
+      calc((var(--cap) + var(--grow) - var(--gap)) / 2) calc((var(--cap) + var(--grow) - var(--gap)) / 2)
+      var(--plate-w) calc(var(--bandw) + var(--grow));
+  }
 
   /* The label's lines sit on the board's own grid, so the steps can stand
      between the date and the rest. */
@@ -959,8 +969,11 @@ body { font-size: var(--text-base); line-height: 1.5; }
 @media (min-width: 68.0625rem) and (min-height: 34.0625rem) {
   /* A short room: the scale folds into two columns, as app.css does. */
   @container (max-height: 18.5rem) {
-    .bands .lambda { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; }
+    /* Four even rows within the plate's height: the "all bands" chip had
+       kept its full padding and pushed D5 and D6 below the board. */
+    .bands .lambda { display: grid; grid-template-columns: 1fr 1fr; grid-auto-rows: minmax(0, 1fr); align-content: stretch; gap: 3px; max-block-size: var(--plate-h); }
     .bands .lambda__um { display: none; }
+    .bands .lambda__chip { min-block-size: 0; padding-block: var(--space-2xs); }
     .bands .lambda__chip[data-band="all"] { grid-column: 1 / -1; margin: 0; }
   }
   /* Sky only: one row as tall as the plate, steps either side of it. */
@@ -1080,7 +1093,7 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .run__scroll[data-scroll="true"] { overflow-x: auto; scroll-behavior: smooth; scrollbar-width: thin; scrollbar-color: color-mix(in oklab, var(--color-ink) 25%, transparent) transparent; }
 .run__scroll[data-scroll="true"] .run__canvas { inline-size: auto; max-inline-size: none; }
 .key--fit svg { fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
-.key--fit[aria-pressed="true"] { background: var(--color-accent); color: var(--color-on-accent, #08131c); }
+.key--fit[aria-pressed="true"] { background: var(--color-accent); color: var(--color-accent-ink); }
 
 /* ======================================== search suggestions, clearing marks, brightness */
 
@@ -1214,4 +1227,16 @@ body { font-size: var(--text-base); line-height: 1.5; }
 @media (prefers-reduced-motion: reduce) {
   .spectrum__pt--new { animation: none; }
   .spectrum__progress, .spectrum__chip { transition: none; }
+}
+
+/* A phone: the run's modes take a line of their own and may shrink, so
+   "Один заход" and "Стек" are not cut off past the screen's edge. */
+@media (max-width: 40rem) {
+  .run__head .deck { flex-wrap: wrap; }
+  .deck .segments { flex: 1 1 100%; min-inline-size: 0; }
+  .run__scroll { min-inline-size: 0; }
+  /* The visit pickers are as wide as their longest date, and that width
+     held the whole run past the screen. */
+  .run, .run__head, .run__head .compare { min-inline-size: 0; max-inline-size: 100%; }
+  .run__head .compare select { min-inline-size: 0; inline-size: 100%; }
 }
