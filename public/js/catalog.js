@@ -614,49 +614,97 @@ export function askedAt(anchor, ra, dec, { at, spread }, base) {
  *   VSX        the variable-star index: for a source that comes and goes,
  *              the first question is whether it is simply known to vary.
  *
- * Asked in two steps. Gaia and CatWISE carry motions, so they are matched at
- * `epoch`, the date of the visits; whatever they find moving is then carried
- * back to the epoch of each other catalogue and asked about there. Without
+ * Asked all at once, and answered as each catalogue answers. Gaia and CatWISE
+ * carry motions, so they are matched at `epoch`, the date of the visits;
+ * whatever they find moving is carried back to the epoch of each other
+ * catalogue, and that one is asked again there if the place moved. Without
  * that, the challenge's own fast stars — Barnard's, WISE 0855, ε Indi — were
  * matched to whatever faint thing sat at today's position in a 1999 catalogue.
+ * The other catalogues are asked at the marked spot straight away, which is
+ * where nearly every star still is; what they say is held back until Gaia has
+ * answered, so a fast star never shows a neighbour's name for a moment.
+ * Asked one after another, SIMBAD's sub-second answer waited on CatWISE's
+ * twenty.
  *
  * A SPHEREx pixel is 6.15″, so several catalogued things can share one; the
  * brightest is the one SPHEREx saw, so that is the one reported. Each answer is
  * on its own: one service down leaves the others standing, and says so.
+ *
+ * `onUpdate` gets the answers so far, in the shape the result has, with
+ * `pending` naming the catalogues still out.
  */
-export async function identifySource({ ra, dec, epoch = 2026 }, { signal } = {}) {
-  const out = { failed: [] };
-  const take = (key, s) => {
-    if (s.status === 'fulfilled') out[key] = s.value;
-    else { out[key] = null; out.failed.push(key); }
+export async function identifySource({ ra, dec, epoch = 2026 }, { signal, onUpdate } = {}) {
+  const answers = {};
+  const runs = {};
+  let anchor = null;
+  let gaiaAnswered = false;
+
+  const snapshot = () => {
+    const out = { failed: [], pending: [] };
+    for (const key of IDENTIFY_KEYS) {
+      const answer = gaiaAnswered || !(key in FIXED_EPOCH) ? answers[key] : null;
+      out[key] = answer?.ok ? answer.value : null;
+      if (!answer) out.pending.push(key);
+      else if (!answer.ok) out.failed.push(key);
+    }
+    out.any = IDENTIFY_KEYS.some((k) => out[k]);
+    out.moved = anchor ? { epoch } : null;
+    return out;
   };
-  const [gaia, catwise] = await Promise.allSettled([
-    askGaia(ra, dec, signal, epoch), askCatwise(ra, dec, signal, epoch),
+  const publish = () => onUpdate?.(snapshot());
+
+  const askFixed = (key) => {
+    const spec = FIXED_EPOCH[key];
+    const at = askedAt(anchor, ra, dec, EPOCHS[spec.epoch], spec.arcsec);
+    if (runs[key] && sameQuestion(runs[key].at, at)) return;
+    delete answers[key];
+    const run = { at };
+    runs[key] = run;
+    run.done = settled(spec.ask(at.ra, at.dec, signal, at.arcsec)).then((answer) => {
+      if (runs[key] !== run) return;
+      answers[key] = answer;
+      publish();
+    });
+  };
+  const askAllFixed = () => Object.keys(FIXED_EPOCH).forEach(askFixed);
+  const moving = (key, question) => settled(question).then((answer) => {
+    answers[key] = answer;
+    if (key === 'gaia') gaiaAnswered = true;
+    anchor = motionAnchor(answers.gaia?.value, answers.catwise?.value);
+    askAllFixed();
+    publish();
+  });
+
+  askAllFixed();
+  await Promise.all([
+    moving('gaia', askGaia(ra, dec, signal, epoch)),
+    moving('catwise', askCatwise(ra, dec, signal, epoch)),
   ]);
-  take('gaia', gaia);
-  take('catwise', catwise);
-
-  const anchor = motionAnchor(out.gaia, out.catwise);
-  const where = (kind, base) => askedAt(anchor, ra, dec, EPOCHS[kind], base);
-  const tm = where('twomass', NEAR_ARCSEC);
-  const wi = where('wise', NEAR_ARCSEC);
-  const sb = where('simbad', 8);
-  const vs = where('simbad', 10);
-  const rest = {
-    simbad: () => askSimbad(sb.ra, sb.dec, signal, sb.arcsec),
-    tmass: () => askTwoMass(tm.ra, tm.dec, signal, tm.arcsec),
-    wise: () => askWise(wi.ra, wi.dec, signal, wi.arcsec),
-    vsx: () => askVsx(vs.ra, vs.dec, signal, vs.arcsec),
-  };
-  const keys = Object.keys(rest);
-  (await Promise.allSettled(keys.map((k) => rest[k]()))).forEach((s, i) => take(keys[i], s));
-
-  const all = ['simbad', 'gaia', 'tmass', 'wise', 'catwise', 'vsx'];
-  if (out.failed.length === all.length) throw new Error('No catalogue answered');
-  out.any = all.some((k) => out[k]);
-  out.moved = anchor ? { epoch } : null;
+  // With both motions in, nothing is asked again: these are the last questions.
+  await Promise.all(Object.values(runs).map((run) => run.done));
+  const out = snapshot();
+  if (out.failed.length === IDENTIFY_KEYS.length) throw new Error('No catalogue answered');
+  delete out.pending;
   return out;
 }
+
+const IDENTIFY_KEYS = ['simbad', 'gaia', 'tmass', 'wise', 'catwise', 'vsx'];
+
+/** The catalogues with positions at one fixed epoch: which epoch, and how wide to look. */
+const FIXED_EPOCH = {
+  simbad: { epoch: 'simbad', arcsec: 8, ask: askSimbad },
+  tmass: { epoch: 'twomass', arcsec: NEAR_ARCSEC, ask: askTwoMass },
+  wise: { epoch: 'wise', arcsec: NEAR_ARCSEC, ask: askWise },
+  vsx: { epoch: 'simbad', arcsec: 10, ask: askVsx },
+};
+
+/** Two circles closer than this, in centre and in radius, ask the same thing. */
+const SAME_QUESTION_ARCSEC = 0.5;
+
+const sameQuestion = (a, b) => arcsecBetween(a.ra, a.dec, b.ra, b.dec) <= SAME_QUESTION_ARCSEC
+  && Math.abs(a.arcsec - b.arcsec) <= SAME_QUESTION_ARCSEC;
+
+const settled = (promise) => promise.then((value) => ({ ok: true, value }), () => ({ ok: false }));
 
 const SURVEY_PARSERS = { gaia: parseGaiaRow, wise: parseWiseRow };
 
