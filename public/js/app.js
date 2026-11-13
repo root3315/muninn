@@ -3687,6 +3687,28 @@ function placeTools() {
   tools.style.setProperty('--at-h', `${Math.max(160, Math.min(box.height, floor - box.top))}px`);
 }
 
+/**
+ * What the plate's label carries on a desk. The field's figures close it,
+ * beside the picture, where the label column had height to spare and the
+ * findings column had none. The two dates the wipe and the difference compare
+ * stand where the steps were: under the strip they took a row of height from
+ * the plate, and the picture shrank the moment a mode was chosen. Stacked,
+ * each goes back where it is read in order: the figures under the finding,
+ * the dates under the modes.
+ */
+const DESK = matchMedia('(min-width: 68.0625rem) and (min-height: 34.0625rem)');
+
+function placeLabel() {
+  const facts = $('stat-line');
+  const compare = $('compare');
+  if (DESK.matches) {
+    $('field-pos').before(facts, compare);
+  } else {
+    $('field-cue').before(facts);
+    document.querySelector('.run__head').append(compare);
+  }
+}
+
 function setTools(open) {
   const tools = $('tools');
   if (open) {
@@ -4070,6 +4092,8 @@ function wire() {
 
   $('tools-toggle').addEventListener('click', () => setTools($('tools').hidden));
   window.addEventListener('resize', placeTools);
+  placeLabel();
+  DESK.addEventListener('change', placeLabel);
   // Escape puts the findings back; so does pressing "View" again.
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !$('tools').hidden && !$('about').open) { setTools(false); $('tools-toggle').focus(); }

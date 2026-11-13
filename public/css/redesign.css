@@ -450,8 +450,11 @@ body { font-size: var(--text-base); line-height: 1.5; }
 /* The figures, one a line: what it is on the left, the value on the right. */
 .facts { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2xs); }
 .facts > div { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-sm); min-inline-size: 0; }
-.facts dt { flex: 1 0 auto; font-size: var(--text-sm); color: var(--color-neutral); white-space: nowrap; }
-.facts dd { flex: 0 1 auto; min-inline-size: 0; text-align: end; font-family: var(--font-mono); font-size: 0.8125rem; color: var(--color-ink); }
+/* A figure is never broken across lines: when a row is short of room the
+   name gives way and wraps; only a value that is a sentence wraps itself. */
+.facts dt { flex: 1 1 auto; min-inline-size: 0; font-size: var(--text-sm); color: var(--color-neutral); }
+.facts .facts__go { font-size: inherit; min-block-size: 0; }
+.facts dd { flex: 0 0 auto; max-inline-size: 64%; text-align: end; font-family: var(--font-mono); font-size: 0.8125rem; color: var(--color-ink); }
 /* A measured value stays ink in every band: in the long bands the accent is
    red, and a red figure reads as a failed one. */
 .facts dd[data-tone="accent"] { color: var(--color-ink); font-weight: 500; }
@@ -811,34 +814,39 @@ body { font-size: var(--text-base); line-height: 1.5; }
 /* ======================================================== composition */
 
 @media (min-width: 68.0625rem) and (min-height: 34.0625rem) {
-  :root { --side: clamp(16rem, 19vw, 21rem); }
+  /* The findings column grows with the screen, so at laptop widths a figure
+     and its name share a line instead of folding under each other. */
+  :root { --side: clamp(17.5rem, 22vw, 25rem); }
 
   /*
    * The board: the plate's label, the plate, the spectrum. The two steps sit
-   * at the foot of the label column, side by side.
+   * under the date, side by side.
    * Widths must add up for roomAspect(), which measures mount minus cell.
    */
   .mount {
     --pad: var(--space-sm);
     --gap: var(--space-md);
-    --cap: 11.5rem;
+    --cap: 14rem;
     --bandw: 9.5rem;
+    /* The coordinates close the spectrum column: three lines of the label. */
+    --pos-h: calc(3 * 1.6 * var(--text-xs));
     --fixed: calc(var(--cap) + var(--bandw) + 2 * var(--gap) + 2 * var(--pad));
     background: none;
     grid-template-columns:
       calc((var(--cap) - var(--gap)) / 2) calc((var(--cap) - var(--gap)) / 2)
       var(--plate-w) var(--bandw);
     /* The label reads down in one run: the night, the two steps that change
-       it, then what the exposure is. Nothing is pinned to the foot, so no
-       hole opens between the words and the buttons. */
-    grid-template-rows: repeat(5, auto) auto auto;
+       it, then what the exposure is. The field's figures stand at its foot,
+       level with the foot of the plate, so the column is held at both ends. */
+    grid-template-rows: repeat(6, auto) minmax(0, 1fr);
     grid-template-areas: none;
     row-gap: 0;
-    /* The label stands at the middle of the plate's height, as the scale on the
-       other side does: the three read as one line across the board. */
-    align-content: center;
-    block-size: calc(var(--plate-h) + 2 * var(--pad));
+    /* As tall as the plate. Only a label with every overlay open on a low
+       screen runs longer, and then the board grows and the stage scrolls,
+       rather than one line of the label printing over the next. */
+    min-block-size: calc(var(--plate-h) + 2 * var(--pad));
   }
+  .room { place-items: start center; }
 
   /* The label's lines sit on the board's own grid, so the steps can stand
      between the date and the rest. */
@@ -850,10 +858,42 @@ body { font-size: var(--text-base); line-height: 1.5; }
   #when-flags { grid-row: 5; padding-block-start: var(--space-3xs); }
   #survey-note { grid-row: 6; align-self: start; }
   /* With the legend open on a low screen the flag count gives up its line. */
-  @container (max-height: 24rem) { .mount:has(#survey-note:not([hidden])) #when-flags { display: none; } }
-  .under__pos { grid-row: 7; padding-block-start: var(--space-sm); }
+  @container (max-height: 30rem) { .mount:has(#survey-note:not([hidden])) #when-flags { display: none; } }
+  /* In the wipe and the difference the label names both exposures: the two
+     dates take the steps' place, and the plate keeps its size. */
+  .caption > .compare {
+    grid-row: 2; align-self: start;
+    flex-direction: column; flex-wrap: nowrap; align-items: stretch;
+    gap: var(--space-xs); margin-block: var(--space-sm);
+    padding: var(--space-xs);
+    animation: unfold var(--dur-short) var(--ease-out);
+  }
+  .caption > .compare .row { flex: 0 0 auto; gap: var(--space-xs); }
+  body:not([data-bare="true"]) .mount:has(.caption > .compare:not([hidden])) .step { display: none; }
+  .caption > .facts {
+    grid-row: 7; align-self: end;
+    gap: var(--space-2xs); padding-block-start: var(--space-md);
+  }
+  .caption > .facts > div { gap: var(--space-xs); }
+  .caption > .facts :is(dt, dd) { font-size: var(--text-xs); line-height: 1.5; }
+  /* A tall room: the label's small lines step up a size, so the column reads
+     at the scale of the plate beside it. */
+  @container (min-height: 40rem) {
+    .mount { --cap: 16.5rem; --pos-h: calc(3 * 1.6 * var(--text-sm)); }
+    .when__time, .when__band, .when__of, .caption > .under__pos, .caption > .facts :is(dt, dd) { font-size: var(--text-sm); }
+    .caption > .facts { gap: var(--space-xs); }
+  }
+  /* Where the field is, at the foot of the spectrum: the plate is held by its
+     label on the left and by the scale and its place on the sky on the right. */
+  .caption > .under__pos {
+    grid-column: 4; grid-row: 1 / -1; align-self: end;
+    padding: 0 var(--space-sm); line-height: 1.6;
+  }
   .stage__cell { grid-area: auto; grid-column: 3; grid-row: 1 / -1; }
-  .bands { grid-area: auto; grid-column: 4; grid-row: 1 / -1; }
+  .bands {
+    grid-area: auto; grid-column: 4; grid-row: 1 / -1;
+    margin-block-end: calc(var(--pos-h) + var(--space-md));
+  }
   .step {
     display: flex; align-items: center; justify-content: center; gap: var(--space-2xs);
     grid-area: auto; grid-row: 2; block-size: 36px; padding-inline: var(--space-xs);
@@ -884,11 +924,12 @@ body { font-size: var(--text-base); line-height: 1.5; }
   .tools .row { flex-wrap: wrap; row-gap: var(--space-2xs); }
   .tools .row > .field--compact { flex: 1 1 100%; max-inline-size: none; }
 
-  /* The scale beside the plate: seven equal steps. */
+  /* The scale beside the plate: seven equal steps from the plate's top edge
+     down to the coordinates, so the column starts and ends with the picture. */
   .bands { align-self: stretch; display: flex; }
-  .bands .lambda { flex: 1 1 auto; display: flex; flex-direction: column; flex-wrap: nowrap; justify-content: center; gap: 3px; }
+  .bands .lambda { flex: 1 1 auto; display: flex; flex-direction: column; flex-wrap: nowrap; justify-content: flex-start; gap: 3px; }
   .bands .lambda__chip {
-    flex: 1 1 0; min-block-size: 1.875rem; max-block-size: 3rem; overflow: hidden;
+    flex: 1 1 0; min-block-size: 1.875rem; overflow: hidden;
     grid-template-columns: auto minmax(0, 1fr); align-items: baseline;
     column-gap: var(--space-xs);
   }
@@ -896,6 +937,7 @@ body { font-size: var(--text-base); line-height: 1.5; }
   @container (max-height: 24rem) {
     .bands .lambda__chip { min-block-size: 1.5rem; }
     .under__pos { display: none; }
+    .bands { margin-block-end: 0; }
   }
   @container (max-height: 19rem) {
     #when-flags { display: none; }
@@ -906,8 +948,10 @@ body { font-size: var(--text-base); line-height: 1.5; }
 /* On a low, wide screen the findings column is a short window on a long
    list: its foot fades, so the cut reads as "more below" and not as an edge,
    and the verdict takes less of the height it has. */
-@media (min-width: 68.0625rem) and (max-height: 46rem) {
+@media (min-width: 68.0625rem) and (min-height: 34.0625rem) {
   .side--right, .tools { mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5rem), transparent); }
+}
+@media (min-width: 68.0625rem) and (max-height: 46rem) {
   .verdict { padding-block: var(--space-md); gap: var(--space-sm); }
   .part { padding-block: var(--space-sm) var(--space-md); }
 }
