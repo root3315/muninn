@@ -968,3 +968,10 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .tools .segments__k { float: none; inline-size: 100%; margin-block-end: var(--space-2xs); padding: 0; font-size: var(--text-xs); color: var(--color-neutral); }
 .tools .segments--tiny { flex-wrap: wrap; row-gap: var(--space-3xs); }
 .tools .segments--tiny .segment { flex: 1 1 auto; white-space: nowrap; }
+
+/* Linking a mark across seasons: the result reads as the mark's other
+   evidence; a found link takes the accent, the controls sit on one row. */
+.mark__link[data-tone="counter"] { color: var(--color-accent); }
+.mark__link[data-tone="wait"], .mark__link[data-tone="quiet"] { color: var(--color-neutral); }
+.mark__link-acts { display: flex; flex-wrap: wrap; gap: 0 var(--space-xs); }
+.mark__link-acts > .mark__csv[aria-pressed="false"] { color: var(--color-neutral); }

@@ -25,6 +25,7 @@ import { FRAME_FILE_MB } from './release.js';
 import { deadline, CATALOG_DEADLINE_MS } from './net.js';
 import { paint, rampFromToken, sortedFinite, limitsFromSorted } from './render.js';
 import { seasonChunks, chunkAt, forStack, averaged } from './stack.js';
+import { linkSeasons, parallaxArc, distanceGrid, arcPoint, ARC_TICKS_AU, NEAR_AU, FAR_AU, separationArcsec } from './seasons.js';
 import { TangentGrid, separation, deltaRA } from './wcs.js';
 import { loadStamp, loadWavelength } from './stamp.js';
 import { nearestExposures, fluxPoint, placeInBand } from './spectrum.js';
@@ -637,7 +638,25 @@ function renderHunt() {
       renderMatrix();
     });
 
-    li.append(head, rate, id, go);
+    // The same place followed into the next season, in the mark it becomes.
+    const follow = document.createElement('button');
+    follow.type = 'button';
+    follow.className = 'link cand__go';
+    follow.textContent = t('link.run');
+    follow.title = t('link.what');
+    follow.addEventListener('click', () => {
+      const cos = Math.cos((c.dec * Math.PI) / 180);
+      let m = sky.marks.find((k) => Math.hypot(deltaRA(k.ra, c.ra) * cos, k.dec - c.dec) * 3600 < DETECTOR_ARCSEC);
+      if (!m) {
+        addMark(c.ra, c.dec);
+        m = sky.marks.at(-1);
+        m.obsId = c.obsId;
+        retrackMarks();
+      }
+      linkMark(m);
+    });
+
+    li.append(head, rate, id, go, follow);
     out.append(li);
   }
   renderFlashes(found);
@@ -2118,7 +2137,12 @@ function renderMarks() {
     kill.textContent = '×';
     kill.title = t('mark.remove');
     kill.setAttribute('aria-label', `${t('mark.remove')} ${i + 1}`);
-    kill.addEventListener('click', () => { sky.marks.splice(i, 1); sky.draw(); renderMarks(); });
+    kill.addEventListener('click', () => {
+      sky.marks.splice(i, 1);
+      if (sky.link?.mark === m) sky.link = null;
+      sky.draw();
+      renderMarks();
+    });
 
     li.append(n, body, kill);
     // The numbers behind the verdict, to check or to take elsewhere.
@@ -2131,6 +2155,7 @@ function renderMarks() {
       csv.addEventListener('click', () => saveTrack(m, i + 1));
       body.append(csv);
     }
+    if (sky.visits.length) body.append(...linkLines(m));
     if (sky.visits.length) li.append(spectrumBlock(m, () => readSpectrum(m)));
     ul.append(li);
   });
@@ -2216,6 +2241,274 @@ async function readSpectrum(mark) {
   });
   spectrum.busy = false;
   redraw();
+}
+
+/* ------------------------------------------------------------ season link */
+
+/**
+ * Follow a mark from its own season into the next one, at every trial
+ * distance from 30 to 2000 AU (see seasons.js for the geometry and what it
+ * neglects). The season-B visits are read in full — every one the archive has
+ * in that season, up to a stack's worth — and season A's are read too, because
+ * a detection on the arc counts only where season A shows nothing.
+ */
+async function linkMark(m) {
+  if (m.link?.state === 'reading') return;
+  const ref = sky.visits.find((v) => v.frame.obsId === m.obsId)?.frame ?? sky.current?.frame;
+  if (!ref) return;
+  const chunks = bandSeasons(ref.band);
+  const a = chunkAt(chunks, ref.mjd);
+  const others = chunks.map((c, k) => ({ c, k })).filter(({ k }) => k !== a);
+  if (a < 0 || !others.length) {
+    m.link = { state: 'single', band: ref.band };
+    if (sky.link?.mark === m) showLink(null);
+    renderMarks();
+    return;
+  }
+  // The season nearest in time: SPHEREx comes back about half a year later.
+  const mid = (c) => (c[0].mjd + c[c.length - 1].mjd) / 2;
+  const b = others.sort((x, y) => Math.abs(mid(x.c) - ref.mjd) - Math.abs(mid(y.c) - ref.mjd))[0].k;
+  const loadedB = sky.visits.find((v) => v.frame.band === ref.band && chunkAt(chunks, v.frame.mjd) === b);
+  const framesA = forStack(chunks[a], ref);
+  const framesB = forStack(chunks[b], loadedB?.frame ?? chunks[b][Math.floor(chunks[b].length / 2)]);
+
+  const gen = fieldSeq;
+  const link = { state: 'reading', band: ref.band, n: 0, total: framesA.length + framesB.length, shown: true };
+  m.link = link;
+  renderMarks();
+  const started = performance.now();
+  try {
+    const [visitsA, visitsB] = await Promise.all([framesA, framesB].map((list) => linkStamps(list, () => {
+      link.n += 1;
+      if (m.link === link) renderMarks();
+    })));
+    if (gen !== fieldSeq || m.link !== link) return;
+    if (!visitsA.length || !visitsB.length) throw new Error(t('link.unread'));
+    Object.assign(link, await runLink(m, visitsA, visitsB));
+    if (gen !== fieldSeq || m.link !== link) return;
+    link.state = 'done';
+    link.ms = Math.round(performance.now() - started);
+    link.loadedB = loadedB ?? null;
+  } catch (err) {
+    if (gen !== fieldSeq || m.link !== link) return;
+    console.error('season link failed', err);
+    link.state = 'failed';
+    link.why = err.message;
+  }
+  if (link.state === 'done') showLink(m);
+  else if (sky.link?.mark === m) showLink(null);
+  renderMarks();
+}
+
+/** Pixels for a list of frames: loaded already, kept from an earlier read, or read now. */
+async function linkStamps(frames, onEach) {
+  const signal = state.abort?.signal;
+  const grid = sky.grid;
+  const out = [];
+  await pool(frames, 2, async (frame) => {
+    let item = sky.visits.find((v) => v.frame.url === frame.url) ?? sky.extra.get(frame.url);
+    if (!item && !stackDropped.has(frame.url)) {
+      try {
+        const stamp = await readStamp(toS3(frame.url), grid, { signal });
+        if (stamp && sky.grid === grid) {
+          sky.addExtra(frame, stamp);
+          state.bytes += stamp.meta.bytesRead;
+          renderBytes();
+          item = sky.extra.get(frame.url);
+        } else if (!stamp) stackDropped.add(frame.url);
+      } catch {
+        if (!signal?.aborted) stackDropped.add(frame.url);
+      }
+    }
+    if (item) out.push(item);
+    onEach();
+  });
+  return out.sort((x, y) => x.frame.mjd - y.frame.mjd);
+}
+
+/** The measurement half of the link: anchor, sources, static check, decision. */
+async function runLink(m, visitsA, visitsB) {
+  // Where the mark is in season A, measured: the strongest detection of it.
+  let anchorHit = null;
+  for (const v of visitsA) {
+    const hit = sky.measure(v, m.ra, m.dec);
+    if (hit && (!anchorHit || hit.snr > anchorHit.snr)) anchorHit = hit;
+  }
+  const refMjd = visitsA.find((v) => v.frame.obsId === m.obsId)?.frame.mjd ?? visitsA[0].frame.mjd;
+  const anchor = anchorHit
+    ? { ra: anchorHit.ra, dec: anchorHit.dec, mjd: anchorHit.mjd }
+    : { ra: m.ra, dec: m.dec, mjd: refMjd };
+
+  const sourcesOf = new Map();
+  for (const v of visitsB) {
+    sourcesOf.set(v.frame.obsId, sky.sources(v));
+    await breathe();
+  }
+  // Inside the plate by the measuring box's own reach, so every point called
+  // checkable could actually be measured.
+  const perPixel = DETECTOR_ARCSEC / (sky.grid.scale * 3600);
+  const margin = Math.ceil(5 * perPixel) + 1;
+  const { width, height } = sky.grid;
+  const inField = (ra, dec) => {
+    const g = sky.grid.worldToIndex(ra, dec);
+    return Boolean(g) && g[0] >= margin && g[1] >= margin && g[0] <= width - 1 - margin && g[1] <= height - 1 - margin;
+  };
+  // Something at the spot in season A, even at 3σ, makes it a fixed source.
+  const occupied = (v, ra, dec) => {
+    const hit = sky.measure(v.item, ra, dec, { minSnr: 3 });
+    return Boolean(hit) && separationArcsec(hit, { ra, dec }) <= 1.5 * DETECTOR_ARCSEC;
+  };
+  const asVisit = (v) => ({ id: v.frame.obsId, mjd: v.frame.mjd, item: v });
+  const result = linkSeasons({
+    anchor,
+    aVisits: visitsA.map(asVisit),
+    bVisits: visitsB.map(asVisit),
+    sources: (v) => sourcesOf.get(v.id) ?? [],
+    occupied,
+    inField,
+    pixelArcsec: DETECTOR_ARCSEC,
+  });
+  // A source at the mark that is still there in season B sits still: a star.
+  const stillThere = anchorHit ? visitsB.filter((v) => {
+    const hit = sky.measure(v, anchor.ra, anchor.dec);
+    return hit && separationArcsec(hit, anchor) <= 1.5 * DETECTOR_ARCSEC;
+  }).length : 0;
+  const limits = visitsB.map((v) => limitAB(v.stamp.meta?.detectorSigma)).filter((x) => x != null).sort((x, y) => x - y);
+  return {
+    anchor,
+    anchored: Boolean(anchorHit),
+    stillThere,
+    result,
+    limit: limits.length ? limits[limits.length >> 1] : null,
+    datesA: [visitsA[0].frame, visitsA[visitsA.length - 1].frame],
+    visitsB: visitsB.map((v) => v.frame),
+  };
+}
+
+/**
+ * Draw one mark's arc on the plate, or none. The arc is for the season-B visit
+ * that matched, or the first one read; the visits of one season are days
+ * apart, which at these distances moves the arc far less than the parallax.
+ */
+function showLink(m) {
+  const link = m?.link;
+  if (!link || link.state !== 'done' || !link.shown) {
+    sky.link = null;
+    sky.draw();
+    return;
+  }
+  for (const other of sky.marks) if (other !== m && other.link) other.link.shown = false;
+  const hit = link.result.link;
+  const mjdB = hit ? hit.visits[0].mjd : link.visitsB[0].mjd;
+  const { ra, dec, mjd } = link.anchor;
+  const points = parallaxArc(ra, dec, mjd, mjdB, distanceGrid({ near: NEAR_AU, far: FAR_AU, steps: 240 }));
+  const ticks = ARC_TICKS_AU.map((d) => ({
+    d,
+    point: arcPoint(ra, dec, mjd, mjdB, d),
+    next: arcPoint(ra, dec, mjd, mjdB, d * 1.02),
+  })).filter((tk) => tk.point && tk.next);
+  sky.link = {
+    mark: m,
+    points,
+    ticks,
+    match: hit ? hit.visits[0].at : null,
+    tickLabel: (d) => t('link.tick', { d: String(d) }),
+  };
+  sky.draw();
+}
+
+/** The lines and buttons a mark's link puts in its card. */
+function linkLines(m) {
+  const out = [];
+  const link = m.link;
+  if (link?.state !== 'reading') {
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'link mark__csv';
+    go.textContent = t(link && link.state !== 'single' ? 'link.again' : 'link.run');
+    go.title = t('link.what');
+    go.addEventListener('click', () => linkMark(m));
+    out.push(go);
+  }
+  if (!link) return out;
+
+  const line = (text, tone) => {
+    const p = document.createElement('p');
+    p.className = 'mark__detail mark__link';
+    if (tone) p.dataset.tone = tone;
+    p.textContent = text;
+    out.push(p);
+  };
+  if (link.state === 'reading') {
+    line(t('link.reading', { n: link.n, total: link.total }), 'wait');
+    return out;
+  }
+  if (link.state === 'single') { line(t('link.single', { band: link.band })); return out; }
+  if (link.state === 'failed') { line(t('link.failed', { why: link.why ?? '' })); return out; }
+
+  const r = link.result;
+  const dateB = fmtDate(link.visitsB[0].iso);
+  if (!r.covered) {
+    line(t('link.outside', { near: fmt(NEAR_AU, 0), far: fmt(FAR_AU, 0) }));
+  } else if (r.link) {
+    const h = r.link;
+    line(t(link.anchored ? 'link.linked' : 'link.unanchored', {
+      d: fmt(h.d, 0), near: fmt(h.near, 0), far: fmt(h.far, 0),
+      mag: h.mag != null ? fmt(h.mag, 1) : '—', band: link.band,
+      n: h.visits.length, total: r.checked, date: dateB,
+    }), 'counter');
+    line(t('link.check'));
+  } else {
+    line(t('link.nothing', {
+      near: fmt(r.covered.near, 0), far: fmt(r.covered.far, 0),
+      limit: link.limit != null ? fmt(link.limit, 1) : '—', band: link.band, n: r.checked, date: dateB,
+    }));
+  }
+  if (r.covered) {
+    line(t('link.covered', {
+      near: fmt(r.covered.near, 0), far: fmt(r.covered.far, 0), from: fmt(NEAR_AU, 0), to: fmt(FAR_AU, 0),
+    }), 'quiet');
+  }
+  if (!link.anchored) line(t('link.noAnchor', { date: fmtDate(link.datesA[0].iso) }));
+  if (link.stillThere) line(t('link.stillThere', { n: link.stillThere, total: r.checked }));
+  if (r.staticCount) line(t('link.static', { n: r.staticCount }), 'quiet');
+  if (r.checked < 2) line(t('link.oneVisit'));
+  line(t('link.how'), 'quiet');
+
+  const acts = document.createElement('p');
+  acts.className = 'mark__link-acts';
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'link mark__csv';
+  toggle.setAttribute('aria-pressed', String(Boolean(link.shown)));
+  toggle.textContent = t(link.shown ? 'link.hideArc' : 'link.showArc');
+  toggle.addEventListener('click', () => {
+    link.shown = !link.shown;
+    showLink(link.shown ? m : null);
+    renderMarks();
+  });
+  acts.append(toggle);
+  // To the season-B visit on the run, if one is loaded; the arc stays drawn.
+  const target = link.loadedB ? sky.visits.indexOf(link.loadedB) : -1;
+  if (target >= 0) {
+    const jump = document.createElement('button');
+    jump.type = 'button';
+    jump.className = 'link mark__csv';
+    jump.textContent = t('link.jump', { date: fmtDate(link.loadedB.frame.iso) });
+    jump.addEventListener('click', () => {
+      link.shown = true;
+      showLink(m);
+      stopPlayback();
+      selectMode('single');
+      sky.setIndex(target);
+      syncScrub();
+      refreshKnownObjects();
+      renderMarks();
+    });
+    acts.append(jump);
+  }
+  out.push(acts);
+  return out;
 }
 
 /* ------------------------------------------------------------- opening a field */
@@ -3752,7 +4045,7 @@ function wire() {
     });
   }
 
-  $('clear-marks').addEventListener('click', () => { sky.marks = []; sky.draw(); renderMarks(); });
+  $('clear-marks').addEventListener('click', () => { sky.marks = []; sky.link = null; sky.draw(); renderMarks(); });
   $('mark-centre').addEventListener('click', () => {
     if (state.ra == null || !sky.visits.length) return;
     addMark(state.ra, state.dec);
