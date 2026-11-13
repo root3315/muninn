@@ -328,7 +328,7 @@ function updateIdentity() {
   // numbers still read; they no longer compete with the finding above them.
   const mjds = ready.map((v) => v.frame.mjd);
   const bands = [...new Set(ready.map((v) => v.frame.band))];
-  const span = `${fmt(Math.min(...ready.map((v) => v.frame.emMin)), 2)}–${fmt(Math.max(...ready.map((v) => v.frame.emMax)), 2)} µm`;
+  const span = `${fmt(Math.min(...ready.map((v) => v.frame.emMin)), 2)}–${fmt(Math.max(...ready.map((v) => v.frame.emMax)), 2)} ${t('unit.um')}`;
   state.facts = {
     visits: ready.length,
     days: Math.round(Math.max(...mjds) - Math.min(...mjds)),
@@ -1306,7 +1306,7 @@ function renderWhen() {
     // Two months do not fit the column at the date's own size; one line, smaller.
     $('when-date').dataset.range = String(!sameMonth);
     $('when-time').textContent = y0 === y1 ? y0 : `${y0} – ${y1}`;
-    $('when-band').textContent = `${frame.band} · ${fmt(frame.emMin, 2)}–${fmt(frame.emMax, 2)} µm`;
+    $('when-band').textContent = `${frame.band} · ${fmt(frame.emMin, 2)}–${fmt(frame.emMax, 2)} ${t('unit.um')}`;
     $('when-of').textContent = t('frame.stack', { n: season.length });
     $('when-flags').textContent = '';
     for (const [id, dir] of [['prev', -1], ['next', 1]]) {
@@ -1320,7 +1320,7 @@ function renderWhen() {
   writeNight(frame ? fmtDate(frame.iso).replace(/\s*г\.?$/, '') : '—');
   $('when-date').dataset.range = 'false';
   $('when-time').textContent = frame ? fmtTime(frame.iso) : '';
-  $('when-band').textContent = frame ? `${frame.band} · ${fmt(frame.emMin, 2)}–${fmt(frame.emMax, 2)} µm` : '';
+  $('when-band').textContent = frame ? `${frame.band} · ${fmt(frame.emMin, 2)}–${fmt(frame.emMax, 2)} ${t('unit.um')}` : '';
   $('when-of').textContent = i >= 0 && list.length
     ? t('frame.visit', { i: i + 1, n: list.length })
     : '';
@@ -1342,7 +1342,7 @@ function renderWhen() {
 function updateReadout(sample) {
   const shown = sky?.current;
   const frame = shown?.frame;
-  $('ro-lambda').textContent = frame ? `${fmt(frame.emMin, 2)}–${fmt(frame.emMax, 2)} µm` : '—';
+  $('ro-lambda').textContent = frame ? `${fmt(frame.emMin, 2)}–${fmt(frame.emMax, 2)} ${t('unit.um')}` : '—';
   $('ro-obs').textContent = frame ? `${fmtDate(frame.iso)} ${fmtTime(frame.iso)}` : '—';
 
   if (sample) {
@@ -2470,7 +2470,7 @@ function populateBands() {
     const range = bandRange(state.frames, b);
     const opt = document.createElement('option');
     opt.value = b;
-    opt.textContent = range ? `${b} · ${fmt(range[0], 2)}–${fmt(range[1], 2)} µm` : b;
+    opt.textContent = range ? `${b} · ${fmt(range[0], 2)}–${fmt(range[1], 2)} ${t('unit.um')}` : b;
     select.append(opt);
   }
   select.value = present.includes(state.band) ? state.band : 'all';
@@ -2517,7 +2517,7 @@ function renderLambda(present) {
     box.append(b);
   };
 
-  const span = (lo, hi) => `${fmt(lo, 2)}–${fmt(hi, 2)} µm`;
+  const span = (lo, hi) => `${fmt(lo, 2)}–${fmt(hi, 2)} ${t('unit.um')}`;
   const ranges = present.map((b) => bandRange(state.frames, b)).filter(Boolean);
   chip('all', t('field.bandAll'), ranges.length
     ? span(Math.min(...ranges.map((r) => r[0])), Math.max(...ranges.map((r) => r[1]))) : '');
@@ -3501,7 +3501,9 @@ function renderArchives() {
   if (!box) return;
   box.hidden = archives === null;
   const list = Array.isArray(archives) ? archives : [];
-  $('archives-count').textContent = list.length ? String(list.length) : '';
+  // The list shows eight; the count says how many there are, and that.
+  $('archives-count').textContent = !list.length ? ''
+    : list.length > 8 ? t('archives.of', { shown: 8, n: list.length }) : String(list.length);
   $('archives-note').textContent = archives === 'asking' ? t('archives.asking')
     : archives === 'failed' ? t('archives.failed')
       : list.length ? t('archives.lede') : t('archives.none');
@@ -3917,7 +3919,9 @@ async function boot() {
   const hash = readHash();
   let stored = null;
   try { stored = localStorage.getItem('muninn.lang'); } catch { /* private window */ }
-  setLanguage(hash.lang ?? stored ?? (navigator.language?.startsWith('ru') ? 'ru' : 'en'));
+  // The hash for a shared field, the query for a plain link (/?lang=en), then what this browser chose before.
+  const asked = hash.lang ?? new URLSearchParams(location.search).get('lang');
+  setLanguage(['en', 'ru'].includes(asked) ? asked : stored ?? (navigator.language?.startsWith('ru') ? 'ru' : 'en'));
   loadExamined();
 
   sky = new SkyView($('sky'), {

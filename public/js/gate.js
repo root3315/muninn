@@ -916,6 +916,11 @@ export class Gate {
       const pinned = near && !this.coarse;
       if ((tgt.kind !== 'deep' || near) && !pinned) {
         ctx.globalAlpha = near ? 1 : 0.8;
+        // A dark edge under the letters: a star behind a name struck it through.
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = 3 * dpr;
+        ctx.strokeStyle = this.tint(this.paint.well, 0.85);
+        ctx.strokeText(tgt.label, x + r + 7 * dpr, y);
         ctx.fillStyle = near ? ink : colour;
         ctx.fillText(tgt.label, x + r + 7 * dpr, y);
       }
