@@ -21,6 +21,7 @@ import { drawStrip } from './strip.js';
 import { themeTransition } from './twilight.js';
 import { planetsNow } from './ephemeris.js';
 import { rankCandidates } from './hunt.js';
+import { tooSharp, STAR_MAX_SHARE, MIN_JUDGED_SNR } from './sharpness.js';
 import { FRAME_FILE_MB } from './release.js';
 import { deadline, CATALOG_DEADLINE_MS } from './net.js';
 import { paint, rampFromToken, sortedFinite, limitsFromSorted } from './render.js';
@@ -33,6 +34,7 @@ import { spectrumBlock } from './spectrum-view.js';
 import { trackCSV } from './export.js';
 import { SkyView, shortName, mostlySaturated } from './sky.js';
 import { loadWise, WISE_BANDS } from './wise.js';
+import { drawGaiaSky, psfFor } from './gaiasky.js';
 import { fieldArchives, CADC_SEARCH } from './archives.js';
 import {
   SIMBAD_PAGE, VIZIER_PAGE,
@@ -90,7 +92,7 @@ const state = {
   survey: 'off',
   /** The object the field was opened for, marked on the plate (see fieldTarget). */
   target: null,
-  /** The AllWISE band shown as B of the wipe (1 or 2), or null. */
+  /** What B of the wipe shows instead of a visit: AllWISE band 1 or 2, 'gaia' (the model), or null. */
   reference: null,
   skyLayers: { stars: false, deep: false },
 };
@@ -606,7 +608,13 @@ async function runHunt() {
     if (seen.some((c) => Math.hypot(deltaRA(c.ra, ra) * cos, c.dec - dec) * 3600 < 30)) continue;
 
     const analysis = sky.trackMark(ra, dec);
-    seen.push({ ra, dec, sector: hit.sector, visit: hit.visit, obsId: visit.frame.obsId, analysis });
+    // The detection that made it stand out: one pixel's worth of light there
+    // is a particle hit or a hot pixel, and no candidate.
+    const standout = analysis.track.find((p) => p.obsId === visit.frame.obsId);
+    seen.push({
+      ra, dec, sector: hit.sector, visit: hit.visit, obsId: visit.frame.obsId, analysis,
+      tooSharp: tooSharp(standout?.sharp),
+    });
     // Yield so a dozen tracks do not freeze the frame the user is watching.
     await breathe();
     if (gen !== fieldSeq) return;
@@ -815,11 +823,15 @@ function renderFlashes(found) {
   const caught = state.caught ?? [];
   const near = (c, k) => c.obsId === k.obsId
     && separation(c.at.ra, c.at.dec, k.at.ra, k.at.dec) * 3600 <= 2 * DETECTOR_ARCSEC;
-  const unnamed = (found?.flashes ?? [])
+  const nameless = (found?.flashes ?? [])
     .map((c) => ({ ...c, catalog: huntVerdict(c, true) }))
     .filter((c) => c.catalog.state !== 'match' && !caught.some((k) => near(c, k)));
+  // Light in one detector pixel: shown on a card of its own, said for what
+  // it most likely is, and kept apart from the flashes still open.
+  const sharp = nameless.filter((c) => c.tooSharp);
+  const unnamed = nameless.filter((c) => !c.tooSharp);
 
-  const total = caught.length + unnamed.length;
+  const total = caught.length + nameless.length;
   head.hidden = !total;
   $('flash-note').hidden = !caught.length;
   if (!total) return;
@@ -924,7 +936,54 @@ function renderFlashes(found) {
     li.append(title, id, dates);
     list.append(li);
   }
+
+  if (sharp.length) list.append(sharpCard(sharp));
 }
+
+/**
+ * The flashes whose light sat in one detector pixel. Each date carries the
+ * measured share of the 3 × 3 light in that pixel against the bar a star
+ * could not pass at that brightness, so the call can be checked, not taken.
+ */
+function sharpCard(sharp) {
+  const li = document.createElement('li');
+  li.className = 'cand cand--sharp';
+
+  const title = document.createElement('p');
+  title.className = 'cand__where';
+  title.dataset.known = 'sharp';
+  title.textContent = t('sharp.title', { n: sharp.length });
+
+  const why = document.createElement('p');
+  why.className = 'cand__id';
+  why.textContent = t('sharp.why', { most: pct(STAR_MAX_SHARE) });
+
+  const dates = document.createElement('ul');
+  dates.className = 'cand__sharp';
+  for (const c of sharp) {
+    const v = sky.visits.find((x) => x.frame.obsId === c.obsId);
+    const row = document.createElement('li');
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'link cand__go';
+    go.textContent = v ? dateLabel(v.frame.iso) : '—';
+    go.addEventListener('click', () => showFlash(c));
+    const share = document.createElement('span');
+    share.className = 'num';
+    share.textContent = t('sharp.share', { share: pct(c.at.sharp.share), limit: pct(c.at.sharp.limit) });
+    row.append(go, share);
+    dates.append(row);
+  }
+
+  li.append(title, why, dates);
+  return li;
+}
+
+/**
+ * A share as a whole percentage. Neighbours a little below the background
+ * can carry it past one; "all of it" is the honest reading of that.
+ */
+const pct = (x) => fmt(Math.min(x, 1) * 100, 0);
 
 /** Go to the visit a flash was in, and mark it there. */
 function showFlash(c) {
@@ -1375,8 +1434,10 @@ function fillSlots() {
       if (id === 'slot-b') sel.append(wiseOptions());
       sel.dataset.signature = signature;
     }
-    sel.value = id === 'slot-b' && state.reference ? `wise${state.reference}` : String(current);
+    sel.value = id === 'slot-b' && state.reference ? referenceValue(state.reference) : String(current);
     sel.disabled = id === 'slot-a' ? list.length < 2 : !list.length;
+    // A long choice is cut by the width of the list; its whole name is the title.
+    sel.title = sel.selectedOptions[0]?.textContent ?? '';
   }
 }
 
@@ -2210,7 +2271,7 @@ const CALL = {
 };
 
 /** What the measurement amounts to, in the fewest words that are still true. */
-const callOf = (a) => t(CALL[a?.kind ?? 'none'] ?? CALL.none);
+const callOf = (a) => (tooSharp(shapeOf(a)) ? t('sharp.call') : t(CALL[a?.kind ?? 'none'] ?? CALL.none));
 
 function verdict(a) {
   if (!a || a.kind === 'none') return t('mark.undetected', { total: a?.total ?? 0 });
@@ -2232,6 +2293,30 @@ function verdict(a) {
     return t('mark.intermittentDates', { seen: a.seen, total: a.total, dates });
   }
   return t('mark.intermittent', { seen: a.seen, total: a.total, rms: fmt(a.rms, 1) });
+}
+
+/**
+ * Star's shape or one pixel, for a mark seen in one visit (or two, the
+ * second one weak): the measured share of the 3 × 3 light in the brightest
+ * detector pixel, and the bar a star could not pass at that brightness.
+ * Marks seen across many visits are stars or movers by their own record.
+ */
+function shapeOf(a) {
+  if (!a?.track?.length || a.seen > 2) return null;
+  const at = a.kind === 'transient' ? a.at : a.track.reduce((b, p) => ((p.snr ?? 0) > (b.snr ?? 0) ? p : b));
+  return at?.sharp ?? null;
+}
+
+/** The shape reading of a mark as a line of its card, or null. */
+function sharpLine(a) {
+  const v = shapeOf(a);
+  if (!v) return null;
+  const p = document.createElement('p');
+  p.className = 'mark__detail mark__shape';
+  p.dataset.verdict = v.verdict;
+  const words = { share: pct(v.share), limit: v.limit ? pct(v.limit) : '', snr: fmt(v.snr, 0), min: fmt(MIN_JUDGED_SNR, 0) };
+  p.textContent = t(`sharp.mark.${v.verdict}`, words);
+  return { line: p, sharp: v.verdict === 'sharp' };
 }
 
 /**
@@ -2392,6 +2477,11 @@ function renderMarks() {
     // "no match in SkyBoT" under it only raised the question of why anyone
     // asked. What it is comes from the star catalogues instead.
     body.append(call, detail);
+    const shape = sharpLine(m.analysis);
+    if (shape) {
+      if (shape.sharp) call.dataset.kind = 'sharp';
+      body.append(shape.line);
+    }
     const motion = saturatedMotion(m);
     if (motion) {
       const p = document.createElement('p');
@@ -3547,7 +3637,7 @@ function renderVerdict() {
     // no place for "probably nothing". A known asteroid caught is a finding.
     const moved = found.list?.length ?? 0;
     const caught = [...new Set((state.caught ?? []).map((c) => c.catalog.name))];
-    const flashes = found.flashes?.length ?? 0;
+    const flashes = found.flashes?.filter((c) => !c.tooSharp).length ?? 0;
     line.textContent = moved
       ? t('verdict.moved', { n: moved })
       : caught.length
@@ -4517,13 +4607,19 @@ function renderNeossat(n) {
   if (n.fits) fitsLink.href = n.fits;
 }
 
-/* ------------------------------------------------- AllWISE beside the frame */
+/* ------------------------------------- another survey beside the frame */
 
-/** Where the AllWISE picture for the open field stands: asking, ok or failed. */
+/** Where the picture beside the frame stands for the open field: asking, ok or failed. */
 let referenceStatus = null;
 
-/** The AllWISE choices at the foot of B's list. */
+/** A choice as B's list names it: `wise1`, `wise2` or `gaia`. */
+const referenceValue = (ref) => (ref === 'gaia' ? 'gaia' : `wise${ref}`);
+/** And back: the AllWISE band as a number, Gaia as its name, nothing as null. */
+const referenceOf = (value) => (value === 'gaia' ? 'gaia' : Number(String(value).replace('wise', '')) || null);
+
+/** The other surveys at the foot of B's list: the AllWISE pictures, then the Gaia model. */
 function wiseOptions() {
+  const frag = document.createDocumentFragment();
   const group = document.createElement('optgroup');
   group.label = t('ref.group');
   for (const band of [1, 2]) {
@@ -4532,60 +4628,109 @@ function wiseOptions() {
     opt.textContent = t('ref.option', { band: WISE_BANDS[band].name, micron: fmt(WISE_BANDS[band].micron, 1) });
     group.append(opt);
   }
-  return group;
+  const model = document.createElement('optgroup');
+  model.label = t('ref.gaiaGroup');
+  const opt = document.createElement('option');
+  opt.value = 'gaia';
+  opt.textContent = t('ref.gaiaLabel');
+  model.append(opt);
+  frag.append(group, model);
+  return frag;
 }
 
 /**
- * Put AllWISE as B of the wipe (band 1 or 2), or take it away (null). The
- * wipe is the one mode where two instruments can sit side by side honestly:
- * a difference across them would subtract one camera's units from another's.
+ * Put another survey as B of the wipe — AllWISE band 1 or 2, or the Gaia
+ * model ('gaia') — or take it away (null). The wipe is the one mode where two
+ * instruments can sit side by side honestly: a difference across them would
+ * subtract one camera's units from another's.
  */
-function chooseReference(band) {
-  state.reference = band;
+function chooseReference(ref) {
+  state.reference = ref;
   for (const radio of document.querySelectorAll('input[name="refimg"]')) {
-    radio.checked = Number(radio.value) === (band ?? 0);
+    radio.checked = radio.value === String(ref ?? 0);
   }
-  sky.setUseRef(Boolean(band));
-  if (band) {
+  sky.setUseRef(Boolean(ref));
+  if (ref) {
     if (sky.mode !== 'wipe') {
       for (const radio of document.querySelectorAll('input[name="mode"]')) radio.checked = radio.value === 'wipe';
       applyMode('wipe');
     }
-    if (sky.ref?.bandNumber !== band && sky.grid && state.ra != null) loadReference(state.abort?.signal);
+    if (sky.ref?.key !== ref && sky.grid && state.ra != null) loadReference(state.abort?.signal);
   }
   fillSlots();
   $('mode-hint').textContent = modeHint(sky.mode);
 }
 
 async function loadReference(signal) {
-  const band = state.reference;
+  const ref = state.reference;
   const grid = sky.grid;
-  if (!band || !grid) return;
+  if (!ref || !grid) return;
   referenceStatus = 'asking';
   sky.setReference(null);
   // A new field's reset put B back on a visit; the choice still stands.
   sky.setUseRef(true);
   $('mode-hint').textContent = modeHint(sky.mode);
   try {
-    const ref = await loadWise(grid, band, { signal });
-    // Another field, or another band, has been asked for since.
-    if (signal?.aborted || sky.grid !== grid || state.reference !== band) return;
-    sky.setReference({ ...ref, bandNumber: band });
+    const made = ref === 'gaia' ? await gaiaModel(grid, signal) : await loadWise(grid, ref, { signal });
+    // Another field, or another choice, has been asked for since.
+    if (signal?.aborted || sky.grid !== grid || state.reference !== ref) return;
+    sky.setReference({ ...made, key: ref });
     referenceStatus = 'ok';
   } catch {
-    if (signal?.aborted || sky.grid !== grid || state.reference !== band) return;
+    if (signal?.aborted || sky.grid !== grid || state.reference !== ref) return;
     referenceStatus = 'failed';
   }
   $('mode-hint').textContent = modeHint(sky.mode);
 }
 
+/**
+ * The Gaia sky of the field: the same Gaia DR3 rows the overlay draws (asked
+ * of IRSA or MAST through the relay, so it stands when CDS is down), drawn
+ * by gaiasky.js. It follows A's date: `follow` draws the stars again where
+ * they stood at another visit.
+ */
+async function gaiaModel(grid, signal) {
+  const limit = magLimit(state.fov);
+  const have = sky.surveys.gaia;
+  const found = have?.limit === limit
+    ? have
+    : await surveySources('gaia', {
+      ra: state.ra, dec: state.dec, radiusDeg: searchRadius(grid.fovDeg, grid.fovHeightDeg), limit,
+    }, { signal });
+  const fwhm = psfFor(state.band);
+  const draw = (mjd) => {
+    const { limits, drawn, ...stamp } = drawGaiaSky(grid, found.rows, { mjd, fwhmArcsec: fwhm });
+    return { stamp: { ...stamp, limits }, drawn, mjd };
+  };
+  const a = sky.visits[sky.a];
+  return {
+    ...draw(a?.frame.mjd), follow: draw, model: true,
+    fwhm, limit: found.reached ?? limit, capped: Boolean(found.cut),
+  };
+}
+
 function referenceHint() {
+  if (state.reference === 'gaia') return gaiaHint();
   const { name, micron } = WISE_BANDS[state.reference];
   const words = { band: name, micron: fmt(micron, 1) };
   if (referenceStatus === 'failed') return t('ref.failed', words);
   if (referenceStatus !== 'ok' || !sky.ref) return t('ref.asking', words);
   const a = sky.visits[sky.a];
   return t('ref.hint', { ...words, date: a ? fmtDate(a.frame.iso) : '' });
+}
+
+/** What the Gaia model is, how deep and how wide, and what it is for. */
+function gaiaHint() {
+  if (referenceStatus === 'failed') return t('ref.gaiaFailed');
+  const ref = sky.ref;
+  if (referenceStatus !== 'ok' || !ref?.model) return t('ref.gaiaAsking');
+  const a = sky.visits[sky.a];
+  const band = state.band === 'all' ? t('ref.gaiaAnyBand') : state.band;
+  const head = t('ref.gaiaHint', {
+    date: a ? fmtDate(a.frame.iso) : '', n: ref.drawn, lim: fmt(ref.limit, 1), fwhm: fmt(ref.fwhm, 1), band,
+  });
+  const cut = ref.capped ? ` ${t('ref.gaiaCut', { cap: ROW_CAP })}` : '';
+  return `${head}${cut} ${t('ref.gaiaUse')}`;
 }
 
 function applyMode(mode) {
@@ -4693,16 +4838,22 @@ function wire() {
 
   $('scrub').addEventListener('input', (e) => { holdStill(); jumpToNearest(Number(e.target.value)); });
 
-  $('slot-a').addEventListener('change', (e) => { sky.setAB(Number(e.target.value), null); syncScrub(); refreshKnownObjects(); });
+  $('slot-a').addEventListener('change', (e) => {
+    sky.setAB(Number(e.target.value), null);
+    syncScrub();
+    refreshKnownObjects();
+    // The survey beside A names A's date, and the Gaia model has just moved to it.
+    if (state.reference) $('mode-hint').textContent = modeHint(sky.mode);
+  });
   $('slot-b').addEventListener('change', (e) => {
     const v = e.target.value;
-    if (v.startsWith('wise')) { chooseReference(Number(v.slice(4))); return; }
+    if (v.startsWith('wise') || v === 'gaia') { chooseReference(referenceOf(v)); return; }
     chooseReference(null);
     sky.setAB(null, Number(v));
     syncScrub();
   });
   for (const radio of document.querySelectorAll('input[name="refimg"]')) {
-    radio.addEventListener('change', (e) => { if (e.target.checked) chooseReference(Number(e.target.value) || null); });
+    radio.addEventListener('change', (e) => { if (e.target.checked) chooseReference(referenceOf(e.target.value)); });
   }
 
   for (const radio of document.querySelectorAll('input[name="mode"]')) {
@@ -4956,6 +5107,8 @@ async function boot() {
     onHover: (sample) => updateReadout(sample ?? undefined),
     onPick: ({ ra, dec }) => { addMark(ra, dec); retrackMarks(); showLatestMark(); },
     onItem: (hit, x, y) => showTip(hit, x, y),
+    // The Gaia model has moved to another visit's date; its caption names it.
+    onReferenceMoved: () => { $('mode-hint').textContent = modeHint(sky.mode); },
   });
   labelSky();
 

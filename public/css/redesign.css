@@ -1159,3 +1159,15 @@ body { font-size: var(--text-base); line-height: 1.5; }
 
 /* The brightness choice names itself, so it does not read as a star filter. */
 .scaling .segments__k { cursor: help; }
+
+/* ===================================== Too sharp for a star; the Gaia model */
+
+/* Flashes whose light sat in one detector pixel: kept in view, quieter than
+   the unnamed ones, each date with its measured share against the bar. */
+.cand__where[data-known="sharp"] { color: var(--color-muted); }
+.cand__sharp { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3xs); }
+.cand__sharp li { display: grid; justify-items: start; font-size: var(--text-xs); color: var(--color-neutral); }
+.cand__sharp .cand__go { font-family: var(--font-mono); font-size: var(--text-xs); }
+.cand__sharp .num { font-family: var(--font-body); font-variant-numeric: tabular-nums; }
+.mark__call[data-kind="sharp"] { color: var(--color-muted); }
+.mark__shape[data-verdict="sharp"] { color: var(--color-ink); }
