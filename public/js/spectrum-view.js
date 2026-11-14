@@ -429,7 +429,13 @@ export function spectrumBlock(mark, onRead) {
   view.bar.style.setProperty('--done', busy ? String(progress(spectrum).share) : '1');
 
   if (!spectrum) {
-    view.body.replaceChildren(el('p', 'spectrum__note', t('spectrum.hint', { pool: MAX_POOL, max: MAX_MEASURED })));
+    // The cost in one line; how it is counted, folded under it.
+    const how = document.createElement('details');
+    how.className = 'spectrum__how';
+    const summary = document.createElement('summary');
+    summary.textContent = t('spectrum.how');
+    how.append(summary, el('p', 'spectrum__note', t('spectrum.hint', { pool: MAX_POOL, max: MAX_MEASURED })));
+    view.body.replaceChildren(el('p', 'spectrum__cost', t('spectrum.cost', { pool: MAX_POOL, max: MAX_MEASURED })), how);
     return view.root;
   }
   const points = pointsOf(spectrum);
