@@ -814,7 +814,8 @@ a { color: inherit; }
 }
 
 @media (pointer: coarse) {
-  .bar__lang, .bar__link { min-block-size: 44px; }
+  .bar__lang, .bar__link, .bar__brand { min-block-size: 44px; }
+  .bar__brand { display: inline-flex; align-items: center; }
   .bar__lang, .bar__link { min-inline-size: 44px; justify-content: center; }
   .reads button { min-block-size: 44px; align-items: center; }
   .foot__scale button { block-size: 44px; }

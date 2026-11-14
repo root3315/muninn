@@ -1581,3 +1581,13 @@ body { font-size: var(--text-base); line-height: 1.5; }
 /* "How to read this" while it is the place to start: the phone's muted link
    colour won over the pill's own ink, light words on a light pill. */
 .mast .mast__acts .link[data-cue] { color: var(--color-accent-ink); }
+
+/* The last few places to press that were under a finger's width on a touch
+   screen: the search boxes, the card's two ways on, a mark's fold and the
+   spectrum's "how". */
+@media (pointer: coarse) {
+  .find__input, .gate__input { min-block-size: 44px; }
+  .gate-card__go, .gate-card__planets { min-block-size: 44px; }
+  .mark__fold { inline-size: 44px; block-size: 44px; }
+  .spectrum__how summary { padding-block: 13px; }
+}
