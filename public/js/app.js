@@ -15,12 +15,13 @@
 
 import { t, tIn, setLanguage, getLanguage, applyTranslations, fmt, fmtDate, fmtDay, fmtTime } from './i18n.js';
 import { skySigma, stackDepth, shortfall, limitAB, PLANET_NINE_V } from './depth.js';
-import { scoreSectors, standouts, peakIndex, sectorBounds, SECTOR_COUNT } from './sectors.js';
+import { scoreSectors, standouts, SECTOR_COUNT } from './sectors.js';
 import { Gate, loadStars } from './gate.js';
 import { drawStrip } from './strip.js';
 import { themeTransition } from './twilight.js';
 import { planetsNow } from './ephemeris.js';
 import { rankCandidates } from './hunt.js';
+import { searchField } from './huntcore.js';
 import { tooSharp, STAR_MAX_SHARE, MIN_JUDGED_SNR } from './sharpness.js';
 import { FRAME_FILE_MB } from './release.js';
 import { deadline, CATALOG_DEADLINE_MS } from './net.js';
@@ -620,72 +621,22 @@ let askSeq = 0;
 
 async function runHunt() {
   const gen = fieldSeq;
-  const hits = standouts(state.sectors, { minScore: 4, limit: 12 });
-  const seen = [];
-  const cos = Math.cos((state.dec * Math.PI) / 180);
   // The visits the sector scores were taken over. More land while visits
   // fill in, and they shift the indexes the scores are in; a search run again
   // later must read the same list the scores came from.
   const visits = state.sectors?.list ?? sky.visits.slice();
-
-  for (const hit of hits) {
-    const visit = visits[hit.visit];
-    if (!visit) continue;
-    const at = peakIndex(
-      visit.stamp.data, visit.stamp.width, visit.stamp.height, sectorBounds(hit.sector),
-    );
-    if (!at) continue;
-    const world = sky.grid.indexToWorld(at[0], at[1]);
-    if (!world) continue;
-    const [ra, dec] = world;
-    // The same peak found in two neighbouring cells is one object, not two.
-    if (seen.some((c) => Math.hypot(deltaRA(c.ra, ra) * cos, c.dec - dec) * 3600 < 30)) continue;
-
-    const analysis = sky.trackMark(ra, dec);
-    // The detection that made it stand out: one pixel's worth of light there
-    // is a particle hit or a hot pixel, and no candidate.
-    const standout = analysis.track.find((p) => p.obsId === visit.frame.obsId);
-    seen.push({
-      ra, dec, sector: hit.sector, visit: hit.visit, obsId: visit.frame.obsId, analysis,
-      tooSharp: tooSharp(standout?.sharp),
-    });
+  const found = await searchField({
+    sectors: state.sectors,
+    visits,
+    grid: sky.grid,
+    track: (ra, dec) => sky.trackMark(ra, dec),
+    dec: state.dec,
     // Yield so a dozen tracks do not freeze the frame the user is watching.
-    await breathe();
-    if (gen !== fieldSeq) return;
-  }
-
-  state.candidates = {
-    checked: hits.length, all: seen, list: rankCandidates(seen), flashes: flashesOf(seen), used: visits.length,
-  };
+    pause: async () => { await breathe(); return gen === fieldSeq; },
+  });
+  if (!found) return;
+  state.candidates = found;
   renderVerdict();
-}
-
-/**
- * What stood out in one visit and is gone in the rest.
- *
- * The hunt ranks movers, and a mover needs positions in several visits to have
- * a rate. A main-belt asteroid never gives it that: at twenty arcsec an hour it
- * crosses the field in hours, and SPHEREx comes back days later. It shows up as
- * a bright spot in exactly one visit — which is what the Atala field is for —
- * and the hunt used to answer "nothing moved" over the top of it. These are
- * kept as a list of their own and checked against SkyBoT for that one visit.
- *
- * "One visit" allows a second, weaker detection, because a star or a noise
- * peak inside the measuring box in another visit is common; more than a fifth
- * of the visits and it is something that sits there and flickers, not a flash.
- */
-function flashesOf(seen) {
-  return seen
-    .filter((c) => {
-      const a = c.analysis;
-      if (a?.kind === 'transient') return true;
-      return a?.kind === 'intermittent' && a.seen <= Math.max(2, Math.round(a.total * 0.2));
-    })
-    .map((c) => {
-      // Where it was in the visit it stood out in, measured, not the peak cell.
-      const at = c.analysis.track.find((p) => p.obsId === c.obsId) ?? { ra: c.ra, dec: c.dec };
-      return { ...c, at };
-    });
 }
 
 /** SkyBoT's word on a hunt result: a mover over every visit it was seen in, a flash over its own. */
