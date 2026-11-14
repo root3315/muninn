@@ -39,6 +39,8 @@ import { tv } from './strings.js';
 const D2R = Math.PI / 180;
 const D = LAYOUT.depth;
 const MJD_UNIX = 40587;
+/** How far on the stars are shown, to make their own motion visible: years. */
+const STAR_YEARS = 10000;
 
 const POINT_VERTEX = /* glsl */ `
   attribute float sizeDeg;
@@ -298,7 +300,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
   const xSign = createPanel({ widthM: 1.0, heightM: 1.0, pxPerM: 640, name: 'planet-x' });
   {
     const r = depthMetres(600);
-    const p = along(r).addScaledVector(v3(frame.r), cone(r) * 1.25);
+    // Beside the field's picture at the corridor's end, clear of it.
+    const p = along(r).addScaledVector(v3(frame.r), cone(r) * 1.6);
     xSign.mesh.position.copy(p);
     xSign.mesh.scale.setScalar(r / 2.1);
     xSign.mesh.lookAt(0, 0, 0);
@@ -484,6 +487,10 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
     }
   }
   const pickables = { gaia: [], gaiaUnknown: [], bodies: [], galaxies: [], candidates: [], target: [] };
+  /** The tape: the first thing measured from, and the line drawn to the second. */
+  const tape = { from: null };
+  /** Time: the stars as they will stand this many years on, the bodies on this day of their season. */
+  const when = { years: 0, mjd: null, gaia: null, bodies: null };
   const shown = { stars: true, bodies: true, galaxies: true, unknown: true };
   const classOf = { gaia: 'stars', target: 'stars', gaiaUnknown: 'unknown', candidates: 'unknown', bodies: 'bodies', galaxies: 'galaxies' };
 
@@ -535,6 +542,16 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
       chip('filter', tv('vr.filterBodies', { n: state.bodies.length }), shown.bodies, 'bodies');
       chip('filter', tv('vr.filterGalaxies', { n: state.galaxies?.length ?? 0, m: state.galaxyCount ?? 0 }), shown.galaxies, 'galaxies');
       chip('filter', tv('vr.filterUnknown', { n: (g?.unknown ?? 0) + state.candidates.length }), shown.unknown, 'unknown');
+      row();
+      // Time: the stars' own motion over ten thousand years; the bodies along their season.
+      if (when.gaia) chip('years', tv(when.years ? 'vr.starsNow' : 'vr.starsLater', { n: fmt(STAR_YEARS, 0) }), Boolean(when.years));
+      const span = bodySpan();
+      if (span) {
+        chip('day', '‹', false, '-1');
+        chip('dayNow', formatDay(new Date(((when.mjd ?? span.at) - MJD_UNIX) * 86400000)), when.mjd != null && Math.abs(when.mjd - span.at) > 0.5);
+        chip('day', '›', false, '1');
+      }
+      if (tape.from) chip('tapeClear', tv('vr.tapeClear'));
       // What a metre along the corridor is worth now, in distance.
       const decades = Math.log10((D.maxPc * AU_PER_PC) / D.minAU);
       const perM = 10 ** (decades / (D.farM - D.nearM) / scaleNow);
@@ -564,10 +581,99 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
     if (!h) return;
     if (h.id === 'filter') { shown[h.data] = !shown[h.data]; applyFilters(); drawControls(); return; }
     if (h.id === 'morph') { api.toggleMorph(); return; }
+    if (h.id === 'years') { when.years = when.years ? 0 : STAR_YEARS; if (when.gaia) api.setGaia(...when.gaia); return; }
+    if (h.id === 'day') { stepBodies(Number(h.data)); return; }
+    if (h.id === 'dayNow') { when.mjd = null; if (when.bodies) api.setBodies(...when.bodies); return; }
+    if (h.id === 'tapeClear') { tape.from = null; clearLayer('tape'); drawControls(); return; }
     onAction?.(h.id);
   };
   controls.mesh.userData.pickable = (uv) => Boolean(controls.hitAt(uv));
   drawControls();
+
+  /* ---- the tape, the flight, and time ------------------------------- */
+
+  /** How far apart two things are, in the unit that reads best: AU, light years, parsecs. */
+  function apart(au) {
+    if (au < 2000) return tv('vr.tapeAU', { d: fmt(au, au < 10 ? 2 : 0) });
+    const ly = au / 63241.08;
+    if (ly < 1e5) return tv('vr.tapeLy', { d: fmt(ly, ly < 10 ? 2 : ly < 100 ? 1 : 0) });
+    const mpc = au / AU_PER_PC / 1e6;
+    return tv('vr.tapeMpc', { d: fmt(mpc, mpc < 10 ? 2 : 0) });
+  }
+
+  /** The true distance between two things with distances, through the angle between them on the sky. */
+  function between(a, b) {
+    const ca = Math.cos(a.dec * D2R);
+    const cb = Math.cos(b.dec * D2R);
+    const va = [ca * Math.cos(a.ra * D2R) * a.au, ca * Math.sin(a.ra * D2R) * a.au, Math.sin(a.dec * D2R) * a.au];
+    const vb = [cb * Math.cos(b.ra * D2R) * b.au, cb * Math.sin(b.ra * D2R) * b.au, Math.sin(b.dec * D2R) * b.au];
+    return Math.hypot(va[0] - vb[0], va[1] - vb[1], va[2] - vb[2]);
+  }
+
+  /** A picked thing's card, with the flight to it and the tape from or to it. */
+  function withTools(it, world) {
+    const content = it.card();
+    const actions = [...(content.actions ?? [])];
+    const lines = [...content.lines];
+    actions.push({ id: 'fly', label: tv('vr.flyTo'), run: () => onAction?.('fly', world) });
+    if (it.real?.au) {
+      if (tape.from && tape.from !== it) {
+        const d = between(tape.from.real, it.real);
+        lines.push({ text: tv('vr.tapeLine', { from: tape.from.name, d: apart(d) }), tone: 'accent' });
+        drawTape(tape.from, it, apart(d));
+        actions.push({ id: 'tapeFrom', label: tv('vr.tapeFrom'), run: () => { tape.from = it; clearLayer('tape'); drawControls(); } });
+      } else if (tape.from !== it) {
+        actions.push({ id: 'tapeFrom', label: tv('vr.tapeFrom'), run: () => { tape.from = it; drawControls(); } });
+      }
+    }
+    return { ...content, lines, actions };
+  }
+
+  /** The tape on the corridor: a line between the two, its true length at its middle. */
+  function drawTape(a, b, words) {
+    clearLayer('tape');
+    const layer = { objects: [], labels: [] };
+    layers.tape = layer;
+    layer.objects.push(lines([...a.pos, ...b.pos], look.accent, 0.95));
+    const mid = a.pos.map((x, k) => (x + b.pos[k]) / 2);
+    layer.labels.push(addLabel([words, tv('vr.tapeNote')], mid, { tone: 'accent', priority: 9 }));
+    drawControls();
+  }
+
+  /** The days the bodies' paths cover, and the visit's own day, or null. */
+  function bodySpan() {
+    const tracks = when.bodies?.[1];
+    if (!tracks?.size) return null;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const t of tracks.values()) for (const p of t) { lo = Math.min(lo, p.mjd); hi = Math.max(hi, p.mjd); }
+    if (!(hi > lo)) return null;
+    const at = when.bodies[0][0]?.mjd ?? (lo + hi) / 2;
+    return { lo, hi, at };
+  }
+
+  /** The bodies where their paths put them on day `mjd`, between the path's points. */
+  function bodiesOn(bodies, tracks, mjd) {
+    return bodies.map((b) => {
+      const t = tracks.get(b.name);
+      if (!t || t.length < 2) return b;
+      let k = t.findIndex((p) => p.mjd >= mjd);
+      if (k <= 0) k = k === 0 ? 1 : t.length - 1;
+      const p = t[k - 1];
+      const q = t[k];
+      const f = Math.max(0, Math.min(1, (mjd - p.mjd) / Math.max(1e-6, q.mjd - p.mjd)));
+      return { ...b, ra: p.ra + deltaRA(q.ra, p.ra) * f, dec: p.dec + (q.dec - p.dec) * f, dGeo: p.au + (q.au - p.au) * f, seen: false };
+    });
+  }
+
+  /** A step of a few days along the season, for the bodies. */
+  function stepBodies(d) {
+    const span = bodySpan();
+    if (!span) return;
+    const step = Math.max(1, (span.hi - span.lo) / 12);
+    when.mjd = Math.max(span.lo, Math.min(span.hi, (when.mjd ?? span.at) + d * step));
+    api.setBodies(...when.bodies);
+  }
 
   /** Labels are few: the field's own target, the bodies, a galaxy or two. */
   const objectLabels = () => labels.filter((l) => !l.keep).length;
@@ -604,7 +710,14 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
       }
       if (!best) return null;
       const world = v3(best.it.pos).applyMatrix4(group.matrixWorld);
-      return { card: best.it.card(), at: world, distance: best.distance };
+      return { card: withTools(best.it, world), at: world, distance: best.distance };
+    },
+    /** For the checks: where the `i`th pickable thing of a class stands, in the world. */
+    placeOf(kind, i = 0) {
+      const it = pickables[kind]?.[i];
+      if (!it) return null;
+      group.updateMatrixWorld();
+      return v3(it.pos).applyMatrix4(group.matrixWorld);
     },
     /** Between true distances and as seen from the Earth, eased over 1.2 s. */
     toggleMorph() {
@@ -629,7 +742,10 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
      * id when they came (`bj`: Map id → { r, lo, hi } in pc), or an Error.
      * `detected(ra, dec)` says whether SPHEREx sees the source in the visit on the screen.
      */
-    setGaia(rows, { bj = null, epoch = 2026, detected = () => false, limit = null } = {}) {
+    setGaia(rows, opts = {}) {
+      when.gaia = [rows, opts];
+      const { bj = null, detected = () => false, limit = null } = opts;
+      const epoch = (opts.epoch ?? 2026) + when.years;
       state.gaiaLimit = limit;
       if (rows instanceof Error) {
         state.failed.push('Gaia DR3');
@@ -679,7 +795,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
           { text: `${formatRA(o.ra)}  ${formatDec(o.dec)}`, mono: true, tone: 'neutral' },
         ],
       });
-      pickables.gaia = knownObjs.map((o, i) => ({ pos: knownItems[i].pos, card: starCard(o, knownItems[i].solid) }));
+      pickables.gaia = knownObjs.map((o, i) => ({ pos: knownItems[i].pos, card: starCard(o, knownItems[i].solid), real: { ra: o.ra, dec: o.dec, au: o.au }, name: `Gaia DR3 ${o.id}` }));
       const unknownObjs = objs.filter((o, i) => !placed[i].known);
       pickables.gaiaUnknown = items.filter((it) => !it.known).map((it, i) => ({ pos: it.pos, card: starCard(unknownObjs[i], it.solid) }));
       // The field's own target, named, with where its distance comes from:
@@ -715,6 +831,10 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
      * [{ ra, dec, au, mjd }].
      */
     setBodies(bodies, tracks = new Map()) {
+      if (!(bodies instanceof Error)) {
+        when.bodies = [bodies, tracks];
+        if (when.mjd != null) bodies = bodiesOn(bodies, tracks, when.mjd);
+      }
       if (bodies instanceof Error) {
         if (!state.failed.includes('SkyBoT')) state.failed.push('SkyBoT');
         drawSign();
@@ -727,6 +847,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
       const layer = setLayer('bodies', items, { lineColor: look.counter });
       pickables.bodies = withDistance.map((b, i) => ({
         pos: items[i].pos,
+        real: { ra: b.ra, dec: b.dec, au: b.dGeo },
+        name: b.num ? `(${b.num}) ${b.name}` : b.name,
         card: () => ({
           title: b.num ? `(${b.num}) ${b.name}` : b.name,
           lines: [
@@ -771,6 +893,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
       const layer = setLayer('galaxies', items, { lineColor: look.accentDim });
       pickables.galaxies = objs.map((o, i) => ({
         pos: items[i].pos,
+        real: o.au ? { ra: o.g.ra, dec: o.g.dec, au: o.au } : null,
+        name: o.g.name,
         card: () => ({
           title: o.g.name,
           lines: [

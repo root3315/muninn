@@ -22,7 +22,8 @@
 import * as THREE from '../vendor/three.module.js';
 import { t, fmt } from '../i18n.js';
 import { seasonChunks, chunkAt, forStack } from '../stack.js';
-import { searchFrames, groupVisits, bandsPresent, toS3, skybotCone, knownBodies, surveySources, nearestHost } from '../catalog.js';
+import { searchFrames, groupVisits, bandsPresent, toS3, skybotCone, knownBodies, surveySources } from '../catalog.js';
+import { planetHostNear, systemUrl } from '../exovision.js';
 import { spread, VISITS_PER_BATCH } from '../visits.js';
 import { TangentGrid, deltaRA } from '../wcs.js';
 import { SkyView } from '../sky.js';
@@ -71,13 +72,6 @@ const FOV_SIZES = [0.15, 0.3, 0.6];
 
 /* The grid as the site cuts it: ~2.5 samples per 6.15″ detector pixel. */
 const gridHeightFor = (fovDeg) => Math.min(768, Math.max(360, Math.round(((fovDeg * 3600) / 6.15) * 2.5)));
-
-let planetHosts = null;
-async function hostNear(ra, dec) {
-  planetHosts ??= fetch('data/planet-hosts.json').then((r) => (r.ok ? r.json() : { hosts: [] }))
-    .then((b) => b.hosts ?? []).catch(() => { planetHosts = null; return []; });
-  return nearestHost(await planetHosts, ra, dec, 90);
-}
 
 const midExposure = (frame) => (frame.exptime > 0
   ? new Date((frame.mjd + frame.exptime / 2 / 86400 - 40587) * 86400000).toISOString().replace('Z', '')
@@ -287,8 +281,9 @@ export function openFieldVR(target, env) {
   /* ---- the field in depth, behind ------------------------------------ */
   const radiusDeg = searchRadius(grid.fovDeg, grid.fovHeightDeg);
   const depthView = createDepthView({
-    onAction: (id) => {
+    onAction: (id, data) => {
       if (id === 'back') env.onBack?.();
+      else if (id === 'fly') env.onFly?.(data);
       else if (id === 'screens') env.onBring?.();
       else if (id === 'flip') flip();
       // The view as it was opened: where it stood, at its own size.
@@ -332,6 +327,7 @@ export function openFieldVR(target, env) {
     else if (id === 'bring') env.onBring?.();
     else if (id === 'wise') showWise();
     else if (id === 'layout') { windows.reset(); drawCard(); }
+    else if (id === 'planets' && st.host) env.onLeave?.(systemUrl(st.host, label, lang));
     // Another band or another size is another field: opened again, the site's way.
     else if (id === 'band' && data !== band) env.onReopen?.({ ...target, band: data });
     else if (id === 'fov' && Number(data) !== fov) env.onReopen?.({ ...target, fov: Number(data) });
@@ -757,9 +753,10 @@ export function openFieldVR(target, env) {
         y = wrapText(ctx, tv('vr.visits', { n: st.all.length, d: days }), x, y, w, T.body * 1.3, 2);
       }
       if (st.host) {
-        ctx.fillStyle = look.neutral;
-        ctx.font = `400 ${T.body}px ${FONTS.body}`;
-        wrapText(ctx, tv('vr.planetsValue', { n: st.host[2] }), x, y + 6, w, T.body * 1.3, 1);
+        // The system in ExoVision, as the site's card offers it: the headset is left first.
+        const words = `${t('card.planets', { n: st.host[2] })} →`;
+        const pw = Math.min(w, chipWidth(ctx, font, words, bh, minW));
+        button(ctx, hits, look, { x, y: y + 10, w: pw, h: bh, label: words, id: 'planets', font, hover: hov('card', 'planets') });
       }
       ctx.font = `500 ${T.body}px ${FONTS.body}`;
       ctx.fillStyle = look.accent;
@@ -942,7 +939,8 @@ export function openFieldVR(target, env) {
 
   /* ---- reading the field -------------------------------------------- */
   async function load() {
-    hostNear(ra, dec).then((h) => { if (!st.closed && h) { st.host = h; drawCard(); } });
+    // A field is centred where its target is best seen: the target's own position is the one to look up, as on the site.
+    planetHostNear(target.target?.ra ?? ra, target.target?.dec ?? dec).then((h) => { if (!st.closed && h) { st.host = h; drawCard(); } });
     const bakedAsk = bakedAnswers(target.key, signal);
     let frames;
     try {
@@ -1207,6 +1205,7 @@ export function openFieldVR(target, env) {
     windows,
     get marks() { return sky.marks; },
     markAct: (id, i) => markAct(id, i),
+    depthPlace: (kind, i) => depthView.placeOf(kind, i),
     get stats() {
       return { status: st.status, read: sky.visits.length, planned: st.entries.length, mode: st.mode, depth: st.depth?.single ?? null, hunt: st.hunt ? (st.hunt.list?.length ?? 0) : null, baked: Boolean(baked) };
     },
