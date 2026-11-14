@@ -21,12 +21,13 @@ const running = new Map();
 self.addEventListener('message', async ({ data: msg }) => {
   if (msg.type === 'abort') { running.get(msg.id)?.abort(); return; }
 
-  const { id, url, grid: g } = msg;
+  const { id, url, grid: g, fetched } = msg;
   const ctrl = new AbortController();
   running.set(id, ctrl);
   try {
     const grid = new TangentGrid(g.ra, g.dec, g.fovDeg, g.width, g.height);
-    const stamp = await loadStamp(url, grid, { signal: ctrl.signal });
+    const onFetched = fetched ? () => self.postMessage({ id, fetched: true }) : undefined;
+    const stamp = await loadStamp(url, grid, { signal: ctrl.signal, onFetched });
     if (!stamp) { self.postMessage({ id, stamp: null }); return; }
     // The WCS is a class instance and arrives as its plain fields (the
     // detector patch carries them for sharpness.js); the pixels are moved

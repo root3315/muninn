@@ -201,9 +201,9 @@ function workersBroken() {
   for (const waiter of stampWorkers.waiting.splice(0)) waiter.give(null);
 }
 
-async function readStamp(url, grid, { signal } = {}) {
+async function readStamp(url, grid, { signal, onFetched } = {}) {
   const worker = await takeWorker(signal);
-  if (!worker) return loadStamp(url, grid, { signal });
+  if (!worker) return loadStamp(url, grid, { signal, onFetched });
   const id = ++stampWorkers.seq;
   return new Promise((resolve, reject) => {
     const settle = () => {
@@ -213,6 +213,7 @@ async function readStamp(url, grid, { signal } = {}) {
     };
     const onMessage = ({ data }) => {
       if (data.id !== id) return;
+      if (data.fetched) { onFetched?.(); return; }
       settle();
       releaseWorker(worker);
       if (data.error) {
@@ -231,14 +232,14 @@ async function readStamp(url, grid, { signal } = {}) {
       worker.terminate();
       stampWorkers.count--;
       workersBroken();
-      loadStamp(url, grid, { signal }).then(resolve, reject);
+      loadStamp(url, grid, { signal, onFetched }).then(resolve, reject);
     };
     const onAbort = () => worker.postMessage({ type: 'abort', id });
     worker.addEventListener('message', onMessage);
     worker.addEventListener('error', onError);
     signal?.addEventListener('abort', onAbort, { once: true });
     worker.postMessage({
-      id, url,
+      id, url, fetched: Boolean(onFetched),
       grid: { ra: grid.ra, dec: grid.dec, fovDeg: grid.fovDeg, width: grid.width, height: grid.height },
     });
   });
@@ -3376,12 +3377,12 @@ function addVisitInPlace(frame, stamp) {
  * while it fills in the background, that is left to fillRefresh, which runs
  * every few seconds instead of on every frame.
  */
-async function readOne(entry, grid, signal) {
+async function readOne(entry, grid, signal, { onFetched } = {}) {
   entry.status = 'reading';
   drawAxis();
   renderPlateLog();
   try {
-    const stamp = await readStamp(toS3(entry.frame.url), grid, { signal });
+    const stamp = await readStamp(toS3(entry.frame.url), grid, { signal, onFetched });
     await afterDive();
     if (signal.aborted) return 0;
     if (!stamp) {
@@ -3419,9 +3420,9 @@ async function readVisits(entries, grid, signal) {
   let done = 0;
   let bytes = 0;
   const total = entries.length;
-  await pool(entries, FETCH_CONCURRENCY, async (entry) => {
+  const step = async (entry, options) => {
     if (signal.aborted) return;
-    bytes += await readOne(entry, grid, signal);
+    bytes += await readOne(entry, grid, signal, options);
     done++;
     if (signal.aborted) return;
     if (!sky.visits.length) {
@@ -3431,7 +3432,17 @@ async function readVisits(entries, grid, signal) {
     }
     drawAxis();
     updateIdentity();
-  });
+  };
+  // The first picture is one visit's bytes, not a sixth of six visits'
+  // bytes: one visit is read on its own, and the rest start once its bytes
+  // are in (or it has failed), while it is still being resampled. The one a
+  // link holds goes first, as that is the one the page will show.
+  const lead = entries.find((e) => e.frame === state.allVisits[state.wantVisit]) ?? entries[0];
+  let leadIn;
+  const leadFetched = new Promise((resolve) => { leadIn = resolve; });
+  const first = step(lead, { onFetched: leadIn }).finally(leadIn);
+  await leadFetched;
+  await Promise.all([first, pool(entries.filter((e) => e !== lead), FETCH_CONCURRENCY, (e) => step(e))]);
   return bytes;
 }
 

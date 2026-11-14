@@ -275,7 +275,7 @@ function sourceBounds(wcs, grid) {
  * Fetch and resample one epoch.
  * Returns null when the frame does not actually overlap the requested field.
  */
-export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = true } = {}) {
+export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = true, onFetched } = {}) {
   // The flags' header, read beside the image header when that is still to
   // be read (see FLAGS_AHEAD_FROM).
   const flagsAhead = headers.has(url) ? null : fetchRange(url, FLAGS_AHEAD_FROM, FLAGS_AHEAD_TO - 1, signal);
@@ -319,6 +319,8 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = 
   // "found".
   // `mask: false` is for the tools that calibrate against a flagged pixel.
   const read = await flagsRead;
+  // Everything this visit needs from the archive is in; the rest is arithmetic.
+  onFetched?.();
   const flagged = read && mask ? maskFlagged(plane, read) : null;
   const flagRows = read?.values ?? null;
 
