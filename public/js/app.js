@@ -1671,9 +1671,13 @@ function renderWhen() {
   $('when-date').dataset.range = 'false';
   $('when-time').textContent = frame ? fmtTime(frame.iso) : '';
   $('when-band').textContent = frame ? `${frame.band} · ${fmt(frame.emMin, 2)}–${fmt(frame.emMax, 2)} ${t('unit.um')}` : '';
-  $('when-of').textContent = i >= 0 && list.length
-    ? t('frame.visit', { i: i + 1, n: list.length })
-    : '';
+  // Counted in the field's whole list of visits, the one the run names
+  // ("visits to this field: 6 of 17"): counted among those read so far, it
+  // said "visit 1 of 1" while the field loaded and its total kept moving.
+  const whole = frame ? state.allVisits.indexOf(frame) : -1;
+  $('when-of').textContent = whole >= 0
+    ? t('frame.visit', { i: whole + 1, n: state.allVisits.length })
+    : i >= 0 && list.length ? t('frame.visit', { i: i + 1, n: list.length }) : '';
   // What the pipeline's own flags took out of this frame before anything was
   // measured: applied silently, a mask is a claim nobody can check.
   const masked = shown?.stamp?.meta?.flaggedPixels;
