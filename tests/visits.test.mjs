@@ -82,3 +82,16 @@ test('a star with planets is found within reach, and only within it', async () =
   assert.equal(nearestHost(hosts, 344.3676, 20.80, 90), null, '110″ away is another star');
   assert.equal(nearestHost([], 0, 0, 90), null);
 });
+
+test('coordinates as the page itself prints them, and with a typographic minus', async () => {
+  const { parseCoordinates } = await import('../public/js/catalog.js');
+  const close = (a, b) => Math.abs(a - b) < 1e-4;
+  const p = parseCoordinates('08ʰ 55ᵐ 10.83ˢ −07° 14′ 42.5″');
+  assert.ok(p && close(p.ra, 133.795125) && close(p.dec, -7.245139), JSON.stringify(p));
+  const q = parseCoordinates('133.795, −7.245');
+  assert.ok(q && close(q.ra, 133.795) && close(q.dec, -7.245));
+  const r = parseCoordinates('08h55m10.831s -07d14m42.53s');
+  assert.ok(r && close(r.dec, -7.245147));
+  assert.equal(parseCoordinates('10 75 00 +10 00 00'), null, 'minutes of 75');
+  assert.equal(parseCoordinates('-01 00 00 +10 00 00'), null, 'a negative right ascension');
+});

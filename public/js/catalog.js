@@ -48,10 +48,15 @@ const SEX = /^\s*([+-]?\d{1,3})[\s:hн]+(\d{1,2})[\s:mм]+(\d{1,2}(?:\.\d+)?)s?\
 const DEC = /^\s*([+-]?\d{1,3}(?:\.\d+)?)\s*[, ]\s*([+-]?\d{1,2}(?:\.\d+)?)\s*$/;
 
 /** Accepts `148.145 +1.003`, `10 00 34.7 +01 00 11`, `10:00:34.7, +01:00:11`. */
-export function parseCoordinates(text) {
+export function parseCoordinates(raw) {
+  // The page prints positions with a typographic minus and superscript units
+  // (08ʰ 55ᵐ 10.83ˢ −07° 14′ 42.5″); pasted back, they are the same position.
+  const text = String(raw).replace(/[−–—]/g, '-')
+    .replace(/ʰ/g, 'h').replace(/ᵐ/g, 'm').replace(/ˢ/g, 's');
   const sex = SEX.exec(text);
   if (sex) {
     const [, hh, mm, ss, dd, dm, ds] = sex;
+    if (hh.trim().startsWith('-') || +mm >= 60 || +ss >= 60 || +dm >= 60 || +ds >= 60) return null;
     const ra = (Math.abs(+hh) + +mm / 60 + +ss / 3600) * 15;
     const sign = dd.trim().startsWith('-') ? -1 : 1;
     const dec = sign * (Math.abs(+dd) + +dm / 60 + +ds / 3600);
