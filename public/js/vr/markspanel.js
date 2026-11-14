@@ -138,7 +138,17 @@ export function createMarksPanel({ look, widthM, heightM, pxPerM, dist, onAct })
         for (const l of b.lines) {
           if (l.key) items.push({ type: 'key', text: l.key.toUpperCase(), h: Math.round(small * 1.9) });
           else if (l.curve) items.push({ type: 'curve', m, h: Math.round(px * 1.9) });
-          else if (l.buttons) items.push({ type: 'buttons', list: l.buttons, i, h: bh + 14 });
+          else if (l.buttons) {
+            // As many rows as the buttons need, each as wide as its word.
+            let x = pad + 64;
+            let rows = 1;
+            for (const btn of l.buttons) {
+              const bw = Math.min(w - 64, chipWidth(ctx, chipFont, btn.label, bh, 0.09 * pxPerM));
+              if (x > pad + 64 && x + bw > W - pad) { rows += 1; x = pad + 64; }
+              x += bw + 12;
+            }
+            items.push({ type: 'buttons', list: l.buttons, i, h: rows * (bh + 10) + 4 });
+          }
           else {
             const lines = wrapLines(body(l.mono), l.text, w - 64 - (l[ASKING] ? 26 : 0), b.open ? 8 : 2);
             items.push({ type: 'text', l, lines, h: lines.length * lh + 6 });
@@ -221,6 +231,8 @@ export function createMarksPanel({ look, widthM, heightM, pxPerM, dist, onAct })
             ctx.fillText(it.text, pad + 64, y + small * 1.3);
           } else if (it.type === 'curve') {
             curve(ctx, it.m, view.visits, pad + 64, y, Math.min(w - 64, 420), it.h);
+          } else if (it.type === 'buttons' && (y < top - 4 || y + it.h > top + room + 4)) {
+            // A row of buttons is shown whole or not at all: half a button cannot be pressed.
           } else if (it.type === 'buttons') {
             let x = pad + 64;
             let by = y;

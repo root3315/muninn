@@ -18,7 +18,7 @@
  */
 
 import * as THREE from '../vendor/three.module.js';
-import { setLanguage, getLanguage } from '../i18n.js';
+import { setLanguage, getLanguage, t } from '../i18n.js';
 import { loadStars } from '../gate.js';
 import { planetsNow } from '../ephemeris.js';
 import { createSky } from './sky3d.js';
@@ -33,6 +33,7 @@ import { readLook, loadFonts, createPanel, FONTS, wrapText, fitText, wrapLines }
 import { LAYOUT, yawOf, minTextPx } from './layout.js';
 import { navigate } from './nav.js';
 import { tv } from './strings.js';
+import { planetHostNear, systemUrl } from '../exovision.js';
 
 const D2R = Math.PI / 180;
 const EYE_HEIGHT = 1.6;
@@ -40,6 +41,9 @@ const OPTIONAL_FEATURES = ['local-floor', 'bounded-floor', 'hand-tracking'];
 /** The target put ahead at the start: the first challenge target near the equator. */
 const AHEAD = 'barnard';
 const HAPTIC = { hover: [0.15, 12], select: [0.6, 35] };
+/** A flight in the depth view: how long, and how far short of the thing it stops, metres. */
+const FLY_MS = 900;
+const FLY_STOP_M = 0.6;
 
 /** The page's language: ?lang=, else the site's stored choice, else the browser's. */
 export function pageLanguage() {
@@ -227,6 +231,30 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     card.show(content, at ?? h.clone().addScaledVector(d, 2), h);
   };
 
+  /**
+   * Leave for another page: the headset session is ended first and the page
+   * is opened once it has (a browser in VR shows nothing of a page opened
+   * under a live session).
+   */
+  function leaveTo(url) {
+    if (session && renderer.xr.isPresenting) {
+      session.addEventListener('end', () => location.assign(url), { once: true });
+      session.end();
+    } else {
+      location.assign(url);
+    }
+  }
+
+  /** A star on the sky with planets offers its system, once the list has said so. */
+  function offerPlanets(content, at, ra, dec, name) {
+    planetHostNear(ra, dec).then((host) => {
+      if (!host || !card.visible || card.content !== content) return;
+      const label = `${t('card.planets', { n: host[2] })} →`;
+      content.actions.push({ id: 'planets', label, run: () => leaveTo(systemUrl(host, name || host[3], getLanguage())) });
+      card.show(content, at, headPose().head);
+    });
+  }
+
   // The star under the ray is ringed; any star, or any point, can be opened.
   const starRing = new THREE.Mesh(
     new THREE.RingGeometry(0.85, 1, 40),
@@ -289,6 +317,20 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   const head = new THREE.Vector3();
   const dir = new THREE.Vector3();
 
+  /** The panels standing in the sky, as zones the sky's names keep out of: a direction and an angular radius. */
+  function clearZones(at) {
+    const zones = [];
+    for (const mesh of [firstSign.mesh, card.mesh]) {
+      if (!mesh.visible) continue;
+      const g = mesh.geometry.parameters;
+      const used = mesh.userData.panel?.used ?? 1;
+      // The drawn plate's centre: a card is drawn from its top.
+      const c = mesh.localToWorld(new THREE.Vector3(0, (g.height * (1 - used)) / 2, 0)).sub(at);
+      zones.push({ dir: toSky(c.clone().normalize()), deg: Math.atan(Math.hypot(g.width, g.height * used) / 2 / c.length()) / D2R });
+    }
+    return zones;
+  }
+
   function headPose() {
     const cam = renderer.xr.isPresenting ? renderer.xr.getCamera() : camera;
     cam.updateMatrixWorld?.();
@@ -330,6 +372,8 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       onBring: returnToScreens,
       onFlipped: (flipped) => { view = flipped ? 'depth' : 'field'; },
       onReopen: (next) => openTarget({ ...marker, target: next }),
+      onFly: flyTo,
+      onLeave: leaveTo,
     });
     dimTo(LAYOUT.dive.skyDim);
     markers.setDim(0.45);
@@ -440,7 +484,10 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       if (hit.kind === 'depth') { haptic('select'); showCard(hit.depth.card, hit.depth.at); return; }
       if (hit.kind === 'star' || hit.kind === 'sky') {
         haptic('select');
-        showCard(skyCard(hit.dir, hit.star), toWorld([hit.dir.x, hit.dir.y, hit.dir.z]).multiplyScalar(10).add(headPose().head));
+        const content = skyCard(hit.dir, hit.star);
+        const at = toWorld([hit.dir.x, hit.dir.y, hit.dir.z]).multiplyScalar(10).add(headPose().head);
+        showCard(content, at);
+        if (hit.star >= 0) offerPlanets(content, at, stars.ra[hit.star], stars.dec[hit.star], named.get(hit.star)?.name ?? '');
         return;
       }
       if (was?.object && was.object !== hit.object) return;
@@ -509,7 +556,29 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     }
   }
 
+  /** A flight to something in the depth view: there in a short eased glide, the vignette closed. */
+  let flight = null;
+  function flyTo(world) {
+    card.hide();
+    const v = world.clone().sub(headPose().head);
+    const d = v.length();
+    // Stopped short, so the thing is in front, not inside the head.
+    if (d < FLY_STOP_M * 1.5) return;
+    flight = { t0: performance.now(), total: v.multiplyScalar((d - FLY_STOP_M) / d), done: new THREE.Vector3() };
+  }
+
   function locomote(dt) {
+    if (flight) {
+      const k = Math.min(1, (performance.now() - flight.t0) / FLY_MS);
+      const e = k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;
+      const want = flight.total.clone().multiplyScalar(e);
+      moveBy(want.clone().sub(flight.done));
+      flight.done.copy(want);
+      vignette.material.uniforms.k.value = LAYOUT.move.vignette;
+      vignette.visible = true;
+      if (k >= 1) flight = null;
+      return;
+    }
     // A window in hand takes the sticks: they push it away and bring it near.
     if (held.size) return;
     const { walk, fly } = pointers.sticks();
@@ -720,6 +789,25 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   const api = {
     stats,
     open: (key) => { const m = markers.markers.find((x) => x.key === key); if (m) openTarget(m); return Boolean(m); },
+    /** For the checks: point at the `i`th thing of a class in the depth view and press, as a hand would. */
+    pressDepth(kind, i = 0) {
+      const at = field?.depthPlace(kind, i);
+      if (!at) return false;
+      const origin = headPose().head.clone();
+      const hit = field.depthPick(origin, at.clone().sub(origin).normalize());
+      if (!hit) return false;
+      showCard(hit.card, hit.at);
+      return hit.card.title;
+    },
+    /** For the checks: run a button of the card on show. */
+    cardAct: (id) => card.press(id),
+    /** For the checks: where a target's ring, or a point `deg` beside it, is on a flat screen, in CSS pixels. */
+    screenOf(key, deg = 0) {
+      const m = markers.markers.find((x) => x.key === key);
+      if (!m) return null;
+      const p = toWorld(m.v).applyAxisAngle(new THREE.Vector3(0, 1, 0), deg * D2R).multiplyScalar(10).add(headPose().head).project(camera);
+      return [Math.round((p.x + 1) / 2 * canvas.clientWidth), Math.round((1 - p.y) / 2 * canvas.clientHeight)];
+    },
     close: () => closeField(true),
     get field() { return field; },
     get view() { return view; },
@@ -801,6 +889,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     veil.visible = dark > 0.001;
     veil.material.opacity = dark;
     if (field) markers.setDim(0.45, toSky(field.depthAxis()), LAYOUT.depth.clearDeg, 0.12);
+    else markers.keepClear(clearZones(h));
     markers.tick(now, { growMs: LAYOUT.dive.ms, grow: LAYOUT.dive.markerGrow });
 
     locomote(dt);
@@ -809,7 +898,8 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       field.update(dt, { head: h, gazeYaw });
       // Lost the screens: after a while, a chevron toward them.
       const off = Math.atan2(Math.sin(field.mainYaw() - gazeYaw), Math.cos(field.mainYaw() - gazeYaw));
-      if (Math.abs(off) > LAYOUT.lost.deg * D2R) {
+      // In the depth view its own "‹ Screens" leads back; the chevron is for screens lost from the field.
+      if (view === 'field' && Math.abs(off) > LAYOUT.lost.deg * D2R) {
         lostSince ??= now;
         if (now - lostSince > LAYOUT.lost.ms) { drawChevron(Math.sign(off)); chevron.mesh.visible = true; }
       } else {

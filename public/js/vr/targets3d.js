@@ -183,6 +183,8 @@ export function createMarkers({ fields, planets, look, lang }) {
   caption(tv('vr.ecliptic'), 225, -16.2, 'neutral');
 
   let hovered = null;
+  /** While a field is open no name is shown at all (setDim). */
+  let fieldOpen = false;
   let first = null;
 
   return {
@@ -237,6 +239,7 @@ export function createMarkers({ fields, planets, look, lang }) {
       // past a panel or through the corridor, a name reads as part of what is
       // in front. The rings stay, dimmed, to keep the way round.
       const open = k < 1;
+      fieldOpen = open;
       for (const m of markers) {
         const along = axis && angleBetween([axis.x, axis.y, axis.z], m.v) < clearDeg;
         const f = along ? Math.min(k, kAxis) : k;
@@ -245,6 +248,17 @@ export function createMarkers({ fields, planets, look, lang }) {
         m.label.mesh.visible = !open && m.label.placed !== false;
       }
       for (const c of captions) c.mesh.visible = !open;
+    },
+    /**
+     * Names off the panels standing in the sky (the first sign, a card): each
+     * zone a direction in the sky's own frame and an angular radius. A name
+     * whose place falls in one is not drawn while the panel is there.
+     */
+    keepClear(zones) {
+      if (fieldOpen) return;
+      const inZone = (v, pad) => zones.some((z) => angleBetween([z.dir.x, z.dir.y, z.dir.z], v) < z.deg + pad);
+      for (const m of markers) m.label.mesh.visible = m.label.placed !== false && !inZone(m.v, LABEL_DEG / 4);
+      for (const c of captions) c.mesh.visible = !inZone(c.dir, 6);
     },
     dispose() {
       for (const m of markers) m.label.dispose();

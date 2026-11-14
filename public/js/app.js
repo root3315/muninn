@@ -39,10 +39,11 @@ import {
   saturatedMotion as saturatedMotionOf, linkArc, linkWords, pct, predictedWords, peaksOf, brightnessWords,
 } from './marks.js';
 import { loadWise, WISE_BANDS } from './wise.js';
+import { planetHostNear, systemUrl } from './exovision.js';
 import { drawGaiaSky, psfFor } from './gaiasky.js';
 import { fieldArchives, CADC_SEARCH } from './archives.js';
 import {
-  searchFrames, searchAhead, NoRelayError, UpstreamError, groupVisits, findHeldVisit, nearestHost, bandsPresent, bandRange, parseCoordinates,
+  searchFrames, searchAhead, NoRelayError, UpstreamError, groupVisits, findHeldVisit, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, fieldObjects, toS3, surveySources,
 } from './catalog.js';
 import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP } from './overlay.js';
@@ -3746,21 +3747,6 @@ function cardFact(name, value) {
  * a field whose frames are stored here, one real frame and every visit SPHEREx
  * has made. Nothing is opened until the card's button is pressed.
  */
-/** Where a star's planetary system is shown: ExoVision, the team's exoplanet explorer. */
-const EXOVISION_URL = 'https://exovision.mydevbox.xyz';
-/** A host star is taken as the card's star within this: the sky's catalogue and the archive's positions differ by proper motion and rounding. */
-const HOST_REACH_ARCSEC = 90;
-let planetHosts = null;
-
-/** The star with known planets nearest (ra, dec) within reach, as [ra, dec, planets, name], or null. */
-async function planetHostNear(ra, dec) {
-  planetHosts ??= fetch('data/planet-hosts.json', { signal: deadline(null, CATALOG_DEADLINE_MS) })
-    .then((r) => (r.ok ? r.json() : { hosts: [] }))
-    .then((body) => body.hosts ?? [])
-    .catch(() => { planetHosts = null; return []; });
-  return nearestHost(await planetHosts, ra, dec, HOST_REACH_ARCSEC);
-}
-
 /** A star with planets, or a field centred on one, offers its system in ExoVision. */
 async function showPlanets(hit) {
   const link = $('gate-card-planets');
@@ -3772,11 +3758,8 @@ async function showPlanets(hit) {
   const at = preset?.target ?? hit;
   const host = await planetHostNear(at.ra, at.dec);
   if (cardHit !== hit || !host) return;
-  const [ra, dec, n, name] = host;
-  const url = new URL('/system', EXOVISION_URL);
-  url.search = new URLSearchParams({
-    ra: ra.toFixed(5), dec: dec.toFixed(5), from: 'muninn', name: hit.label ?? name, lang: getLanguage(),
-  }).toString();
+  const [, , n, name] = host;
+  const url = { href: systemUrl(host, hit.label ?? name, getLanguage()) };
   link.href = url.href;
   link.textContent = t('card.planets', { n });
   link.title = t('card.planetsTitle');

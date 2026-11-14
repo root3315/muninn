@@ -16,9 +16,10 @@ import * as THREE from '../vendor/three.module.js';
 import { createPanel, FONTS, wrapLines, button, roundRect, chipWidth } from './panel.js';
 import { minTextPx } from './layout.js';
 import { tv } from './strings.js';
+import { fmt } from '../i18n.js';
 
 const W_M = 0.95;
-const H_M = 0.8;
+const H_M = 1.2;
 const PX_PER_M = 640;
 const DIST = 2.0;
 /** The gap between a card and the thing it is about, metres at DIST: about 3°. */
@@ -41,7 +42,6 @@ export function createCard({ look }) {
     panel.draw((ctx, W, H, hits) => {
       const pad = 28;
       const w = W - pad * 2;
-      const titleFont = `600 ${Math.round(px * 1.15)}px ${FONTS.display}`;
       const lineFont = (l) => `400 ${px}px ${l.mono ? FONTS.mono : FONTS.body}`;
       // The buttons first: each as wide as its word, never wider than the
       // plate's inside, in rows that wrap; the plate is then made to fit
@@ -58,11 +58,22 @@ export function createCard({ look }) {
         used += (rows.at(-1).length ? gap : 0) + bw;
         rows.at(-1).push({ ...a, bw });
       }
-      const titleLines = wrapLines(titleFont, content.title, w, 3);
+      // A title is never cut: a long catalogue number takes a smaller size until it fits.
+      let titlePx = Math.round(px * 1.15);
+      let titleFont = `600 ${titlePx}px ${FONTS.display}`;
+      let titleLines = wrapLines(titleFont, content.title, w, 3);
+      ctx.font = titleFont;
+      while (titlePx > px * 0.75 && titleLines.some((l) => ctx.measureText(l).width > w)) {
+        titlePx -= 1;
+        titleFont = `600 ${titlePx}px ${FONTS.display}`;
+        ctx.font = titleFont;
+        titleLines = wrapLines(titleFont, content.title, w, 3);
+      }
       const bodyLines = content.lines.map((l) => wrapLines(lineFont(l), l.text, w, 6));
       const textH = titleLines.length * px * 1.3 + 6 + bodyLines.reduce((n, ls) => n + ls.length * px * 1.25 + 2, 0);
       const Hc = Math.min(H, Math.ceil(pad + px + textH + 10 + rows.length * (bh + gap) - gap + pad));
       used = Hc / H;
+      panel.used = used;
       roundRect(ctx, 2, 2, W - 4, Hc - 4, 26);
       ctx.fillStyle = look.paper;
       ctx.fill();
@@ -128,21 +139,39 @@ export function createCard({ look }) {
       panel.mesh.visible = true;
     },
     hide,
+    /** Press a button by its id, as a pointer would. */
+    press(id) { content?.run?.[id]?.(); },
     get visible() { return panel.mesh.visible; },
+    /** What the card is showing now. */
+    get content() { return content; },
     dispose() { panel.dispose(); },
   };
 }
 
 /** Light-travel time, as words: minutes, hours, years, or millions or billions of years. */
 export function lightTime(au, { lookbackGyr = null } = {}) {
-  if (lookbackGyr != null) return lookbackGyr >= 1 ? tv('vr.lightGyr', { n: lookbackGyr.toFixed(1) }) : tv('vr.lightMyr', { n: Math.round(lookbackGyr * 1000) });
+  if (lookbackGyr != null) return lookbackGyr >= 1 ? tv('vr.lightGyr', { n: fmt(lookbackGyr, 1) }) : tv('vr.lightMyr', { n: fmt(lookbackGyr * 1000, 0) });
   const minutes = au * 8.3167;
-  if (minutes < 120) return tv('vr.lightMin', { n: minutes.toFixed(minutes < 10 ? 1 : 0) });
+  if (minutes < 120) return tv('vr.lightMin', { n: fmt(minutes, minutes < 10 ? 1 : 0) });
   const hours = minutes / 60;
-  if (hours < 48) return tv('vr.lightHours', { n: hours.toFixed(1) });
+  if (hours < 48) return tv('vr.lightHours', { n: fmt(hours, 1) });
   const years = au / 63241.08;
-  return years < 1e5 ? tv('vr.lightYears', { n: years < 10 ? years.toFixed(2) : Math.round(years).toLocaleString('en-US') })
-    : tv('vr.lightMyr', { n: (years / 1e6).toFixed(years < 1e7 ? 2 : 0) });
+  if (years >= 1e5) return tv('vr.lightMyr', { n: fmt(years / 1e6, years < 1e7 ? 2 : 0) });
+  if (years < 1) return tv('vr.lightDays', { n: fmt(years * 365.25, 0) });
+  const n = years < 10 ? fmt(years, 2) : fmt(years, 0);
+  return `${tv(years < 10 ? 'vr.lightYearsFrac' : 'vr.lightYears', { n, count: Math.round(years) })}: ${leftIn(years)}`;
+}
+
+/**
+ * The year the light now arriving set out, to the precision the distance
+ * allows: the year itself under a century, then the decade, then the century.
+ */
+function leftIn(years) {
+  const now = new Date().getUTCFullYear();
+  const step = years < 100 ? 1 : years < 1000 ? 10 : 100;
+  const y = Math.round((now - years) / step) * step;
+  const key = step === 1 ? 'vr.lightLeftIn' : 'vr.lightLeftAbout';
+  return y > 0 ? tv(key, { year: String(y) }) : (step === 1 ? tv('vr.lightLeftInBC', { year: String(1 - y) }) : tv('vr.lightLeftAboutBC', { year: String(-y) }));
 }
 
 export { THREE };
