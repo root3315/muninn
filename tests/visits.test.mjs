@@ -95,3 +95,35 @@ test('coordinates as the page itself prints them, and with a typographic minus',
   assert.equal(parseCoordinates('10 75 00 +10 00 00'), null, 'minutes of 75');
   assert.equal(parseCoordinates('-01 00 00 +10 00 00'), null, 'a negative right ascension');
 });
+
+test('coordinates with a decimal comma, degree signs, tabs, or no seconds', async () => {
+  const { parseCoordinates } = await import('../public/js/catalog.js');
+  const close = (a, b) => Math.abs(a - b) < 1e-4;
+  const comma = parseCoordinates('13,4194 3,8459');
+  assert.ok(comma && close(comma.ra, 13.4194) && close(comma.dec, 3.8459), JSON.stringify(comma));
+  const listed = parseCoordinates('13.4194,3.8459');
+  assert.ok(listed && close(listed.ra, 13.4194) && close(listed.dec, 3.8459), 'a point and a comma is a list');
+  const deg = parseCoordinates('133.7951° -7.2451°');
+  assert.ok(deg && close(deg.ra, 133.7951) && close(deg.dec, -7.2451));
+  const tab = parseCoordinates('133.7951\t-7.2451');
+  assert.ok(tab && close(tab.ra, 133.7951) && close(tab.dec, -7.2451));
+  const short = parseCoordinates('08 55 -07 14');
+  assert.ok(short && close(short.ra, 133.75) && close(short.dec, -(7 + 14 / 60)), JSON.stringify(short));
+  const card = parseCoordinates('00ʰ 53ᵐ +03° 50′');
+  assert.ok(card && close(card.ra, 13.25) && close(card.dec, 3 + 50 / 60), JSON.stringify(card));
+  assert.equal(parseCoordinates('08 75 -07 14'), null, 'minutes of 75, no seconds');
+  assert.equal(parseCoordinates('-08 55 -07 14'), null, 'a negative right ascension');
+  assert.equal(parseCoordinates('10 20 +95 00'), null, 'declination beyond the pole');
+  assert.equal(parseCoordinates('1 2 3'), null, 'three numbers fit no format');
+  assert.equal(parseCoordinates('1e1 0x10'), null, 'not plain decimals');
+});
+
+test('a rounded-up second carries into minutes and hours', async () => {
+  const { formatRA, formatDec } = await import('../public/js/catalog.js');
+  assert.equal(formatRA(359.99999), '00ʰ 00ᵐ 00.00ˢ');
+  assert.equal(formatRA(14.99999), '01ʰ 00ᵐ 00.00ˢ');
+  assert.equal(formatRA(133.795125), '08ʰ 55ᵐ 10.83ˢ');
+  assert.equal(formatDec(-7.99999999), '−08° 00′ 00.0″');
+  assert.equal(formatDec(10.9999999), '+11° 00′ 00.0″');
+  assert.equal(formatDec(-7.245139), '−07° 14′ 42.5″');
+});

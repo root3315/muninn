@@ -44,51 +44,65 @@ export const toS3 = (url) => (url.startsWith(IBE_PREFIX) ? S3_BASE + url.slice(I
 
 /* ------------------------------------------------------------------ position */
 
-const SEX = /^\s*([+-]?\d{1,3})[\s:hн]+(\d{1,2})[\s:mм]+(\d{1,2}(?:\.\d+)?)s?\s*[, ]\s*([+-]?\d{1,3})[\s:d°]+(\d{1,2})[\s:m'′]+(\d{1,2}(?:\.\d+)?)["″s]?\s*$/i;
-const DEC = /^\s*([+-]?\d{1,3}(?:\.\d+)?)\s*[, ]\s*([+-]?\d{1,2}(?:\.\d+)?)\s*$/;
+const NUMBER = /^[+-]?\d+(?:\.\d+)?$/;
 
-/** Accepts `148.145 +1.003`, `10 00 34.7 +01 00 11`, `10:00:34.7, +01:00:11`. */
+/**
+ * Accepts `148.145 +1.003`, `13,4194 3,8459`, `133.795° -7.245°`,
+ * `10 00 34.7 +01 00 11`, `10:00:34.7, +01:00:11` and the same without
+ * seconds (`08 55 -07 14`, `00ʰ 53ᵐ +03° 50′`), separated by spaces, tabs,
+ * a comma or a semicolon. A comma between two digits with no space is a
+ * decimal comma, not a list separator.
+ */
 export function parseCoordinates(raw) {
   // The page prints positions with a typographic minus and superscript units
   // (08ʰ 55ᵐ 10.83ˢ −07° 14′ 42.5″); pasted back, they are the same position.
-  const text = String(raw).replace(/[−–—]/g, '-')
-    .replace(/ʰ/g, 'h').replace(/ᵐ/g, 'm').replace(/ˢ/g, 's');
-  const sex = SEX.exec(text);
-  if (sex) {
-    const [, hh, mm, ss, dd, dm, ds] = sex;
-    if (hh.trim().startsWith('-') || +mm >= 60 || +ss >= 60 || +dm >= 60 || +ds >= 60) return null;
-    const ra = (Math.abs(+hh) + +mm / 60 + +ss / 3600) * 15;
-    const sign = dd.trim().startsWith('-') ? -1 : 1;
-    const dec = sign * (Math.abs(+dd) + +dm / 60 + +ds / 3600);
-    if (ra >= 0 && ra < 360 && dec >= -90 && dec <= 90) return { ra, dec };
+  const tokens = String(raw).replace(/[−–—]/g, '-')
+    .replace(/(^|[^\d.])(\d+),(\d+)/g, '$1$2.$3')
+    .replace(/[ʰᵐˢhmsdнм°'′"″:;,]/gi, ' ')
+    .trim().split(/\s+/);
+  if (!tokens.every((tok) => NUMBER.test(tok))) return null;
+  const sexagesimal = ([d, m = '0', s = '0']) => {
+    if (+m >= 60 || +s >= 60) return null;
+    return Math.abs(+d) + +m / 60 + +s / 3600;
+  };
+  let ra;
+  let dec;
+  if (tokens.length === 2) {
+    ra = +tokens[0];
+    dec = +tokens[1];
+  } else if (tokens.length === 4 || tokens.length === 6) {
+    const h = tokens.slice(0, tokens.length / 2);
+    const d = tokens.slice(tokens.length / 2);
+    if (h[0].startsWith('-')) return null;
+    const hours = sexagesimal(h);
+    const degrees = sexagesimal(d);
+    if (hours === null || degrees === null) return null;
+    ra = hours * 15;
+    dec = (d[0].startsWith('-') ? -1 : 1) * degrees;
+  } else {
     return null;
   }
-  const dec = DEC.exec(text);
-  if (dec) {
-    const ra = +dec[1];
-    const de = +dec[2];
-    if (ra >= 0 && ra < 360 && de >= -90 && de <= 90) return { ra, dec: de };
-  }
-  return null;
+  return ra >= 0 && ra < 360 && dec >= -90 && dec <= 90 ? { ra, dec } : null;
+}
+
+/** A count of hours or degrees split into whole, minutes and seconds, rounding carried upward. */
+function sexagesimalParts(total, secondDigits) {
+  let whole = Math.floor(total);
+  let minutes = Math.floor((total - whole) * 60);
+  let seconds = Number((((total - whole) * 60 - minutes) * 60).toFixed(secondDigits));
+  if (seconds >= 60) { seconds = 0; minutes += 1; }
+  if (minutes >= 60) { minutes = 0; whole += 1; }
+  return { whole, minutes, seconds };
 }
 
 export function formatRA(deg) {
-  const h = ((deg % 360) + 360) % 360 / 15;
-  const hh = Math.floor(h);
-  const m = (h - hh) * 60;
-  const mm = Math.floor(m);
-  const ss = (m - mm) * 60;
-  return `${String(hh).padStart(2, '0')}ʰ ${String(mm).padStart(2, '0')}ᵐ ${ss.toFixed(2).padStart(5, '0')}ˢ`;
+  const { whole, minutes, seconds } = sexagesimalParts(((deg % 360) + 360) % 360 / 15, 2);
+  return `${String(whole % 24).padStart(2, '0')}ʰ ${String(minutes).padStart(2, '0')}ᵐ ${seconds.toFixed(2).padStart(5, '0')}ˢ`;
 }
 
 export function formatDec(deg) {
-  const sign = deg < 0 ? '−' : '+';
-  const a = Math.abs(deg);
-  const dd = Math.floor(a);
-  const m = (a - dd) * 60;
-  const mm = Math.floor(m);
-  const ss = (m - mm) * 60;
-  return `${sign}${String(dd).padStart(2, '0')}° ${String(mm).padStart(2, '0')}′ ${ss.toFixed(1).padStart(4, '0')}″`;
+  const { whole, minutes, seconds } = sexagesimalParts(Math.abs(deg), 1);
+  return `${deg < 0 ? '−' : '+'}${String(whole).padStart(2, '0')}° ${String(minutes).padStart(2, '0')}′ ${seconds.toFixed(1).padStart(4, '0')}″`;
 }
 
 /** SIMBAD name resolution through the CDS Sesame service. */
