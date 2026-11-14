@@ -365,6 +365,8 @@ export class SkyView {
     const img = v.ctx.createImageData(v.stamp.width, v.stamp.height);
     paint(img, v.stamp.data, lut, { lo: lim.lo, hi: lim.hi, stretch: this.render.stretch, quality: v.stamp.quality });
     v.ctx.putImageData(img, 0, 0);
+    // The run keeps a small copy of each picture; a repaint makes it stale.
+    v.canvasVersion = (v.canvasVersion ?? 0) + 1;
   }
 
   setRender(patch) { Object.assign(this.render, patch); this.repaintAll(); }

@@ -33,6 +33,41 @@
 
 import { formatDay } from './i18n.js';
 
+/**
+ * A visit's picture at the size the run shows it, made once per size and
+ * kept with the visit: scaling a whole frame down for every thumbnail on
+ * every redraw was the other half of a redraw's cost.
+ */
+const thumbs = new WeakMap();
+function thumbOf(v, w, h, dpr) {
+  const pw = Math.max(1, Math.round(w * dpr));
+  const ph = Math.max(1, Math.round(h * dpr));
+  const kept = thumbs.get(v);
+  if (kept && kept.source === v.canvas && kept.version === v.canvasVersion && kept.c.width === pw && kept.c.height === ph) return kept.c;
+  const c = document.createElement('canvas');
+  c.width = pw;
+  c.height = ph;
+  const g = c.getContext('2d');
+  g.imageSmoothingEnabled = true;
+  g.imageSmoothingQuality = 'medium';
+  g.drawImage(v.canvas, 0, 0, pw, ph);
+  thumbs.set(v, { c, source: v.canvas, version: v.canvasVersion });
+  return c;
+}
+
+/** A frame's date as the run prints it, formatted once: the run is redrawn many times a second. */
+const dayLabels = new Map();
+function dayLabel(mjd, withYear, lang) {
+  const key = `${mjd}|${withYear}|${lang}`;
+  let text = dayLabels.get(key);
+  if (text === undefined) {
+    text = formatDay(toDate(mjd), { year: withYear ? 'short' : false, lang });
+    if (dayLabels.size > 2000) dayLabels.clear();
+    dayLabels.set(key, text);
+  }
+  return text;
+}
+
 /** The sector grid, as the brief specifies it. */
 const COLS = 5;
 const ROWS = 4;
@@ -96,9 +131,14 @@ export function drawStrip(canvas, {
   const thumbH = Math.max(22, Math.min(40, Math.round(thumbW * aspect)));
 
   const H = padY + labelH + gapL + gapA + thumbH + gapB + sigH + gapC + dateH + padY;
-  canvas.width = Math.round(cssW * dpr);
-  canvas.height = Math.round(H * dpr);
-  canvas.style.height = `${H}px`;
+  // The run is redrawn at every step of the blink and thirty times a second
+  // while frames land. Setting a canvas's size reallocates it even when the
+  // size is the same, and on a phone that was most of each redraw.
+  const pxW = Math.round(cssW * dpr);
+  const pxH = Math.round(H * dpr);
+  if (canvas.width !== pxW) canvas.width = pxW;
+  if (canvas.height !== pxH) canvas.height = pxH;
+  if (canvas.style.height !== `${H}px`) canvas.style.height = `${H}px`;
 
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -275,9 +315,7 @@ export function drawStrip(canvas, {
       const k = Math.min(thumbW / v.canvas.width, thumbH / v.canvas.height);
       const w = v.canvas.width * k;
       const h = v.canvas.height * k;
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = 'low';
-      ctx.drawImage(v.canvas, x + (thumbW - w) / 2, thumbY + (thumbH - h) / 2, w, h);
+      ctx.drawImage(thumbOf(v, w, h, dpr), x + (thumbW - w) / 2, thumbY + (thumbH - h) / 2, w, h);
       ctx.restore();
       if (done < 1) {
         // The edge of what has been laid in, as the read line that laid it.
@@ -387,7 +425,7 @@ export function drawStrip(canvas, {
   // A run that crosses a new year carries the year on every date: "21 Aug"
   // under two frames a year apart read as one day shown twice.
   const years = skeleton ? 1 : new Set(slots.map((s) => toDate(s.frame.mjd).getUTCFullYear())).size;
-  const label = (i) => formatDay(toDate(slots[i].frame.mjd), { year: years > 1 ? 'short' : false, lang });
+  const label = (i) => dayLabel(slots[i].frame.mjd, years > 1, lang);
   // Every date if they fit, otherwise every second or third one — a row of
   // overlapping dates is a grey smear, not a scale.
   const widest = skeleton ? 0 : Math.max(...slots.map((_, i) => ctx.measureText(label(i)).width));

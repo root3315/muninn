@@ -63,7 +63,11 @@ const GRID_MAX_W = 1024;
 const gridWidthFor = (fovDeg) => Math.min(GRID_MAX_W, Math.max(GRID_MIN_W,
   Math.round(((fovDeg * 3600) / DETECTOR_ARCSEC) * SAMPLES_PER_PIXEL)));
 const MAX_VISITS = VISITS_PER_BATCH;
-const FETCH_CONCURRENCY = 4;
+// Reading a frame is a few round trips to the archive, so more at once is
+// faster; on a small phone each landed frame is also a resample and a paint,
+// so it keeps four.
+const MODEST_DEVICE = (navigator.hardwareConcurrency || 4) <= 4 || (navigator.deviceMemory ?? 8) <= 4;
+const FETCH_CONCURRENCY = MODEST_DEVICE ? 4 : 6;
 const SKYBOT_CONCURRENCY = 2;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -1289,6 +1293,7 @@ function drawDepthScale(svg, reached) {
 let runHits = [];
 /** The run's height the last time it was on screen, for a room measured while it is not. */
 let runHeight = 230;
+let runHeightRead = false;
 let runHover = -1;
 
 /** The palette the strip draws with. Read when the theme could have moved. */
@@ -1342,12 +1347,18 @@ function drawAxis() {
   // Fitted, every frame narrows as more land; scrolling, each keeps its size
   // and the run runs off to the right, the shown frame kept in view.
   const lane = $('run-scroll');
-  const room = lane.clientWidth || 1;
+  const room = laneWidth(lane);
   const wide = state.runScroll && slots.length * RUN_SLOT_PX > room ? slots.length * RUN_SLOT_PX : null;
-  $('run-canvas').style.width = wide ? `${wide}px` : '';
-  lane.dataset.scroll = String(Boolean(wide));
-  $('run-fit').hidden = slots.length * RUN_SLOT_PX <= room;
-  runHits = drawStrip($('run-canvas'), {
+  // Written only when they change: each write followed by a read of a size
+  // made the browser lay the whole page out again, thirty times a second.
+  const canvas = $('run-canvas');
+  const cssWidth = wide ? `${wide}px` : '';
+  if (canvas.style.width !== cssWidth) canvas.style.width = cssWidth;
+  if (lane.dataset.scroll !== String(Boolean(wide))) lane.dataset.scroll = String(Boolean(wide));
+  const fits = slots.length * RUN_SLOT_PX <= room;
+  if ($('run-fit').hidden !== fits) $('run-fit').hidden = fits;
+  const heightBefore = canvas.height;
+  runHits = drawStrip(canvas, {
     width: wide,
     slots,
     sectors: state.sectors,
@@ -1357,17 +1368,35 @@ function drawAxis() {
     bands: state.band === 'all',
     paint: runPaint,
     now: performance.now(),
-    motion: !matchMedia('(prefers-reduced-motion: reduce)').matches,
+    motion: !REDUCED_MOTION.matches && !MODEST_DEVICE,
   });
-  runHeight = box.offsetHeight || runHeight;
+  if (canvas.height !== heightBefore || !runHeightRead) { runHeight = box.offsetHeight || runHeight; runHeightRead = true; }
   if (wide) keepInView(lane, shown, slots.length, wide);
   // The run's own name says how much of the archive it is.
   const read = visits.length;
   const total = state.allVisits.length;
-  box.querySelector('.run__k').textContent = total > read && read
-    ? t('run.legendSome', { n: read, total }) : t('run.legend');
+  const legend = total > read && read ? t('run.legendSome', { n: read, total }) : t('run.legend');
+  const name = box.querySelector('.run__k');
+  if (name.textContent !== legend) name.textContent = legend;
   animateRun(slots);
 }
+
+/**
+ * The run's width, kept by a ResizeObserver: asked of the layout on every
+ * redraw, it made the browser lay the page out again each time.
+ */
+let laneRoom = 0;
+let laneWatch = null;
+function laneWidth(lane) {
+  if (!laneWatch && 'ResizeObserver' in window) {
+    laneWatch = new ResizeObserver(([entry]) => { laneRoom = entry.contentRect.width; });
+    laneWatch.observe(lane);
+  }
+  if (!laneRoom) laneRoom = lane.clientWidth;
+  return laneRoom || 1;
+}
+
+const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)');
 
 /** A frame's place in the scrolling run, wide enough to read its date. */
 const RUN_SLOT_PX = 72;
@@ -1377,9 +1406,18 @@ function keepInView(lane, i, n, width) {
   if (i == null || i < 0) return;
   const x = 8 + ((width - 16) / n) * (i + 0.5);
   const left = lane.scrollLeft;
-  const right = left + lane.clientWidth;
-  if (x > left + 60 && x < right - 60) return;
-  lane.scrollTo({ left: Math.max(0, x - lane.clientWidth / 2), behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  const room = lane.clientWidth;
+  const still = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  // Playing, the run glides under the frame on screen, which holds its place
+  // a little left of the middle: one frame's width a step, not a jump of half
+  // the lane when the frame reached the edge.
+  if (state.playing && !still) {
+    const target = Math.max(0, Math.min(width - room, x - room * 0.4));
+    if (Math.abs(target - left) > 1) lane.scrollTo({ left: target, behavior: 'smooth' });
+    return;
+  }
+  if (x > left + 60 && x < left + room - 60) return;
+  lane.scrollTo({ left: Math.max(0, x - room / 2), behavior: still ? 'auto' : 'smooth' });
 }
 
 function setRunScroll(on) {
@@ -1399,7 +1437,9 @@ let runFrame = 0;
  * frames a second, and nothing at all once the field is in.
  */
 function animateRun(slots) {
-  if (runFrame || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  // A modest device keeps its time for the frames being read: the run is
+  // redrawn when a frame lands, not animated while it waits.
+  if (runFrame || MODEST_DEVICE || REDUCED_MOTION.matches) return;
   const now = performance.now();
   const busy = slots.some((s) => s.status === 'reading' || !s.frame)
     || slots.some((s) => s.landedAt && now - s.landedAt < 460);
@@ -4452,6 +4492,9 @@ const isGone = (v) => v.status === 'dropped' || v.status === 'failed';
 
 /** Back out to the sky, the same way, run backwards. */
 async function leaveToSky() {
+  if (flying) return;
+  // Opened from a link, the sky was not built while the field loaded.
+  if (!gate) await ensureGate();
   if (flying || !gate) return;
   flying = true;
   const at = { ra: state.ra ?? gate.centreRA, dec: state.dec ?? 0 };
@@ -4493,6 +4536,10 @@ function closeGate() {
   if (gate) gate.zoom = null;
   sky?.resize();
 }
+
+/** The sky, built once: at once for a visit that starts on it, on the way back for one that started on a field. */
+let gateBuilt = null;
+const ensureGate = () => (gateBuilt ??= buildGate());
 
 async function buildGate() {
   gate = new Gate($('gate-sky'), {
@@ -5505,7 +5552,10 @@ async function boot() {
     openGate();
     setPlateState(t('status.idle'));
   }
-  buildGate();
+  // A link straight to a field does not build the sky behind it: two seconds
+  // of a phone's time, while the field's frames are what it came for. It is
+  // built when the sky is asked for.
+  if (!hash.position) ensureGate();
 }
 
 boot();
