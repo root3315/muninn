@@ -10,7 +10,7 @@
  * interface and the number in the write-up cannot drift apart.
  *
  * Measured, not quoted: `tools/sensitivity.mjs` over real D1–D6 frames gives
- * 17.60 AB for a single visit, from the detector's own pixels. On a D2 frame
+ * 17.61 AB for a single visit, from the detector's own pixels. On a D2 frame
  * of the Atala field the pipeline's own VARIANCE plane (about 0.0005 (MJy/sr)²
  * per blank pixel) says 0.022 MJy/sr against the 0.025 measured here — about
  * 0.1 mag apart, the robust estimate on the cautious side.

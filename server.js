@@ -970,7 +970,7 @@ await loadBakedFields();
  * Drop answers older than they are trusted for. Every relay question is a
  * file in .cache, and on a small always-on box the disk is the limit that
  * would be reached first; an expired answer is never served, so it is only
- * taking room. Swept at start and every hour after.
+ * taking room. Swept at start and every ten minutes after.
  */
 async function sweepCache() {
   let names;
