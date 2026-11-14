@@ -969,7 +969,9 @@ body { font-size: var(--text-base); line-height: 1.5; }
    list: its foot fades, so the cut reads as "more below" and not as an edge,
    and the verdict takes less of the height it has. */
 @media (min-width: 68.0625rem) and (min-height: 34.0625rem) {
-  .side--right, .tools { mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5rem), transparent); }
+  /* The settings panel is not faded: it lies over the findings, and a faded
+     foot let them show through it. Its scrollbar says there is more. */
+  .side--right { mask-image: linear-gradient(to bottom, #000 calc(100% - 2.5rem), transparent); }
 }
 @media (min-width: 68.0625rem) and (max-height: 46rem) {
   .verdict { padding-block: var(--space-md); gap: var(--space-sm); }
@@ -1281,9 +1283,13 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .mark[data-open="false"] .mark__call { font-size: var(--text-sm); }
 .mark__group {
   display: grid; gap: var(--space-3xs);
-  margin-block-start: var(--space-2xs); padding-block-start: var(--space-xs);
-  border-block-start: var(--rule-hair) solid var(--color-rule-soft);
+  margin-block-start: var(--space-2xs); padding: var(--space-xs) var(--space-sm);
+  background: var(--color-paper-2); border-radius: var(--radius-md);
 }
+/* The verdict's group carries the call's colour on its edge, so the answer
+   and its evidence are told apart from the catalogues at a glance. */
+.mark__group:first-of-type { box-shadow: inset 2px 0 0 var(--color-accent-dim); }
+.mark__group .mark__detail, .mark__group .mark__who { color: var(--color-ink); }
 .mark__k {
   font-family: var(--font-mono); font-size: 0.6875rem; letter-spacing: 0.06em; text-transform: uppercase;
   color: var(--color-neutral);
