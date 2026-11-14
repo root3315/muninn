@@ -1422,7 +1422,7 @@ function drawAxis() {
     bands: state.band === 'all',
     paint: runPaint,
     now: performance.now(),
-    motion: !REDUCED_MOTION.matches && !MODEST_DEVICE,
+    motion: !REDUCED_MOTION.matches && !MODEST_DEVICE && !NARROW_RUN.matches,
   });
   if (canvas.height !== heightBefore || !runHeightRead) { runHeight = box.offsetHeight || runHeight; runHeightRead = true; }
   if (wide) keepInView(lane, shown, slots.length, wide);
@@ -1451,6 +1451,8 @@ function laneWidth(lane) {
 }
 
 const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)');
+/** A phone's width: the run is drawn as frames land, not animated between. */
+const NARROW_RUN = matchMedia('(max-width: 40rem)');
 
 /** A frame's place in the scrolling run, wide enough to read its date. */
 const RUN_SLOT_PX = 72;
@@ -1492,8 +1494,10 @@ let runFrame = 0;
  */
 function animateRun(slots) {
   // A modest device keeps its time for the frames being read: the run is
-  // redrawn when a frame lands, not animated while it waits.
-  if (runFrame || MODEST_DEVICE || REDUCED_MOTION.matches) return;
+  // redrawn when a frame lands, not animated while it waits. So does a phone:
+  // redrawing the strip thirty times a second there took the main thread the
+  // frames were being decoded on.
+  if (runFrame || MODEST_DEVICE || REDUCED_MOTION.matches || NARROW_RUN.matches) return;
   const now = performance.now();
   const busy = slots.some((s) => s.status === 'reading' || !s.frame)
     || slots.some((s) => s.landedAt && now - s.landedAt < 460);
