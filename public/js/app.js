@@ -42,6 +42,7 @@ import { loadWise, WISE_BANDS } from './wise.js';
 import { planetHostNear, systemUrl } from './exovision.js';
 import { drawGaiaSky, psfFor } from './gaiasky.js';
 import { fieldArchives, cadcSearchUrl } from './archives.js';
+import { markFacts } from './markfacts.js';
 import {
   searchFrames, searchAhead, NoRelayError, UpstreamError, groupVisits, findHeldVisit, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, fieldObjects, toS3, surveySources,
@@ -2382,6 +2383,24 @@ function markCurve(analysis) {
   return svg;
 }
 
+/**
+ * A line of figures, "25 Dec · D2 · 403σ": each bit kept whole when the line
+ * wraps, the dot staying with the bit before it, and the bits marked `key`
+ * set in ink and weight, the number the reader came for.
+ */
+function factsLine(bits, className) {
+  const p = document.createElement('p');
+  p.className = `${className} num`;
+  bits.forEach((bit, k) => {
+    if (k) p.append(' · ');
+    const span = document.createElement('span');
+    span.className = bit.key ? 'facts-bit facts-bit--key' : 'facts-bit';
+    span.textContent = bit.text;
+    p.append(span);
+  });
+  return p;
+}
+
 function renderMarks() {
   const ul = $('marks');
   // A spectrum's button outlives the rebuild; so must the focus resting on it.
@@ -2467,14 +2486,18 @@ function renderMarks() {
     pos.className = 'mark__pos';
     pos.textContent = `${formatRA(m.ra)} ${formatDec(m.dec)}`;
 
-    // A source that sits still in every visit is not a solar-system body, and
-    // "no match in SkyBoT" under it only raised the question of why anyone
-    // asked. What it is comes from the star catalogues instead.
-    // Folded, a mark is its verdict and one line: what the catalogues call it,
-    // or else what was measured.
-    const brief = document.createElement('p');
-    brief.className = 'mark__brief';
-    brief.textContent = m.tag && m.tag !== call.textContent ? m.tag : detail.textContent;
+    // The head reads at a glance, folded or not, like a known body's card in
+    // Hunter X: the verdict, a figures line under it, and what the catalogues
+    // call it. The sentences and the evidence are the unfolded part.
+    const facts = factsLine(markFacts(m.analysis, {
+      band: m.analysis?.brightness?.band ?? m.analysis?.track?.[0]?.band ?? (state.band !== 'all' ? state.band : null),
+      ra: m.ra, dec: m.dec,
+    }, { t, fmt, day: dateLabel }), 'mark__facts');
+    const tag = m.tag && m.tag !== call.textContent ? document.createElement('p') : null;
+    if (tag) {
+      tag.className = 'mark__tag';
+      tag.textContent = m.tag;
+    }
 
     // Unfolded, the evidence in groups, each under a small heading, so the
     // verdict, the catalogues, the light and the place do not run together.
@@ -2519,7 +2542,7 @@ function renderMarks() {
     // The verdict's own sentence reads as its subtitle: a heading "Verdict"
     // over it only repeated the title.
     for (const node of verdictNodes) node.classList.add('mark__lead');
-    body.append(call, brief, ...verdictNodes, ...[
+    body.append(...verdictNodes, ...[
       group('mark.kWho', ...whoNodes),
       group('mark.kLight', ...lightNodes),
       group('mark.kWhere', pos),
@@ -2545,29 +2568,34 @@ function renderMarks() {
       writeHash();
     });
 
-    const fold = document.createElement('button');
-    fold.type = 'button';
-    fold.className = 'mark__fold';
-    fold.setAttribute('aria-expanded', String(m.open !== false));
-    fold.setAttribute('aria-label', `${t(m.open !== false ? 'mark.fold' : 'mark.unfold')} ${i + 1}`);
-    fold.title = t(m.open !== false ? 'mark.fold' : 'mark.unfold');
-    const SVG_NS = 'http://www.w3.org/2000/svg';
-    const chevron = document.createElementNS(SVG_NS, 'svg');
-    chevron.setAttribute('viewBox', '0 0 24 24');
-    chevron.setAttribute('aria-hidden', 'true');
-    const stroke = document.createElementNS(SVG_NS, 'path');
-    stroke.setAttribute('d', 'M6 9l6 6 6-6');
-    chevron.append(stroke);
-    fold.append(chevron);
-    fold.addEventListener('click', () => {
+    // The card itself folds and unfolds: its head is the press for the
+    // keyboard and for a screen reader, and a tap anywhere on the card that
+    // is not one of its own controls does the same.
+    const head = document.createElement('div');
+    head.className = 'mark__head';
+    head.setAttribute('role', 'button');
+    head.tabIndex = 0;
+    head.setAttribute('aria-expanded', String(m.open !== false));
+    head.title = t(m.open !== false ? 'mark.fold' : 'mark.unfold');
+    head.append(call, facts, ...(tag ? [tag] : []));
+    const toggle = () => {
       m.open = m.open === false;
       renderMarks();
+      $('marks').children[i]?.querySelector('.mark__head')?.focus({ preventScroll: true });
+    };
+    head.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      toggle();
     });
-    const acts = document.createElement('div');
-    acts.className = 'mark__acts';
-    acts.append(fold, kill);
+    li.addEventListener('click', (e) => {
+      if (e.target.closest('a, button, input, select, summary, details, label, .spectrum, .curve')) return;
+      // Selecting a figure to copy it is not a press.
+      if (String(getSelection?.() ?? '')) return;
+      toggle();
+    });
 
-    li.append(n, body, acts);
+    li.append(n, head, kill, body);
     // The numbers behind the verdict, to check or to take elsewhere.
     if (m.track?.length || measuredExposures(m).length) {
       const csv = document.createElement('button');
