@@ -127,6 +127,24 @@ export function stackDepth(perVisit) {
  */
 export const PLANET_NINE_V = { bright: 22.6, faint: 24.3 };
 
+/** Linder & Mordasini's nominal case, 10 Earth masses at 700 AU, in V: brighter than the range above. */
+export const PLANET_NINE_NOMINAL_V = 21.7;
+
+/**
+ * How far away Planet Nine is predicted to be, in AU: the semi-major axes of
+ * 400–800 AU that reproduce the clustering of distant orbits (Batygin et al.
+ * 2019, Phys. Rep. 805, 1), the range Hunter X and the season link are built
+ * for. Brown & Batygin (2021, AJ 162, 219) later put it nearer, a ≈ 380 AU.
+ */
+export const PLANET_NINE_AU = [400, 800];
+
+/**
+ * How far from the ecliptic Planet Nine is expected, degrees: its orbit's
+ * inclination, 16 ± 5° (Brown & Batygin 2021), at its upper end. The
+ * inclination is uncertain, so beyond this it is not expected, not excluded.
+ */
+export const PLANET_NINE_MAX_BETA = 21;
+
 /** How far short of the prediction a given depth falls. */
 export function shortfall(stackedAB) {
   if (stackedAB == null) return null;

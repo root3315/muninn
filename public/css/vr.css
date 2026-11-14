@@ -87,6 +87,7 @@ html, body.vr {
 .vr__status { top: 40%; }
 .vr__hint { bottom: 4.2rem; color: var(--color-muted); font-size: var(--text-sm); }
 body[data-field="open"] .vr__hint { display: none; }
+body[data-field="open"] .vr__title { display: none; }
 
 .vr__foot {
   position: fixed;

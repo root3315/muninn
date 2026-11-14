@@ -20,6 +20,7 @@ import { COLLECTIONS } from './release.js';
 import { Gate, loadStars } from './gate.js';
 import { t as tool, setLanguage as setToolLanguage } from './i18n.js';
 import { rateAtAU } from './hunt.js';
+import { PLANET_NINE_V, PLANET_NINE_NOMINAL_V, PLANET_NINE_AU } from './depth.js';
 import { trackCSV } from './export.js';
 
 const $ = (id) => document.getElementById(id);
@@ -926,8 +927,8 @@ async function loadTargets() {
  * case.
  */
 const REACH = [['s6.one', 17.61], ['s6.deep', 20.49]];
-const PLANET_NINE = [22.6, 24.3];
-const PLANET_NINE_BRIGHT = 21.7;
+const PLANET_NINE = [PLANET_NINE_V.bright, PLANET_NINE_V.faint];
+const PLANET_NINE_BRIGHT = PLANET_NINE_NOMINAL_V;
 const AXIS = [14, 26];
 
 function renderReach() {
@@ -1459,7 +1460,7 @@ function renderAsks() {
 /* ----------------------------------- 7 · Hunter X and the season link */
 
 const RATE_AXIS = { au: [1.5, 2000], rate: [0.001, 100] };
-const PLANET_X_AU = [400, 800];
+const PLANET_X_AU = PLANET_NINE_AU;
 /** README: Hunter X's three-pixel floor (18.45″) inside one season of about eleven days, 264 h. */
 const ASTROMETRY_FLOOR = 0.07;
 

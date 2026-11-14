@@ -1488,7 +1488,7 @@ export const tIn = (lang, key) => STRINGS[lang]?.[key] ?? STRINGS[FALLBACK][key]
  * 3 захода, 7 заходов — so a string can say {n:заход|захода|заходов} and get
  * the one that fits. English has two forms, {n:visit|visits}.
  */
-function pluralForm(n, forms) {
+export function pluralForm(n, forms) {
   const a = Math.abs(Math.trunc(Number(n)));
   // Two forms is English: one, and everything else.
   if (forms.length === 2) return a === 1 ? forms[0] : forms[1];

@@ -289,8 +289,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
   /* ---- the sign at the mouth, and Planet X's -------------------------- */
   const sign = createPanel({ widthM: 1.05, heightM: 1.05, pxPerM: 760, name: 'depth-sign', opaque: true });
   {
-    const p = v3(frame.f).multiplyScalar(1.2).addScaledVector(v3(frame.r), -1.7);
-    p.y = -0.45;
+    const p = v3(frame.f).multiplyScalar(1.5).addScaledVector(v3(frame.r), -1.15);
+    p.y = -0.3;
     sign.mesh.position.copy(p);
     sign.mesh.lookAt(0, -0.15, 0);
     group.add(sign.mesh);
@@ -348,13 +348,13 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
       const px = 34;
       const here = Math.abs(state.beta) <= PLANET_X_MAX_BETA;
       const d = state.depthAB;
-      const v = { nominal: fmt(PLANET_X_V.nominal, 1), faint: fmt(PLANET_X_V.faint, 1) };
+      const v = { bright: fmt(PLANET_X_V.bright, 1), faint: fmt(PLANET_X_V.faint, 1), nominal: fmt(PLANET_X_V.nominal, 1), near: PLANET_X_AU[0], far: PLANET_X_AU[1] };
       const text = !here
         ? tv('vr.planetXNo', { beta: `${state.beta >= 0 ? '+' : '−'}${fmt(Math.abs(state.beta), 0)}`, max: PLANET_X_MAX_BETA })
         : d != null
-          ? tv('vr.planetXNote', { ...v, ab: fmt(d, 1), a: fmt(PLANET_X_V.nominal - d, 1), b: fmt(PLANET_X_V.faint - d, 1) })
+          ? tv('vr.planetXNote', { ...v, ab: fmt(d, 1), a: fmt(PLANET_X_V.bright - d, 1), b: fmt(PLANET_X_V.faint - d, 1) })
           : tv('vr.planetXWait', v);
-      const title = wrapLines(`600 ${px + 6}px ${FONTS.display}`, tv('vr.planetX'), W - 24, 2);
+      const title = wrapLines(`600 ${px + 6}px ${FONTS.display}`, tv(here ? 'vr.planetX' : 'vr.planetXAway'), W - 24, 2);
       const body = wrapLines(`400 ${px}px ${FONTS.body}`, text, W - 24, 99);
       const Hc = Math.min(H, 20 + title.length * (px + 12) + body.length * (px + 8) + 24);
       // A dark plate under the words: the corridor's rings run behind it.
@@ -496,11 +496,12 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
     }
   }
 
-  const controls = createPanel({ widthM: 1.15, heightM: 0.42, pxPerM: 760, name: 'depth-controls', opaque: true });
+  const controls = createPanel({ widthM: 1.2, heightM: 0.6, pxPerM: 760, name: 'depth-controls', opaque: true });
   {
-    // Beside the sign, at arm's reach and a little lower: pressed often.
-    const p = v3(frame.f).multiplyScalar(1.15).addScaledVector(v3(frame.r), -1.65);
-    p.y = -0.95;
+    // Across the corridor's mouth from the sign, a little below the eyes and
+    // within a flat screen's width: pressed often, never read looking down.
+    const p = v3(frame.f).multiplyScalar(1.5).addScaledVector(v3(frame.r), 1.05);
+    p.y = -0.4;
     controls.mesh.position.copy(p);
     controls.mesh.lookAt(0, -0.3, 0);
     group.add(controls.mesh);
@@ -509,42 +510,48 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
   function drawControls() {
     applyFilters();
     controls.draw((ctx, W, H, hits) => {
-      roundRect(ctx, 2, 2, W - 4, H - 4, 24);
-      ctx.fillStyle = look.paper;
-      ctx.fill();
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = look.ruleStrong;
-      ctx.stroke();
       const px = minTextPx(760, 1.9);
       const font = `500 ${px}px ${FONTS.body}`;
       const bh = Math.round(px * 1.8);
+      // Laid out first, then the plate drawn to fit what it holds.
+      const laid = [];
       let x = 18;
-      let y = 16;
+      let y = 18;
       const chip = (id, label, on = false, data = null) => {
         const w = chipWidth(ctx, font, label, bh, 0.09 * 760);
         if (x + w > W - 18) { x = 18; y += bh + 12; }
-        button(ctx, hits, look, { x, y, w, h: bh, label, id, font, on, hover: hoverId === `${id}:${data ?? ''}`, data });
+        laid.push({ x, y, w, h: bh, label, id, font, on, hover: hoverId === `${id}:${data ?? ''}`, data });
         x += w + 12;
       };
+      const row = () => { x = 18; y += bh + 12; };
       // Back to the field's screens, the way the viewer came; or out to the sky.
       chip('screens', `‹ ${tv('vr.screensAway')}`);
       chip('back', tv('vr.backSky'));
       chip('morph', morphTo.to > 0.5 ? tv('vr.trueDistances') : tv('vr.asSeen'), morphTo.to > 0.5);
       chip('reset', tv('vr.resetView'));
-      // What a metre along the corridor is worth now, in distance.
-      const decades = Math.log10((D.maxPc * AU_PER_PC) / D.minAU);
-      const perM = 10 ** (decades / (D.farM - D.nearM) / scaleNow);
-      const f = perM >= 100 ? Math.round(perM).toLocaleString('en-US').replace(/,/g, ' ') : perM.toFixed(1);
-      ctx.font = `400 ${Math.round(px * 0.9)}px ${FONTS.mono}`;
-      ctx.fillStyle = look.neutral;
-      ctx.fillText(tv('vr.scaleNow', { f, s: scaleNow.toFixed(scaleNow < 1 ? 2 : 1) }), 18, H - 18);
-      x = 18;
-      y += bh + 12;
+      row();
       const g = state.gaia;
       chip('filter', tv('vr.filterStars', { n: g?.known ?? 0, m: (g?.known ?? 0) + (g?.unknown ?? 0) }), shown.stars, 'stars');
       chip('filter', tv('vr.filterBodies', { n: state.bodies.length }), shown.bodies, 'bodies');
       chip('filter', tv('vr.filterGalaxies', { n: state.galaxies?.length ?? 0, m: state.galaxyCount ?? 0 }), shown.galaxies, 'galaxies');
       chip('filter', tv('vr.filterUnknown', { n: (g?.unknown ?? 0) + state.candidates.length }), shown.unknown, 'unknown');
+      // What a metre along the corridor is worth now, in distance.
+      const decades = Math.log10((D.maxPc * AU_PER_PC) / D.minAU);
+      const perM = 10 ** (decades / (D.farM - D.nearM) / scaleNow);
+      const f = perM >= 100 ? Math.round(perM).toLocaleString('en-US').replace(/,/g, ' ') : perM.toFixed(1);
+      const small = Math.round(px * 0.9);
+      const scaleY = y + bh + 12 + small;
+      const bottom = Math.min(H - 2, scaleY + 18);
+      roundRect(ctx, 2, 2, W - 4, bottom - 2, 24);
+      ctx.fillStyle = look.paper;
+      ctx.fill();
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = look.ruleStrong;
+      ctx.stroke();
+      for (const b of laid) button(ctx, hits, look, b);
+      ctx.font = `400 ${small}px ${FONTS.mono}`;
+      ctx.fillStyle = look.neutral;
+      ctx.fillText(tv('vr.scaleNow', { f, s: scaleNow.toFixed(scaleNow < 1 ? 2 : 1) }), 18, scaleY);
     });
   }
   controls.mesh.userData.hover = (uv) => {
