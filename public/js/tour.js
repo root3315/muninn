@@ -33,8 +33,11 @@ const STEPS = [
   { key: 'depth', find: () => $('depth'), read: 'read-depth' },
   { key: 'hunt', find: () => $('hunt'), read: 'read-hunt' },
   { key: 'view', find: () => $('tools-toggle'), read: 'read-overlay' },
-  // On a phone the link is folded under "⋯"; the tour points at the fold.
-  { key: 'link', find: () => (shown($('copy-link')) ? $('copy-link') : $('more-key')), read: null },
+  // On a phone the link is folded under "⋯"; the tour points at the fold and says so.
+  {
+    key: 'link', find: () => (shown($('copy-link')) ? $('copy-link') : $('more-key')), read: null,
+    words: (el) => (el?.id === 'more-key' ? 'linkFold' : 'link'),
+  },
 ];
 
 const PAD = 8;
@@ -165,9 +168,10 @@ function render() {
     return pip;
   }));
   ui.skip.textContent = t('tour.skip');
-  ui.title.textContent = t(`tour.${step.key}H`);
-  ui.say.textContent = t(`tour.${step.key}P`);
-  ui.moreText.textContent = t(`tour.${step.key}More`);
+  const words = step.words?.(step.el) ?? step.key;
+  ui.title.textContent = t(`tour.${words}H`);
+  ui.say.textContent = t(`tour.${words}P`);
+  ui.moreText.textContent = t(`tour.${words}More`);
   ui.read.hidden = !step.read;
   ui.read.textContent = t('tour.read');
   ui.next.textContent = t(last ? 'tour.finish' : 'tour.next');
