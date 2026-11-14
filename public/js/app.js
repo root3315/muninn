@@ -44,7 +44,7 @@ import { drawGaiaSky, psfFor } from './gaiasky.js';
 import { fieldArchives, cadcSearchUrl } from './archives.js';
 import { markFacts } from './markfacts.js';
 import {
-  searchFrames, searchAhead, NoRelayError, UpstreamError, groupVisits, findHeldVisit, bandsPresent, bandRange, parseCoordinates,
+  searchFrames, searchAhead, askMissingFrames, NoRelayError, UpstreamError, groupVisits, findHeldVisit, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, fieldObjects, toS3, surveySources,
 } from './catalog.js';
 import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP } from './overlay.js';
@@ -3282,24 +3282,35 @@ async function retryPartialList() {
   renderFacts();
   const gen = fieldSeq;
   const { ra, dec } = state;
+  // Only the collections that did not answer are asked again, when the relay
+  // has said which; never an error on screen, whatever comes back.
   let answer = null;
   try {
-    answer = await searchFrames({ ra, dec }, { signal: state.abort?.signal });
+    answer = await askMissingFrames({ ra, dec, collections: state.missing ?? [] }, { signal: state.abort?.signal });
   } catch {
-    // Kept as it is: the visits in hand are still the field's visits.
+    // Aborted: the field has changed.
   }
   if (gen !== fieldSeq || asked !== listRetry) return;
   asked.busy = false;
-  if (answer) {
+  if (answer?.busy) {
+    // The relay asks to be asked later: that is not a failure, and not counted as one.
+    asked.timer = setTimeout(() => { if (asked === listRetry) retryPartialList(); }, answer.retryAfterS * 1000);
+    renderFacts();
+    return;
+  }
+  if (answer && !answer.failed) {
     const want = state.allVisits[state.wantVisit];
-    state.frames = mergeFrames(state.frames ?? [], answer.frames ?? []);
+    state.frames = mergeFrames(state.frames ?? [], answer.frames);
     state.allVisits = mergeVisits(state.allVisits, groupVisits(state.frames, { ra, dec, band: state.band }));
     if (want) state.wantVisit = state.allVisits.indexOf(want);
     state.truncated = state.truncated || Boolean(answer.truncated);
-    state.partial = Boolean(answer.partial);
+    state.partial = answer.partial;
+    state.missing = answer.missing;
     populateBands();
     // The new visits are read the way the rest are, in the background.
     if (!state.filling && !state.loading) fillVisits(Math.max(state.visitGoal, fillCap()));
+  } else if (answer?.missing?.length) {
+    state.missing = answer.missing;
   }
   asked.tries = state.partial ? asked.tries + 1 : 0;
   if (state.partial && asked.tries <= LIST_RETRY_MS.length) {
@@ -3337,6 +3348,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.abChosen = false;
   state.truncated = false;
   state.partial = false;
+  state.missing = [];
   resetListRetry();
   // What the last field measured goes with it: the reading is now built up as
   // this field's visits land, and must not start from someone else's numbers.
@@ -3393,8 +3405,9 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   let frames;
   let truncated = false;
   let partial = false;
+  let missing = [];
   try {
-    ({ frames, truncated, partial = false } = await searchFrames({ ra, dec }, { signal: ctrl.signal }));
+    ({ frames, truncated, partial = false, missing = [] } = await searchFrames({ ra, dec }, { signal: ctrl.signal }));
   } catch (err) {
     if (ctrl.signal.aborted) return;
     state.loading = false;
@@ -3414,6 +3427,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.searched = true;
   state.truncated = truncated;
   state.partial = partial;
+  state.missing = missing;
   populateBands();
 
   state.allVisits = groupVisits(frames, { ra, dec, band: state.band });

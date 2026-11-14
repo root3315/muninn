@@ -145,3 +145,12 @@ test('asking again after a partial list keeps every frame and visit already in h
   for (const v of kept) assert.ok(visits.includes(v), 'every visit held stays, as the same object');
   assert.deepEqual(mergeVisits(kept, []), kept, 'an empty second answer takes nothing away');
 });
+
+test('a list is partial when the relay says so, names what is missing, or warns', async () => {
+  const { readPartial } = await import('../public/js/catalog.js');
+  assert.deepEqual(readPartial({ frames: [1], partial: true, missing: ['spherex_qr3'] }), { frames: [1], partial: true, missing: ['spherex_qr3'] });
+  assert.equal(readPartial({ frames: [], missing: ['spherex_dr1'] }).partial, true, 'a named missing collection');
+  assert.equal(readPartial({ frames: [], warnings: ['HTTP 502'] }).partial, true, 'the older form, warnings only');
+  assert.deepEqual(readPartial({ frames: [2] }), { frames: [2], partial: false, missing: [] });
+  assert.deepEqual(readPartial({ missing: [3, '', 'ok'] }).missing, ['ok'], 'only names are kept');
+});
