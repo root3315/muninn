@@ -24,7 +24,7 @@
 
 import * as THREE from '../vendor/three.module.js';
 import { fmt, formatDay } from '../i18n.js';
-import { deltaRA } from '../wcs.js';
+import { deltaRA, separation } from '../wcs.js';
 import { propagate, GAIA_EPOCH } from '../overlay.js';
 import {
   placeByDistance, depthMetres, unknownShell, parallaxDistancePc, redshiftDistanceMpc, MIN_REDSHIFT, matchTarget,
@@ -486,8 +486,9 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
     const truth = morph.value < 0.05;
     const shownBoxes = [];
     // The Planet X note is always shown, and nothing may stand on it.
-    const fixedBox = { mesh: xSign.mesh, widthM: xSign.widthM, heightM: xSign.heightM * 0.7, priority: 99, fixed: true };
-    const order = [fixedBox, ...labels.filter((l) => l.on !== false && (l.keep || truth))].sort((a, b) => b.priority - a.priority);
+    // Nor on the corridor's sign and controls: names give way to the panels.
+    const fixed = [xSign, sign, controls].map((p) => ({ mesh: p.mesh, widthM: p.widthM, heightM: p.heightM, priority: 99, fixed: true }));
+    const order = [...fixed, ...labels.filter((l) => l.on !== false && (l.keep || truth))].sort((a, b) => b.priority - a.priority);
     for (const l of order) {
       const p = l.mesh.getWorldPosition(tmpA).sub(headWorld);
       const d = Math.max(0.1, p.length());
@@ -535,8 +536,15 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
       const kind = name.startsWith('path:') ? { gaia: 'stars', body: 'bodies', galaxy: 'galaxies' }[name.split(':')[1]] : classOf[name];
       const on = shown[kind] ?? true;
       for (const o of layer.objects) { o.userData.on = on; o.visible = on && (!o.userData.truth || truth); }
-      for (const l of layer.labels) { l.on = on; l.mesh.visible = on && truth; if (l.lead) { l.lead.userData.on = on; l.lead.visible = on && truth; } }
+      // A name filtered off goes at once; one filtered on waits for the next
+      // settling, which decides whether it would cover another.
+      for (const l of layer.labels) {
+        l.on = on;
+        if (!on || !truth) l.mesh.visible = false;
+        if (l.lead) { l.lead.userData.on = on; if (!on || !truth) l.lead.visible = false; }
+      }
     }
+    settledSig = '';
     applyTime();
   }
 
@@ -1091,11 +1099,17 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
       // nearest one with a distance out to 200 pc.
       const nearPc = Math.max(1, Math.min(...objs.filter((o) => o.pc).map((o) => o.pc), 200));
       if (nearPc < CONE_FAR_PC / 2) {
-        const omega = 2 * Math.PI * (1 - Math.cos(field.radiusDeg * D2R));
+        // The cone the sample really covers: out to its farthest star from the field's centre.
+        const reachDeg = Math.max(...objs.map((o) => separation(o.ra, o.dec, field.ra, field.dec)), 1e-3);
+        const omega = 2 * Math.PI * (1 - Math.cos(reachDeg * D2R));
         const expected = (omega / 3) * LOCAL_STARS_PC3 * (CONE_FAR_PC ** 3 - nearPc ** 3);
-        const words = tv('vr.coneNote', { from: fmt(nearPc, nearPc < 10 ? 1 : 0), to: fmt(CONE_FAR_PC, 0), n: fmt(expected, expected < 10 ? 1 : 0) });
+        const drawn = objs.filter((o) => o.pc >= nearPc && o.pc <= CONE_FAR_PC).length;
+        const words = tv('vr.coneNote', {
+          from: fmt(nearPc, nearPc < 10 ? 1 : 0), to: fmt(CONE_FAR_PC, 0), r: fmt(reachDeg * 60, 1),
+          n: fmt(expected, expected < 10 ? 1 : 0), count: expected < 10 && expected % 1 ? 2 : Math.round(expected),
+        });
         const mid = Math.sqrt(nearPc * CONE_FAR_PC) * AU_PER_PC;
-        layer.labels.push(addLabel([words], along(depthMetres(mid)).addScaledVector(v3(frame.u), cone(depthMetres(mid)) * 1.3).toArray(), { tone: 'neutral', width: 40, priority: 3 }));
+        layer.labels.push(addLabel([words, tv('vr.coneShown', { m: drawn, g: fmt(state.gaiaLimit, 1) })], along(depthMetres(mid)).addScaledVector(v3(frame.u), cone(depthMetres(mid)) * 1.3).toArray(), { tone: 'neutral', width: 46, priority: 3 }));
       }
       unknownLayer.labels.push(addLabel([tv('vr.unknownShell')], along(unknownShell()).addScaledVector(v3(frame.u), cone(unknownShell()) * 0.7).toArray(), { tone: 'neutral', width: 16, priority: 2 }));
       state.asking = false;
@@ -1261,6 +1275,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
         const truth = morph.value < 0.05;
         group.traverse((o) => { if (o.userData.truth) o.visible = truth && o.userData.on !== false; });
         for (const l of labels) if (!l.keep) l.mesh.visible = truth && l.on !== false;
+        settledSig = '';
       }
       group.updateMatrixWorld();
       const local = group.worldToLocal(headWorld.clone());
