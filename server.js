@@ -37,13 +37,43 @@ import { archivesQuery, neossatQuery, neossatFilesQuery, readNeossat, ARCHIVE_RA
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
-const CACHE = join(ROOT, '.cache');
+const CACHE = process.env.MUNINN_CACHE_DIR || join(ROOT, '.cache');
 const PORT = Number(process.env.PORT) || 5173;
 const HOST = process.env.HOST || '127.0.0.1';
 
 const SIA = 'https://irsa.ipac.caltech.edu/SIA';
+/** Where the frame search asks. Only a test points it anywhere else. */
+const FRAME_SIA = process.env.MUNINN_SIA_URL || SIA;
 const IRSA_TAP = 'https://irsa.ipac.caltech.edu/TAP/sync';
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+
+/** A duration from the environment, for the tests; the default otherwise. */
+function envMs(name, fallback) {
+  const value = Number(process.env[name]);
+  return process.env[name] && Number.isFinite(value) && value >= 0 ? value : fallback;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+/**
+ * A frame list changes when IRSA publishes data, not by the hour, so a list
+ * is taken as current for three days. Past that it is still served at once
+ * and asked about again behind the visitor's back.
+ */
+const SEARCH_FRESH_MS = envMs('MUNINN_SEARCH_FRESH_MS', 3 * DAY_MS);
+/** And kept for a month, so that IRSA being down for a day costs nobody a list. */
+const SEARCH_KEEP_MS = 30 * DAY_MS;
+/** The waits before the second and third ask when IRSA's gateway says 502, 503 or 504, or a question times out. */
+const SEARCH_RETRY_WAITS_MS = (process.env.MUNINN_RETRY_MS || '1000,3000').split(',').map(Number).filter(Number.isFinite);
+/** The longest one ask may take, so that a timed-out first ask leaves room for another. */
+const SEARCH_ATTEMPT_MS = envMs('MUNINN_ATTEMPT_MS', 100_000);
+/** A retry is not started with less than this left of the deadline. */
+const SEARCH_MIN_LEFT_MS = 5_000;
+/** Background refreshes at once (two fields of four collections), and the pause after one failed before the same list is asked about again. */
+const REFRESH_MAX = 8;
+const REFRESH_PAUSE_MS = envMs('MUNINN_REFRESH_PAUSE_MS', 5 * 60 * 1000);
+/** When a collection that failed with nothing kept is asked again in the background, and for how many positions at once. */
+const RETRY_LATER_MS = (process.env.MUNINN_RETRY_LATER_MS || '15000,60000,180000').split(',').map(Number).filter(Number.isFinite);
+const RETRY_LATER_MAX = 64;
 /** The most the answer cache may hold on disk. */
 const CACHE_MAX_BYTES = 300 * 1024 * 1024;
 /** IRSA's TAP answers a cone in 7–30 s; well past that, it is not coming. */
@@ -139,21 +169,31 @@ const memory = new Map();
 const MEMORY_MAX = 256;
 
 const safeKey = (text) => text.replace(/[^\w.-]/g, '_');
-const cacheKey = (ra, dec, radius) => safeKey(`sia_${ra.toFixed(4)}_${dec.toFixed(4)}_${radius.toFixed(4)}`);
+/** One collection's frame list at one position. */
+const framesKey = (collection, ra, dec, radius) =>
+  safeKey(`frames_${collection}_${ra.toFixed(4)}_${dec.toFixed(4)}_${radius.toFixed(4)}`);
 
-async function readCache(key) {
+/**
+ * The kept answer under `key` and when it was kept, or null when there is none
+ * younger than `keepMs`.
+ */
+async function readEntry(key, keepMs) {
   const hit = memory.get(key);
-  if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.value;
+  if (hit && Date.now() - hit.at < keepMs) return hit;
   try {
     const file = join(CACHE, `${key}.json`);
     const info = await stat(file);
-    if (Date.now() - info.mtimeMs > CACHE_TTL_MS) return null;
-    const value = JSON.parse(await readFile(file, 'utf8'));
-    remember(key, { at: info.mtimeMs, value });
-    return value;
+    if (Date.now() - info.mtimeMs > keepMs) return null;
+    const entry = { at: info.mtimeMs, value: JSON.parse(await readFile(file, 'utf8')) };
+    remember(key, entry);
+    return entry;
   } catch {
     return null;
   }
+}
+
+async function readCache(key) {
+  return (await readEntry(key, CACHE_TTL_MS))?.value ?? null;
 }
 
 function remember(key, entry) {
@@ -209,34 +249,182 @@ function findBaked(ra, dec) {
 
 /* -------------------------------------------------------------------- search */
 
-async function queryCollectionOnce(collection, ra, dec, radius, ms = UPSTREAM_TIMEOUT_MS) {
+const sleep = (ms) => new Promise((done) => { setTimeout(done, ms); });
+
+async function queryCollectionOnce(collection, ra, dec, radius, ms) {
   const pos = encodeURIComponent(`circle ${ra} ${dec} ${radius}`);
-  const res = await withTimeout(`${SIA}?COLLECTION=${collection}&POS=${pos}&MAXREC=${MAXREC}`, ms);
-  if (!res.ok) throw Object.assign(new Error(`IRSA ${collection}: HTTP ${res.status}`), { answered: true });
+  const res = await withTimeout(`${FRAME_SIA}?COLLECTION=${collection}&POS=${pos}&MAXREC=${MAXREC}`, ms);
+  if (!res.ok) throw Object.assign(new Error(`IRSA ${collection}: HTTP ${res.status}`), { status: res.status });
   const { status, message, rows } = parseVOTable(await res.text());
-  if (status === 'ERROR') throw Object.assign(new Error(`IRSA ${collection}: ${message}`), { answered: true });
+  if (status === 'ERROR') throw Object.assign(new Error(`IRSA ${collection}: ${message}`), { status: 200 });
   return { rows, truncated: status === 'OVERFLOW' };
 }
 
 /**
- * One more try when the connection itself dropped. IRSA sometimes closes a
- * slow response part-way ("terminated", "fetch failed"); asked again, it
- * usually answers. An answer that says no — an HTTP error or a VOTable error —
- * is not asked twice.
+ * Worth asking again: IRSA's gateway in front of a busy service (502, 503,
+ * 504), a question that timed out, or a connection dropped part-way. An
+ * answer that says no (another HTTP error, a VOTable error) is final.
+ */
+const worthRetry = (err) => err.status === undefined || [502, 503, 504].includes(err.status);
+
+/**
+ * One collection asked, up to twice more on a failure worth retrying, with a
+ * growing wait between asks. Every ask gets what is left of one deadline, so
+ * the whole lot ends before the page stops waiting.
  */
 async function queryCollection(collection, ra, dec, radius) {
-  const started = Date.now();
-  try {
-    return await queryCollectionOnce(collection, ra, dec, radius);
-  } catch (err) {
-    // Only a quick drop is worth a second ask: after a long silence, asking
-    // again would double a wait that was already too long.
-    if (err.answered || Date.now() - started > 30_000) throw err;
-    await new Promise((r) => { setTimeout(r, 800); });
-    // The second ask gets what is left of the first one's time, so the two
-    // together end before the page stops waiting.
-    return queryCollectionOnce(collection, ra, dec, radius, UPSTREAM_TIMEOUT_MS - (Date.now() - started));
+  const until = Date.now() + UPSTREAM_TIMEOUT_MS;
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await queryCollectionOnce(collection, ra, dec, radius, Math.min(SEARCH_ATTEMPT_MS, until - Date.now()));
+    } catch (err) {
+      const wait = SEARCH_RETRY_WAITS_MS[attempt];
+      if (!worthRetry(err) || wait === undefined || until - Date.now() - wait < SEARCH_MIN_LEFT_MS) throw err;
+      await sleep(wait);
+    }
   }
+}
+
+/** The frames the page can use out of IRSA's rows: calibrated science images. */
+function framesFromRows(rows) {
+  const frames = [];
+  for (const row of rows) {
+    if (row.dataproduct_subtype !== 'science') continue;
+    if (Number(row.calib_level) < 2) continue;
+    const frame = frameFromRow(row);
+    if (frame?.url) frames.push(frame);
+  }
+  return frames;
+}
+
+/** Collection questions out at IRSA, by cache key: a second asker joins the first. */
+const upstream = new Map();
+
+/** Ask IRSA for one collection's list, and keep the answer. */
+function fetchCollection(collection, ra, dec, radius) {
+  const key = framesKey(collection, ra, dec, radius);
+  let pending = upstream.get(key);
+  if (!pending) {
+    pending = queryCollection(collection, ra, dec, radius)
+      .then(async ({ rows, truncated }) => {
+        const value = { frames: framesFromRows(rows), truncated };
+        await writeCache(key, value);
+        return { at: Date.now(), value };
+      })
+      .finally(() => upstream.delete(key));
+    upstream.set(key, pending);
+  }
+  return pending;
+}
+
+let refreshing = 0;
+const refreshFailed = new Map();
+
+/**
+ * A kept list past its three days is asked about again in the background,
+ * never while a visitor waits. A failed refresh leaves the kept list as it
+ * was and is not tried again for a few minutes, so an IRSA outage is not
+ * asked about by every page that opens.
+ */
+function refreshInBackground(collection, ra, dec, radius) {
+  const key = framesKey(collection, ra, dec, radius);
+  if (upstream.has(key) || refreshing >= REFRESH_MAX) return;
+  if (Date.now() - (refreshFailed.get(key) ?? 0) < REFRESH_PAUSE_MS) return;
+  refreshing += 1;
+  fetchCollection(collection, ra, dec, radius)
+    .then(() => refreshFailed.delete(key), () => {
+      refreshFailed.set(key, Date.now());
+      if (refreshFailed.size > 1000) refreshFailed.delete(refreshFailed.keys().next().value);
+    })
+    .finally(() => { refreshing -= 1; });
+}
+
+/**
+ * One collection's part of the answer: the kept list if there is one, however
+ * old (refreshed behind the scenes once it is past its days), else IRSA's
+ * answer, else the reason there is none.
+ */
+async function collectionAnswer(collection, ra, dec, radius) {
+  const kept = await readEntry(framesKey(collection, ra, dec, radius), SEARCH_KEEP_MS);
+  if (kept) {
+    const age = Date.now() - kept.at;
+    const stale = age >= SEARCH_FRESH_MS;
+    if (stale) refreshInBackground(collection, ra, dec, radius);
+    return { collection, ...kept.value, cached: true, staleMs: stale ? age : 0 };
+  }
+  try {
+    const { value } = await fetchCollection(collection, ra, dec, radius);
+    return { collection, ...value, cached: false, staleMs: 0 };
+  } catch (err) {
+    retryInBackground(collection, ra, dec, radius);
+    return { collection, error: err.message };
+  }
+}
+
+const retrying = new Set();
+
+/**
+ * A collection that failed with nothing kept is asked again in the
+ * background, a few times further apart, so that the page's own second ask
+ * for the missing part finds it kept, or joins a question already out.
+ */
+function retryInBackground(collection, ra, dec, radius, step = 0) {
+  const key = framesKey(collection, ra, dec, radius);
+  if (step === 0 && (retrying.has(key) || retrying.size >= RETRY_LATER_MAX)) return;
+  const wait = RETRY_LATER_MS[step];
+  if (wait === undefined) { retrying.delete(key); return; }
+  retrying.add(key);
+  setTimeout(() => {
+    fetchCollection(collection, ra, dec, radius)
+      .then(() => retrying.delete(key), () => retryInBackground(collection, ra, dec, radius, step + 1));
+  }, wait).unref();
+}
+
+/** Whether every collection asked about has a kept list, so the answer needs no wait. */
+async function allKept(collections, ra, dec, radius) {
+  const kept = await Promise.all(collections.map((c) => readEntry(framesKey(c, ra, dec, radius), SEARCH_KEEP_MS)));
+  return kept.every(Boolean);
+}
+
+/**
+ * Which frames cover a position, collection by collection. Each collection is
+ * kept on its own, so one that did not answer is asked again alone: the
+ * answer names it in `missing`, and `?collections=` asks for just those.
+ */
+async function lookup(ra, dec, radius, collections) {
+  const parts = await Promise.all(collections.map((c) => collectionAnswer(c, ra, dec, radius)));
+  const answered = parts.filter((p) => !p.error);
+  const missing = parts.filter((p) => p.error).map((p) => p.collection);
+  const warnings = parts.filter((p) => p.error).map((p) => `${p.collection}: ${p.error}`);
+
+  const seen = new Set();
+  const frames = [];
+  for (const frame of answered.flatMap((p) => p.frames)) {
+    if (seen.has(frame.url)) continue;
+    seen.add(frame.url);
+    frames.push(frame);
+  }
+  frames.sort((a, b) => a.mjd - b.mjd);
+
+  const queried = { ra, dec, radius, collections };
+  // Nothing found while part of the archive did not answer is not "nothing
+  // here": it is a question that did not get asked. Said as a failure.
+  if (!answered.length || (!frames.length && missing.length)) {
+    return { ok: false, error: warnings.join('; '), partial: answered.length > 0, missing, queried };
+  }
+  const staleMs = Math.max(0, ...answered.map((p) => p.staleMs));
+  return {
+    ok: true,
+    cached: answered.every((p) => p.cached),
+    frames,
+    truncated: answered.some((p) => p.truncated),
+    partial: missing.length > 0,
+    missing,
+    warnings,
+    stale: staleMs > 0,
+    staleAgeS: Math.round(staleMs / 1000),
+    queried,
+  };
 }
 
 /** Whether an address an archive's answer named is IRSA's own, over https. */
@@ -338,16 +526,66 @@ async function handleSearch(url, res) {
   // frame that can cover the field — and a wider cone costs the archive dearly.
   const radius = Math.min(0.03, Math.max(0.002, Number(url.searchParams.get('radius')) || 0.006));
 
+  const collections = askedCollections(url);
+  if (!collections) return json(res, 400, BAD_COLLECTIONS);
+
   const prebaked = findBaked(ra, dec);
   if (prebaked) {
     return json(res, 200, {
-      ok: true, cached: 'baked', frames: prebaked.frames,
-      truncated: Boolean(prebaked.truncated), warnings: [],
+      ok: true, cached: 'baked',
+      frames: prebaked.frames.filter((f) => collections.includes(f.collection)),
+      truncated: Boolean(prebaked.truncated), partial: false, missing: [], warnings: [],
+      stale: false, staleAgeS: 0, queried: { ra, dec, radius, collections },
     }, KEEP_FRAME_LIST);
   }
 
-  const key = cacheKey(ra, dec, radius);
-  return relay(res, key, () => lookup(ra, dec, radius, key), 'search', KEEP_FRAME_LIST);
+  // Every part kept, however old: answered at once, never behind IRSA.
+  if (await allKept(collections, ra, dec, radius)) {
+    const body = await lookup(ra, dec, radius, collections);
+    return json(res, 200, body, searchHeaders(body));
+  }
+
+  const key = `search_${collections.join(',')}_${framesKey('', ra, dec, radius)}`;
+  let pending = inflight.get(key);
+  if (!pending && pools.search.size >= POOL_MAX.search) {
+    // Said as busy, with when to come back, so a page can ask again by itself
+    // rather than call the archive down.
+    return json(res, 503, {
+      ok: false, busy: true, retryAfterS: 5, missing: collections,
+      error: 'The archive relay is busy with other questions; try again in a moment.',
+    }, { 'retry-after': '5' });
+  }
+  if (!pending) {
+    pools.search.add(key);
+    pending = lookup(ra, dec, radius, collections).finally(() => { inflight.delete(key); pools.search.delete(key); });
+    inflight.set(key, pending);
+  }
+  return answerSlowly(res, pending);
+}
+
+/**
+ * The collections a search asks about: all of them, or the ones named in
+ * `?collections=` (comma-separated), which is how a page asks again for only
+ * the parts an earlier answer listed as missing. Null for an unknown name.
+ */
+function askedCollections(url) {
+  const raw = url.searchParams.get('collections');
+  if (raw === null || raw.trim() === '') return COLLECTIONS;
+  const names = [...new Set(raw.split(',').map((n) => n.trim()))];
+  return names.every((n) => COLLECTIONS.includes(n)) ? COLLECTIONS.filter((c) => names.includes(c)) : null;
+}
+
+const BAD_COLLECTIONS = { ok: false, error: `collections must be among ${COLLECTIONS.join(', ')}` };
+
+/**
+ * A whole, current list may be kept by the browser for an hour. A stale one is
+ * served with its age (also in the body) and not kept, since a fresher one is
+ * on its way; a partial one is not kept either.
+ */
+function searchHeaders(body) {
+  if (!body.ok) return {};
+  if (body.stale) return { 'x-muninn-stale-age': String(body.staleAgeS) };
+  return body.partial ? {} : KEEP_FRAME_LIST;
 }
 
 /* ------------------------------------------------------- catalogues at IRSA */
@@ -458,7 +696,8 @@ async function askMastGaia(field, key) {
 
 async function askIrsaTap(archive, field, key) {
   const query = new URLSearchParams({ REQUEST: 'doQuery', LANG: 'ADQL', FORMAT: 'csv', QUERY: coneQuery(archive, field) });
-  const res = await withTimeout(`${IRSA_TAP}?${query}`, TAP_TIMEOUT_MS);
+  // IRSA's gateway says 502 in bursts: asked once more after a short wait.
+  const res = await retryOnGateway(() => withTimeout(`${IRSA_TAP}?${query}`, TAP_TIMEOUT_MS));
   const text = await res.text();
   // A refusal comes back as a VOTable whatever format was asked for.
   if (!res.ok || text.trimStart().startsWith('<')) {
@@ -698,52 +937,6 @@ async function askJpl(field, key) {
   if (!res.ok || !body?.signature) throw new Error(`JPL sb_ident: ${body?.message ?? `HTTP ${res.status}`}`);
   const payload = { bodies: parseSbIdent(body), via: 'JPL' };
   await writeCache(key, payload);
-  return { ok: true, cached: false, ...payload };
-}
-
-/** Ask the archive which frames cover a position, and cache a complete answer. */
-async function lookup(ra, dec, radius, key) {
-  const settled = await Promise.allSettled(
-    COLLECTIONS.map((c) => queryCollection(c, ra, dec, radius)),
-  );
-
-  const rows = [];
-  const problems = [];
-  let truncated = false;
-  settled.forEach((r, i) => {
-    if (r.status === 'fulfilled') {
-      rows.push(...r.value.rows);
-      truncated = truncated || r.value.truncated;
-    } else {
-      problems.push(`${COLLECTIONS[i]}: ${r.reason.message}`);
-    }
-  });
-
-  if (!rows.length && problems.length === COLLECTIONS.length) {
-    return { ok: false, error: problems.join('; ') };
-  }
-
-  const seen = new Set();
-  const frames = [];
-  for (const row of rows) {
-    if (row.dataproduct_subtype !== 'science') continue;
-    if (Number(row.calib_level) < 2) continue;
-    const frame = frameFromRow(row);
-    if (!frame || !frame.url || seen.has(frame.url)) continue;
-    seen.add(frame.url);
-    frames.push(frame);
-  }
-  frames.sort((a, b) => a.mjd - b.mjd);
-  // Nothing found while part of the archive did not answer is not "nothing
-  // here" — it is a question that did not get asked. Said as a failure.
-  if (!frames.length && problems.length) {
-    return { ok: false, error: problems.join('; ') };
-  }
-
-  const payload = { frames, truncated, warnings: problems, queried: { ra, dec, radius } };
-  // A collection that did not answer is a gap, not a finding. Cached, it turned
-  // one dropped connection into twelve hours of "SPHEREx has never been here".
-  if (!problems.length) await writeCache(key, payload);
   return { ok: true, cached: false, ...payload };
 }
 
@@ -998,10 +1191,9 @@ const server = createServer(async (req, res) => {
 await loadBakedFields();
 
 /**
- * Drop answers older than they are trusted for. Every relay question is a
+ * Drop answers older than they are kept for. Every relay question is a
  * file in .cache, and on a small always-on box the disk is the limit that
- * would be reached first; an expired answer is never served, so it is only
- * taking room. Swept at start and every ten minutes after.
+ * would be reached first. Swept at start and every ten minutes after.
  */
 async function sweepCache() {
   let names;
@@ -1013,7 +1205,10 @@ async function sweepCache() {
     try {
       const info = await stat(file);
       if (!info.isFile()) continue;
-      if (now - info.mtimeMs > CACHE_TTL_MS) await unlink(file);
+      // A frame list is kept for weeks, as the answer to fall back on while
+      // IRSA is down; everything else for as long as it is trusted.
+      const keep = name.startsWith('frames_') ? SEARCH_KEEP_MS : CACHE_TTL_MS;
+      if (now - info.mtimeMs > keep) await unlink(file);
       else kept.push({ file, at: info.mtimeMs, size: info.size });
     } catch { /* gone already, or busy: the next sweep has it */ }
   }
