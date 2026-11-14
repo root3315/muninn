@@ -5014,6 +5014,7 @@ let archivesNeossat = null;
 async function loadArchives(signal) {
   const at = { ra: state.ra, dec: state.dec };
   archives = 'asking';
+  archivesAll = false;
   renderArchives();
   try {
     const list = await fieldArchives({ ...at, radiusDeg: Math.min(0.3, sky.grid.spanDeg / 2) }, { signal });
@@ -5027,19 +5028,21 @@ async function loadArchives(signal) {
   renderArchives();
 }
 
-/** Up to eight archives by size, each with its count and its years. */
+/** Eight archives by size at first, each with its count and its years; the rest one press away. */
+let archivesAll = false;
 function renderArchives() {
   const box = $('archives');
   if (!box) return;
   box.hidden = archives === null;
   const list = Array.isArray(archives) ? archives : [];
   // The list shows eight; the count says how many there are, and that.
+  const cut = list.length > 8 && !archivesAll;
   $('archives-count').textContent = !list.length ? ''
-    : list.length > 8 ? t('archives.of', { shown: 8, n: list.length }) : String(list.length);
+    : cut ? t('archives.of', { shown: 8, n: list.length }) : String(list.length);
   $('archives-note').textContent = archives === 'asking' ? t('archives.asking')
     : archives === 'failed' ? t('archives.failed')
       : list.length ? t('archives.lede') : t('archives.none');
-  $('archives-list').replaceChildren(...list.slice(0, 8).map((a) => {
+  const rows = (cut ? list.slice(0, 8) : list).map((a) => {
     const row = document.createElement('div');
     const dt = document.createElement('dt');
     dt.textContent = a.name;
@@ -5048,7 +5051,19 @@ function renderArchives() {
     dd.textContent = `${fmt(a.n, 0)}${years}`;
     row.append(dt, dd);
     return row;
-  }));
+  });
+  if (cut) {
+    // The ones left out, named by how many, and shown on a press.
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'link archives__more';
+    more.textContent = t('archives.more', { n: list.length - 8 });
+    more.addEventListener('click', () => { archivesAll = true; renderArchives(); });
+    const row = document.createElement('div');
+    row.append(more);
+    rows.push(row);
+  }
+  $('archives-list').replaceChildren(...rows);
   const link = $('archives-link');
   link.hidden = !list.length;
   link.href = CADC_SEARCH;
