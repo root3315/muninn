@@ -927,12 +927,20 @@ function renderReach() {
     return node;
   };
   const deepest = REACH.at(-1)[1];
+  // The shortfall, from the deepest reach to the prediction, as one band that
+  // turns from the instrument's colour into the target's.
+  const stop = (offset, colour, opacity) => el('stop', { offset, style: `stop-color: var(${colour}); stop-opacity: ${opacity}` });
+  const fade = el('linearGradient', { id: 'reach-fade', x1: 0, x2: 1, y1: 0, y2: 0 });
+  fade.append(stop('0', '--color-accent', 0.35), stop('1', '--color-counter', 0.85));
+  const defs = el('defs', {});
+  defs.append(fade);
   const parts = [
+    defs,
     el('line', { class: 'reach__base', x1: x(AXIS[0]), x2: x(AXIS[1]), y1: y + 7 * k, y2: y + 7 * k }),
-    el('rect', { class: 'reach__here', x: x(AXIS[0]), y, width: x(deepest) - x(AXIS[0]), height: 14, opacity: 0.35 }),
+    el('rect', { class: 'reach__here', x: x(AXIS[0]), y, width: x(deepest) - x(AXIS[0]), height: 14 * k, opacity: 0.35 }),
     el('rect', { class: 'reach__here', x: x(AXIS[0]), y, width: x(REACH[0][1]) - x(AXIS[0]), height: 14 * k }),
     el('rect', { class: 'reach__target', x: x(PLANET_NINE[0]), y, width: x(PLANET_NINE[1]) - x(PLANET_NINE[0]), height: 14 * k }),
-    el('line', { class: 'reach__gap', x1: x(deepest), x2: x(PLANET_NINE[0]), y1: y + 7 * k, y2: y + 7 * k }),
+    el('rect', { class: 'reach__gap', x: x(deepest), y, width: x(PLANET_NINE[0]) - x(deepest), height: 14 * k, fill: 'url(#reach-fade)' }),
     el('text', { class: 'reach__label reach__label--here', x: x(AXIS[0]), y: y - 14 * k }, t('s6.here')),
     el('text', { class: 'reach__label reach__label--target', x: x(AXIS[1]), y: y - 14 * k, 'text-anchor': 'end' }, t('s6.target')),
     el('text', { class: 'reach__label', x: (x(deepest) + x(PLANET_NINE[0])) / 2, y: y - 38 * k, 'text-anchor': 'middle' }, t('s6.short')),

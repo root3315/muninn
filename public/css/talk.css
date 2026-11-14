@@ -403,7 +403,7 @@ a { color: inherit; }
 .reach__here { fill: var(--color-accent); }
 .reach__pin { stroke: var(--color-ink); stroke-width: 2; }
 .reach__target { fill: var(--color-counter); opacity: 0.85; }
-.reach__gap { stroke: var(--color-rule-strong); stroke-width: 1.5; stroke-dasharray: 4 5; }
+.reach__gap { stroke: none; }
 .reach__label { font-family: var(--font-body); font-size: 1.05rem; fill: var(--color-muted); }
 .reach__label--here { fill: var(--color-accent); }
 .reach__label--target { fill: var(--color-counter); }
