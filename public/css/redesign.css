@@ -1554,7 +1554,7 @@ body { font-size: var(--text-base); line-height: 1.5; }
    under. The track shares its width by the words, and on the narrowest
    phones the words step down a size before they would wrap. */
 @media (max-width: 40rem) {
-  .mount > .deck .segment { flex: 1 1 auto; min-inline-size: 0; white-space: nowrap; padding-inline: var(--space-3xs); }
+  .mount > .deck .segment { flex: 1 1 auto; min-inline-size: 44px; white-space: nowrap; padding-inline: var(--space-3xs); }
 }
 @media (max-width: 22.5rem) {
   .mount > .deck .segment { font-size: var(--text-2xs); }
