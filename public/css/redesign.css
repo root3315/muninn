@@ -683,6 +683,10 @@ body { font-size: var(--text-base); line-height: 1.5; }
   display: grid; gap: var(--space-md); inline-size: min(19rem, calc(100% - 2 * var(--gutter)));
   padding: var(--space-sm);
   background: var(--rec-panel); border-radius: var(--radius-lg); box-shadow: var(--shade-pop);
+  /* Never taller than the screen: on a phone held sideways its head, name
+     and close button went off the top with no way to reach them. */
+  max-block-size: calc(100dvh - 2 * var(--gutter) - env(safe-area-inset-bottom, 0px));
+  overflow-y: auto; overscroll-behavior: contain;
   opacity: 0; translate: 0 14px;
   transition: opacity var(--dur-long) var(--ease-out), translate var(--dur-long) var(--ease-out);
 }
@@ -1461,3 +1465,14 @@ body { font-size: var(--text-base); line-height: 1.5; }
 @keyframes exo-open { to { clip-path: circle(150vmax at var(--x) var(--y)); } }
 @keyframes exo-star { to { opacity: 1; transform: scale(1); } }
 @keyframes exo-caption { to { opacity: 1; transform: none; } }
+
+/* A low screen keeps the card's words and its way in, and shows its frame
+   beside them, smaller, rather than over them. */
+@media (max-height: 30rem) {
+  .gate-card, .gate-card[data-frame="true"] { grid-template-columns: 8.5rem minmax(0, 1fr); inline-size: min(30rem, calc(100% - 2 * var(--gutter))); gap: var(--space-sm); }
+  .gate-card__frame { aspect-ratio: 1; align-self: start; }
+  .gate-card__line, .gate-card__ends { display: none; }
+}
+@media (max-height: 36rem) and (max-width: 48rem) {
+  .gate-card__frame { aspect-ratio: 5 / 2; }
+}
