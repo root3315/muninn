@@ -328,6 +328,7 @@ function renderPlateLog() {
 
 function setPlateState(message, { progress = null, hidden = false, retry = false } = {}) {
   $('plate-state').hidden = hidden;
+  if (hidden) $('plate-nudge').hidden = true;
   $('plate-message').textContent = message ?? '';
   // A failure someone else can fix by waiting gets a way to ask again in
   // place, rather than a sentence telling them to retype the field.
@@ -336,6 +337,22 @@ function setPlateState(message, { progress = null, hidden = false, retry = false
   meter.hidden = progress == null;
   if (progress != null) $('plate-meter-fill').style.transform = `scaleX(${clamp(progress, 0, 1)})`;
   renderPlateLog();
+}
+
+/**
+ * A tap on the picture while its visits are still being read used to do
+ * nothing and say nothing; it now says when a mark can be placed.
+ */
+function wireNudge() {
+  let clock = 0;
+  $('plate-state').addEventListener('click', (e) => {
+    if (!state.loading || e.target.closest('button')) return;
+    const nudge = $('plate-nudge');
+    nudge.textContent = t('plate.markWait');
+    nudge.hidden = false;
+    clearTimeout(clock);
+    clock = setTimeout(() => { nudge.hidden = true; }, 3500);
+  });
 }
 
 /**
@@ -5447,6 +5464,7 @@ function wire() {
   $('save-png').addEventListener('click', () => { setMore(false); savePNG(); });
   $('copy-link').addEventListener('click', (e) => copyLink(e.currentTarget));
   wireMore();
+  wireNudge();
 
   const record = $('record');
   if (typeof MediaRecorder !== 'undefined' && sky.canvas.captureStream) {

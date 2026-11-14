@@ -1566,3 +1566,14 @@ body { font-size: var(--text-base); line-height: 1.5; }
 @media (max-width: 40rem) {
   .tools .segments--tiny .segment:not(:has(input:checked)) { box-shadow: inset 0 0 0 1px var(--color-rule); }
 }
+
+/* What a tap on the plate says before there is a picture to mark: a pill at
+   its foot, over the list of visits being read. */
+.plate__nudge {
+  position: absolute; inset-inline: 0; inset-block-end: var(--space-sm); z-index: 1;
+  margin: 0 auto; inline-size: fit-content; max-inline-size: calc(100% - 2 * var(--space-sm));
+  padding: var(--space-2xs) var(--space-md); border-radius: var(--radius-md);
+  background: var(--color-paper-3); color: var(--color-ink); box-shadow: var(--shade-pop);
+  font-family: var(--font-body); font-size: var(--text-xs); line-height: 1.4; text-align: center;
+}
+.plate__nudge[hidden] { display: none; }
