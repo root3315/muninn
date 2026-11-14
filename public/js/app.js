@@ -22,28 +22,30 @@ import { themeTransition } from './twilight.js';
 import { planetsNow } from './ephemeris.js';
 import { rankCandidates } from './hunt.js';
 import { searchField } from './huntcore.js';
-import { STAR_MAX_SHARE, MIN_JUDGED_SNR } from './sharpness.js';
+import { STAR_MAX_SHARE } from './sharpness.js';
 import { FRAME_FILE_MB } from './release.js';
 import { deadline, CATALOG_DEADLINE_MS } from './net.js';
 import { paint, rampFromToken, sortedFinite, limitsFromSorted } from './render.js';
 import { seasonChunks, chunkAt, forStack, averaged } from './stack.js';
-import { parallaxArc, distanceGrid, arcPoint, ARC_TICKS_AU, NEAR_AU, FAR_AU, separationArcsec } from './seasons.js';
 import { TangentGrid, separation, deltaRA } from './wcs.js';
 import { loadStamp, loadWavelength } from './stamp.js';
 import { motionOf, visitPool, chooseMeasured, visitPoint, placeInBand, channelOverlap } from './spectrum.js';
 import { spectrumBlock } from './spectrum-view.js';
 import { trackCSV } from './export.js';
 import { SkyView, shortName } from './sky.js';
-import { measureLink, planLink, markCall, shapeOf } from './marks.js';
+import {
+  measureLink, planLink, markCall, skybotVerdict as skybotVerdictOf, skybotLine as skybotLineOf, skybotTone, seenAt,
+  matchArcsec, identifyMark as identifyMarkOf, tagOf, STILL, whoWords, verdict, sharpWords,
+  saturatedMotion as saturatedMotionOf, linkArc, linkWords, pct,
+} from './marks.js';
 import { loadWise, WISE_BANDS } from './wise.js';
 import { drawGaiaSky, psfFor } from './gaiasky.js';
 import { fieldArchives, CADC_SEARCH } from './archives.js';
 import {
-  SIMBAD_PAGE, VIZIER_PAGE,
   searchFrames, searchAhead, NoRelayError, UpstreamError, groupVisits, findHeldVisit, nearestHost, bandsPresent, bandRange, parseCoordinates,
-  resolveName, formatRA, formatDec, knownBodies, identifySource, arcsecBetween, fieldObjects, toS3, surveySources,
+  resolveName, formatRA, formatDec, knownBodies, fieldObjects, toS3, surveySources,
 } from './catalog.js';
-import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP, propagate, epochOfMjd } from './overlay.js';
+import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP } from './overlay.js';
 import { spread, nextVisits, VISITS_PER_BATCH } from './visits.js';
 import { encodeHash, decodeHash, FOV_CHOICES } from './hash.js';
 import { buildIndex, suggest } from './suggest.js';
@@ -80,7 +82,6 @@ const nearestFov = (deg) => FOV_CHOICES.reduce((a, b) => (Math.abs(b - deg) < Ma
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
-const mjdToDate = (mjd) => new Date((mjd - 40587) * 86400000);
 
 const state = {
   ra: null, dec: null, fov: 0.3, band: 'all', label: '',
@@ -1017,7 +1018,6 @@ function sharpCard(sharp) {
  * A share as a whole percentage. Neighbours a little below the background
  * can carry it past one; "all of it" is the honest reading of that.
  */
-const pct = (x) => fmt(Math.min(x, 1) * 100, 0);
 
 /** Go to the visit a flash was in, and mark it there. */
 function showFlash(c) {
@@ -1904,91 +1904,15 @@ function catalogChanged() {
   sky.draw();
 }
 
-/**
- * How far a SkyBoT position may sit from a measured one and still be the same
- * body: two detector pixels, since that is how well a SPHEREx position is
- * known, plus whatever SkyBoT says its own position may be off by.
- */
-const matchArcsec = (o) => 2 * DETECTOR_ARCSEC + (Number.isFinite(o.err) ? Math.min(o.err, 60) : 0);
-
-/**
- * What SkyBoT says about something seen at these places, in these visits.
- * `seen` is [{ ra, dec, obsId }] — where it was measured and when. Only visits
- * where it was actually measured are asked about: a known asteroid passing the
- * same spot on another night is not this thing.
- *
- * `match` when any answered visit has a body there; otherwise `waiting`
- * while any is still out, `none` once they have answered, `failed` or `off`
- * when none could be asked.
- *
- * A match names the visit it was made in, and `unmatched` lists the answered
- * visits where the same spot had nothing catalogued. The Atala field is the
- * case: the centre flashes on 6 Jul and on 25 Dec, the asteroid explains only
- * the second, and a bare "In SkyBoT: Atala" quietly explained away the first.
- */
+/** What SkyBoT says about something seen at these places (marks.js), from this page's answers. */
 function skybotVerdict(seen) {
-  let waiting = 0;
-  let asked = 0;
-  let off = 0;
-  let match = null;
-  const unmatched = [];
-  for (const p of seen) {
-    const objects = sky.knownObjects.get(p.obsId);
-    if (!objects) {
-      if (skybot.failed.has(p.obsId)) continue;
-      if (skybotOn()) waiting += 1; else off += 1;
-      continue;
-    }
-    asked += 1;
-    const o = objects.find((x) => separation(p.ra, p.dec, x.ra, x.dec) * 3600 <= matchArcsec(x));
-    if (!o) { unmatched.push(p.obsId); continue; }
-    match ??= { state: 'match', name: o.num ? `(${o.num}) ${o.name}` : o.name, object: o, obsId: p.obsId };
-  }
-  if (match) return { ...match, unmatched };
-  if (waiting) return { state: 'waiting' };
-  if (asked) return { state: 'none' };
-  return { state: off ? 'off' : 'failed' };
+  return skybotVerdictOf(seen, { knownObjects: sky.knownObjects, failed: skybot.failed, on: skybotOn() });
 }
 
-/** The date of a loaded visit, by its observation id. */
-const visitDate = (obsId) => {
-  const v = sky.visits.find((x) => x.frame.obsId === obsId);
-  return v ? fmtDate(v.frame.iso) : '—';
-};
-
-/** The places a tracked thing was seen, as skybotVerdict wants them. */
-function seenAt(analysis, fallback) {
-  const track = analysis?.track ?? [];
-  if (track.length) return track.map((p) => ({ ra: p.ra, dec: p.dec, obsId: p.obsId }));
-  return fallback?.obsId ? [fallback] : [];
+/** The line a mark or a candidate shows for its SkyBoT check (marks.js), dated by this page's visits. */
+function skybotLine(verdict, options) {
+  return skybotLineOf(verdict, sky.visits, options);
 }
-
-/** The line a mark or a candidate shows for its SkyBoT check. */
-function skybotLine(verdict, { none = 'mark.unknown' } = {}) {
-  switch (verdict?.state) {
-    case 'match':
-      return verdict.unmatched?.length
-        ? t('mark.knownPartly', {
-          name: verdict.name,
-          when: visitDate(verdict.obsId),
-          others: verdict.unmatched.map(visitDate).join(', '),
-        })
-        : t('mark.known', { name: verdict.name });
-    case 'none': return t(none);
-    case 'failed': return t('mark.skybotFailed');
-    case 'off': return t('mark.skybotOff');
-    default: return t('mark.skybotWaiting');
-  }
-}
-
-/**
- * For styling: a name is quiet, "none" is the interesting case, the rest are
- * pending. A name that explains only some of the visits is still interesting.
- */
-const skybotTone = (verdict) => {
-  if (verdict?.state === 'match') return verdict.unmatched?.length ? 'false' : 'true';
-  return verdict?.state === 'none' ? 'false' : 'wait';
-};
 
 /* ------------------------------------------------------------------- marks */
 
@@ -2042,137 +1966,19 @@ function nameMarks() {
   }
 }
 
-/**
- * The few words a mark carries on the picture beside its number: the body's
- * name if SkyBoT has one, the catalogue name of a star if one was found, and
- * otherwise what the measurement says it is.
- */
-/** What the catalogues have said about a mark so far: all of it once done, the answers in while asking. */
-function whoSoFar(m) {
-  if (m.who?.state === 'done') return m.who.result;
-  return m.who?.state === 'asking' ? m.who.partial ?? null : null;
-}
-
-/**
- * The same, for a word drawn on the picture: only once both catalogues that
- * know how stars move have spoken, since before then a fast cold star can
- * carry its neighbour's name.
- */
-function whoSettled(m) {
-  const r = whoSoFar(m);
-  return r && !r.pending?.some((k) => k === 'gaia' || k === 'catwise') ? r : null;
-}
-
-function tagOf(m) {
-  if (m.known) return m.known;
-  const r = whoSettled(m);
-  if (r?.simbad) return shortName(r.simbad.name);
-  if (r?.vsx) return r.vsx.name;
-  if (r?.gaia && Number.isFinite(r.gaia.mag)) return `G ${fmt(r.gaia.mag, 1)}ᵐ`;
-  return m.analysis ? callOf(m.analysis) : null;
-}
-
-/**
- * Who a mark is, when it is not an asteroid.
- *
- * A source that sits still in every visit cannot be a solar-system body, so it
- * is asked about at once. One that comes and goes might still be an asteroid,
- * and asking a star catalogue about it first would name whatever faint star
- * happens to lie near its path — so it waits until SkyBoT has said no.
- */
-const IDENTIFY = new Set(['fixed', 'saturated', 'intermittent', 'transient']);
-const STILL = new Set(['fixed', 'saturated']);
-/** When "asking" becomes "still asking", and when it gives up and says no answer came. */
-const IDENTIFY_SLOW_MS = 10_000;
-const IDENTIFY_CAP_MS = 75_000;
-/** A mark's centre moved less than this asks the catalogues nothing new: a third of a detector pixel. */
-const SAME_SPOT_ARCSEC = 2;
-
+/** Ask the catalogues who a mark is (marks.js), on this page's field, redrawing as answers come. */
 function identifyMark(m) {
-  // While visits are still landing the measured centre moves a little with
-  // each one; the catalogues are asked once, about the centre of the whole run.
-  if (state.loading) return;
-  const a = m.analysis;
-  const ready = a && IDENTIFY.has(a.kind)
-    && (STILL.has(a.kind) || ['none', 'failed', 'off'].includes(m.catalog?.state));
-  // While SkyBoT is asked again about newly landed visits, what the star
-  // catalogues said stays. A mark that is no longer a thing to identify, or
-  // that SkyBoT has matched to a body in any visit, loses it: a neighbouring
-  // star's name must not sit on an asteroid.
-  if (!ready) {
-    if (!(a && IDENTIFY.has(a.kind)) || m.catalog?.state === 'match') {
-      m.whoStop?.abort();
-      m.who = null;
-    }
-    return;
-  }
-
-  // The measured centre, not the click: that is what a catalogue should be asked about.
-  const pts = a.track.length ? a.track : [{ ra: m.ra, dec: m.dec }];
-  // Averaged as offsets from the first point, so a spot on the 0h meridian
-  // (359.999° and 0.001°) averages to itself and not to 180°.
-  const ra0 = pts[0].ra;
-  const meanRA = ra0 + pts.reduce((s, p) => s + deltaRA(p.ra, ra0), 0) / pts.length;
-  // The date the catalogues are compared at: the visits' own, on average,
-  // so a fast star is looked for where it was when SPHEREx saw it.
-  const dated = pts.filter((p) => Number.isFinite(p.mjd));
-  const mjd = dated.length ? dated.reduce((s, p) => s + p.mjd, 0) / dated.length
-    : sky.visits.reduce((s, v) => s + v.frame.mjd, 0) / Math.max(1, sky.visits.length);
-  const at = {
-    ra: ((meanRA % 360) + 360) % 360,
-    dec: pts.reduce((s, p) => s + p.dec, 0) / pts.length,
-    epoch: Number.isFinite(mjd) && mjd > 0 ? 2000 + (mjd - 51544.5) / 365.25 : 2026,
-  };
-  // The centre settles as visits land. A move of a fraction of a pixel is
-  // the same question: asked again for every 0.4″, ten marks kept dozens of
-  // catalogue questions in flight while a field filled in.
-  const key = `${at.ra.toFixed(4)} ${at.dec.toFixed(4)}`;
-  if (m.who?.at && arcsecBetween(m.who.at.ra, m.who.at.dec, at.ra, at.dec) < SAME_SPOT_ARCSEC) return;
-  // The last question is moot: let it go.
-  m.whoStop?.abort();
-  const stop = new AbortController();
-  m.whoStop = stop;
-  const who = { key, at, state: 'asking', slow: false };
-  m.who = who;
-  const field = state.abort?.signal ? AbortSignal.any([state.abort.signal, stop.signal]) : stop.signal;
-  // Every question ends in an answer, a failure or "no answer": the relays to
-  // IRSA can take a minute, and a line that says "asking" for ever reads as a
-  // page that has hung. Past a few seconds it says it is still asking.
-  const signal = deadline(field, IDENTIFY_CAP_MS);
-  const settle = (next) => {
-    clearTimeout(slowTimer);
-    if (m.who !== who) return;
-    m.who = next;
-    if (!sky.marks.includes(m)) return;
-    m.tag = tagOf(m);
-    sky.draw();
-    renderMarks();
-  };
-  const slowTimer = setTimeout(() => {
-    if (m.who !== who || who.state !== 'asking') return;
-    who.slow = true;
-    if (sky.marks.includes(m)) renderMarks();
-  }, IDENTIFY_SLOW_MS);
-  // Each answer is shown as it comes: SIMBAD's name in a second need not
-  // wait on an IRSA catalogue that takes twenty.
-  const onUpdate = (partial) => {
-    if (m.who !== who || !sky.marks.includes(m)) return;
-    who.partial = partial;
-    m.tag = tagOf(m);
-    sky.draw();
-    renderMarks();
-  };
-  identifySource(at, { signal, onUpdate })
-    .then((result) => settle({ key, at, state: 'done', result }))
-    .catch(() => {
-      // The field was closed under the question: nobody is waiting for this
-      // answer, and a mark carried into the next field asks afresh.
-      if (field?.aborted) settle(null);
-      else settle({ key, at, state: signal.aborted ? 'timeout' : 'failed' });
-    });
+  identifyMarkOf(m, {
+    loading: state.loading,
+    fieldSignal: state.abort?.signal,
+    visits: sky.visits,
+    live: () => sky.marks.includes(m),
+    onChange: () => { sky.draw(); renderMarks(); },
+    onSlow: renderMarks,
+  });
 }
 
-const CATALOGUE_NAMES = { simbad: 'SIMBAD', gaia: 'Gaia', tmass: '2MASS', wise: 'AllWISE', catwise: 'CatWISE2020', vsx: 'VSX' };
+
 
 function link(text, href) {
   const a = document.createElement('a');
@@ -2191,113 +1997,28 @@ function whoP(...parts) {
   return p;
 }
 
-/** What Gaia's classifier makes of a source, when it is sure enough to say. */
-function gaiaKind(g) {
-  if (g.pGalaxy >= 0.5) return t('kind.galaxy');
-  if (g.pQuasar >= 0.5) return t('kind.quasar');
-  if (g.pStar >= 0.9) return t('kind.star');
-  return t('kind.gaia');
-}
-
 /**
- * What the catalogues said about a mark, a line per question: who it is, does
- * it vary, what it looks like in the near infrared SPHEREx sees, how far away.
- * A line appears only when a catalogue had something to say.
+ * What the catalogues said about a mark (marks.js whoWords), a paragraph per
+ * line, names linked to the catalogue's own page.
  */
 function whoLines(who, kind) {
-  // Still waiting is a state, not a finding: set apart from what the mark
-  // measured, with a dot that pulses while the catalogues are out.
-  if (who.state === 'asking') {
-    const p = document.createElement('p');
-    p.className = 'mark__asking';
-    p.setAttribute('role', 'status');
-    const dot = document.createElement('span');
-    dot.className = 'mark__asking-dot';
-    dot.setAttribute('aria-hidden', 'true');
-    const out = who.partial?.asking ?? [];
-    const so = who.partial ? answerLines(who.partial, kind) : [];
-    const text = so.length && out.length
-      ? t('mark.whoStill', { list: out.map((k) => CATALOGUE_NAMES[k]).join(', ') })
-      : t(who.slow ? 'mark.whoSlow' : 'mark.whoAsking');
-    p.append(dot, text);
-    return [...so, p];
-  }
-  if (who.state === 'failed') return [whoP(t('mark.whoFailed'))];
-  if (who.state === 'timeout') return [whoP(t('mark.whoTimeout', { s: Math.round(IDENTIFY_CAP_MS / 1000) }))];
-  const r = who.result;
-  const lines = answerLines(r, kind);
-  // "Nothing" is said only for the catalogues that answered.
-  if (!lines.length) lines.push(whoP(t(r.failed.length ? 'mark.whoNoneRest' : 'mark.whoNone')));
-  if (r.failed.length) lines.push(whoP(t('mark.whoPartial', { list: r.failed.map((k) => CATALOGUE_NAMES[k]).join(', ') })));
-  return lines;
-}
-
-/** A line for each thing the catalogues had to say, from all of them or the ones in so far. */
-function answerLines(r, kind) {
-  const lines = [];
-  const heard = (key) => !r.failed.includes(key) && !r.pending?.includes(key);
-  // Beyond a couple of arcsec the name is a neighbour's, and it should say so.
-  const off = (sep) => (sep > 2 ? `, ${t('mark.whoSep', { sep: fmt(sep, 1) })}` : '');
-
-  if (r.simbad) {
-    const s = r.simbad;
-    const what = s.family ? t(`kind.${s.family}`) : t('kind.other', { code: s.otype });
-    const mag = Number.isFinite(s.mag) ? `, ${s.magBand} ${fmt(s.mag, 1)}ᵐ` : '';
-    lines.push(whoP(`${t('mark.whoSimbad')} `,
-      link(s.name, `${SIMBAD_PAGE}${encodeURIComponent(s.name)}`),
-      ` — ${what}${mag}${off(s.sep)}`));
-  } else if (r.gaia) {
-    const g = r.gaia;
-    const mag = Number.isFinite(g.mag) ? `, G ${fmt(g.mag, 1)}ᵐ` : '';
-    lines.push(whoP(`${t('mark.whoGaia')} `,
-      link(g.id, `${VIZIER_PAGE}-source=I/355/gaiadr3&Source=${encodeURIComponent(g.id)}`),
-      ` — ${gaiaKind(g)}${mag}${off(g.sep)}`));
-  }
-
-  // Does it vary? For something that comes and goes, the first question.
-  if (r.vsx) {
-    const v = r.vsx;
-    const bits = [v.type ? `${t('kind.variable')} ${v.type}` : t('kind.variable')];
-    // VSX gives the faint end as an amplitude when it has no minimum: a
-    // number smaller than the bright end cannot be a magnitude there.
-    if (Number.isFinite(v.max) && Number.isFinite(v.min)) {
-      bits.push(v.min > v.max ? `${fmt(v.max, 2)}–${fmt(v.min, 2)}ᵐ` : t('mark.whoAmplitude', { max: fmt(v.max, 2), amp: fmt(v.min, 2) }));
+  return whoWords(who, kind).map((w) => {
+    if (w.asking) {
+      // Still waiting is a state, not a finding: set apart from what the mark
+      // measured, with a dot that pulses while the catalogues are out.
+      const p = document.createElement('p');
+      p.className = 'mark__asking';
+      p.setAttribute('role', 'status');
+      const dot = document.createElement('span');
+      dot.className = 'mark__asking-dot';
+      dot.setAttribute('aria-hidden', 'true');
+      p.append(dot, w.text);
+      return p;
     }
-    if (Number.isFinite(v.period)) bits.push(t('mark.whoPeriod', { p: fmt(v.period, v.period < 10 ? 3 : 1) }));
-    lines.push(whoP('VSX: ',
-      link(v.name, `https://www.aavso.org/vsx/index.php?view=results.get&ident=${encodeURIComponent(v.name)}`),
-      ` — ${bits.join(', ')}`));
-  } else if (r.gaia?.variable) {
-    lines.push(whoP(t('mark.whoGaiaVar')));
-  } else if ((kind === 'intermittent' || kind === 'transient') && r.any && heard('vsx') && heard('gaia')) {
-    lines.push(whoP(t('mark.whoNotVar')));
-  }
-
-  // The near infrared, which is what SPHEREx itself sees.
-  const phot = [];
-  if (r.tmass) {
-    for (const [band, v] of [['J', r.tmass.j], ['H', r.tmass.h], ['K', r.tmass.k]]) {
-      if (Number.isFinite(v)) phot.push(`${band} ${fmt(v, 1)}`);
-    }
-  }
-  if (r.wise) {
-    if (Number.isFinite(r.wise.w1)) phot.push(`W1 ${fmt(r.wise.w1, 1)}`);
-    if (Number.isFinite(r.wise.w2)) phot.push(`W2 ${fmt(r.wise.w2, 1)}`);
-  }
-  if (phot.length) {
-    const p = whoP(`${[r.tmass && '2MASS', r.wise && 'AllWISE'].filter(Boolean).join(' · ')}: ${phot.join(' · ')}`);
-    p.classList.add('mark__phot');
-    lines.push(p);
-  }
-
-  // A distance, only where the parallax is measured and not merely returned.
-  const g = r.gaia;
-  if (g && g.plx > 0 && g.plxErr > 0 && g.plx / g.plxErr >= 5) {
-    const pc = 1000 / g.plx;
-    lines.push(whoP(t('mark.whoPlx', { plx: fmt(g.plx, 2), pc: fmt(pc, pc < 100 ? 1 : 0) })));
-  }
-  if (r.catwise?.pm != null) lines.push(whoP(t('mark.whoCatwise', { pm: fmt(r.catwise.pm, 2) })));
-  return lines;
+    const p = whoP(...w.parts.map((x) => (typeof x === 'string' ? x : link(x.text, x.href))));
+    if (w.phot) p.classList.add('mark__phot');
+    return p;
+  });
 }
 
 /* ----------------------------------------------------------- on the picture */
@@ -2515,48 +2236,9 @@ function showTip(hit, x = 0, y = 0) {
 
 /** One honest sentence about what the pixels support at a marked position. */
 
-/** A number to `digits` significant figures: 0,0042 and 21,3 alike, never 0,00. */
-function fmtSig(v, digits) {
-  if (!Number.isFinite(v) || v === 0) return fmt(v, 0);
-  const decimals = Math.max(0, digits - 1 - Math.floor(Math.log10(Math.abs(v))));
-  return fmt(v, Math.min(6, decimals));
-}
-
 /** What the measurement amounts to, in the fewest words that are still true. */
 const callOf = (a) => markCall(a, t);
 
-/**
- * The verdict, and how many loaded visits never saw the spot: those are left
- * out of every count in it, and the reader is told so.
- */
-function verdict(a) {
-  const text = verdictOnly(a);
-  const unseen = (a?.loaded ?? 0) - (a?.total ?? 0);
-  return unseen > 0 && a?.total ? `${text} ${t('mark.uncoveredSome', { n: unseen })}` : text;
-}
-
-function verdictOnly(a) {
-  if (a && !a.total) return t('mark.uncovered');
-  if (!a || a.kind === 'none') return t('mark.undetected', { total: a?.total ?? 0 });
-  if (a.kind === 'transient') {
-    return t('mark.transient', {
-      date: fmtDate(mjdToDate(a.at.mjd).toISOString()),
-      snr: fmt(a.at.snr, 0), rest: a.total - 1,
-    });
-  }
-  if (a.kind === 'moving') {
-    return t('mark.moving', { rate: fmtSig(a.ratePerHour, 3), seen: a.seen, days: fmt(a.spanDays, 1), rms: fmt(a.rms, 1) });
-  }
-  if (a.kind === 'fixed') return t('mark.fixed', { total: a.total, rms: fmt(a.rms, 1) });
-  if (a.kind === 'saturated') return t('mark.saturated', { n: a.saturated, total: a.total });
-  // Two points always fit a straight line perfectly, so quoting a scatter would be
-  // a number with no information in it. Name the dates instead.
-  if (a.seen <= 3) {
-    const dates = a.track.map((p) => fmtDate(mjdToDate(p.mjd).toISOString())).join(', ');
-    return t('mark.intermittentDates', { seen: a.seen, total: a.total, dates });
-  }
-  return t('mark.intermittent', { seen: a.seen, total: a.total, rms: fmt(a.rms, 1) });
-}
 
 /**
  * Star's shape or one pixel, for a mark seen in one visit (or two, the
@@ -2565,44 +2247,19 @@ function verdictOnly(a) {
  * Marks seen across many visits are stars or movers by their own record.
  */
 
-/** The shape reading of a mark as a line of its card, or null. */
+/** The shape reading of a mark as a line of its card (marks.js sharpWords), or null. */
 function sharpLine(a) {
-  const v = shapeOf(a);
-  if (!v) return null;
+  const w = sharpWords(a);
+  if (!w) return null;
   const p = document.createElement('p');
   p.className = 'mark__detail mark__shape';
-  p.dataset.verdict = v.verdict;
-  const words = { share: pct(v.share), limit: v.limit ? pct(v.limit) : '', snr: fmt(v.snr, 0), min: fmt(MIN_JUDGED_SNR, 0) };
-  p.textContent = t(`sharp.mark.${v.verdict}`, words);
-  return { line: p, sharp: v.verdict === 'sharp' };
+  p.dataset.verdict = w.verdict;
+  p.textContent = w.text;
+  return { line: p, sharp: w.verdict === 'sharp' };
 }
 
-/**
- * A saturated source cannot be centred well enough to see it move, but a
- * catalogue that knows its motion can say how far it went over these visits,
- * against the one detector pixel a blink could ever show. The motion is the
- * identification's (Gaia, else CatWISE2020), or the named target's when the
- * mark sits on it.
- */
-function saturatedMotion(m) {
-  const a = m.analysis;
-  if (a?.kind !== 'saturated' || !(a.spanDays > 0)) return null;
-  const r = whoSoFar(m);
-  const tg = state.target;
-  const when = a.track.reduce((s, p) => s + p.mjd, 0) / a.track.length;
-  const target = tg && Number.isFinite(tg.epoch)
-    && separationArcsec(propagate(tg, epochOfMjd(when), tg.epoch), m) <= 3 * DETECTOR_ARCSEC ? tg : null;
-  const source = [r?.gaia, r?.catwise, target].find((s) => Number.isFinite(s?.pmRA) && Number.isFinite(s?.pmDE));
-  if (!source) return null;
-  const pm = Math.hypot(source.pmRA, source.pmDE) / 1000;
-  // An ordinary star's motion rounds to nothing here; only a fast one is worth a line.
-  if (pm < 0.1) return null;
-  const shift = (pm * a.spanDays) / 365.25;
-  return t(shift < DETECTOR_ARCSEC ? 'mark.saturatedUnder' : 'mark.saturatedOver', {
-    pm: fmt(pm, pm < 1 ? 2 : 1), shift: fmt(shift, 1), days: fmt(a.spanDays, 0),
-    px: fmt(DETECTOR_ARCSEC, 2), n: fmt(shift / DETECTOR_ARCSEC, 1),
-  });
-}
+/** How far a saturated mark's catalogued motion carried it (marks.js), the open target's included. */
+const saturatedMotion = (m) => saturatedMotionOf(m, state.target);
 
 /**
  * The light curve of a marked spot: one bar per visit, height by peak brightness,
@@ -3047,36 +2704,16 @@ async function linkStamps(frames, onEach) {
 /** The measurement half of the link (marks.js), on this page's plate. */
 const runLink = (m, visitsA, visitsB) => measureLink(sky, m, visitsA, visitsB, { breathe });
 
-/**
- * Draw one mark's arc on the plate, or none. The arc is for the season-B visit
- * that matched, or the first one read; the visits of one season are days
- * apart, which at these distances moves the arc far less than the parallax.
- */
+/** Draw one mark's arc on the plate (marks.js linkArc), or none. */
 function showLink(m) {
-  const link = m?.link;
-  // A star has no arc to follow.
-  if (!link || link.state !== 'done' || !link.shown || link.result.star) {
+  const arc = linkArc(m);
+  if (!arc) {
     sky.link = null;
     sky.draw();
     return;
   }
   for (const other of sky.marks) if (other !== m && other.link) other.link.shown = false;
-  const hit = link.result.link;
-  const mjdB = hit ? hit.visits[0].mjd : link.visitsB[0].mjd;
-  const { ra, dec, mjd } = link.anchor;
-  const points = parallaxArc(ra, dec, mjd, mjdB, distanceGrid({ near: NEAR_AU, far: FAR_AU, steps: 240 }));
-  const ticks = ARC_TICKS_AU.map((d) => ({
-    d,
-    point: arcPoint(ra, dec, mjd, mjdB, d),
-    next: arcPoint(ra, dec, mjd, mjdB, d * 1.02),
-  })).filter((tk) => tk.point && tk.next);
-  sky.link = {
-    mark: m,
-    points,
-    ticks,
-    match: hit ? hit.visits[0].at : null,
-    tickLabel: (d) => t('link.tick', { d: String(d) }),
-  };
+  sky.link = arc;
   sky.draw();
 }
 
@@ -3098,57 +2735,14 @@ function linkLines(m) {
   }
   if (!link) return out;
 
-  const line = (text, tone) => {
+  for (const w of linkWords(link)) {
     const p = document.createElement('p');
     p.className = 'mark__detail mark__link';
-    if (tone) p.dataset.tone = tone;
-    p.textContent = text;
+    if (w.tone) p.dataset.tone = w.tone;
+    p.textContent = w.text;
     out.push(p);
-  };
-  if (link.state === 'reading') {
-    line(t('link.reading', { n: link.n, total: link.total }), 'wait');
-    return out;
   }
-  if (link.state === 'single') { line(t('link.single', { band: link.band })); return out; }
-  if (link.state === 'failed') { line(t('link.failed', { why: link.why ?? '' })); return out; }
-
-  const r = link.result;
-  const dateB = fmtDate(link.visitsB[0].iso);
-  // A star at the mark is the whole answer: nothing on the arc is offered
-  // as where it went, because it did not go anywhere.
-  if (r.star) {
-    line(t(r.star.saturated ? 'link.starSaturated' : 'link.star', {
-      n: r.star.stillThere, total: r.checked, date: dateB,
-    }));
-    if (r.star.stillThere) line(t('link.starWhy'), 'quiet');
-    return out;
-  }
-  if (!r.covered) {
-    line(t('link.outside', { near: fmt(NEAR_AU, 0), far: fmt(FAR_AU, 0) }));
-  } else if (r.link) {
-    const h = r.link;
-    line(t(link.anchored ? 'link.linked' : 'link.unanchored', {
-      d: fmt(h.d, 0), near: fmt(h.near, 0), far: fmt(h.far, 0),
-      mag: h.mag != null ? fmt(h.mag, 1) : '—', band: link.band,
-      n: h.visits.length, total: r.checked, date: dateB,
-    }), 'counter');
-    line(t('link.check'));
-  } else {
-    line(t('link.nothing', {
-      near: fmt(r.covered.near, 0), far: fmt(r.covered.far, 0),
-      limit: link.limit != null ? fmt(link.limit, 1) : '—', band: link.band, n: r.checked, date: dateB,
-    }));
-  }
-  if (r.covered) {
-    line(t('link.covered', {
-      near: fmt(r.covered.near, 0), far: fmt(r.covered.far, 0), from: fmt(NEAR_AU, 0), to: fmt(FAR_AU, 0),
-    }), 'quiet');
-  }
-  if (!link.anchored) line(t('link.noAnchor', { date: fmtDate(link.datesA[0].iso) }));
-  if (link.stillThere) line(t('link.stillThere', { n: link.stillThere, total: r.checked }));
-  if (r.staticCount) line(t('link.static', { n: r.staticCount }), 'quiet');
-  if (r.checked < 2) line(t('link.oneVisit'));
-  line(t('link.how'), 'quiet');
+  if (link.state !== 'done' || link.result.star) return out;
 
   const acts = document.createElement('p');
   acts.className = 'mark__link-acts';
