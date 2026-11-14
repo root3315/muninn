@@ -29,10 +29,11 @@ import { riceDecode } from './rice.js';
 const HEADER_PROBE = 36864;
 const MAX_HEADER = 1 << 20;
 
-async function fetchRange(url, start, end, signal) {
+async function fetchRange(url, start, end, signal, { cache = 'default' } = {}) {
   const res = await fetch(url, {
     headers: { Range: `bytes=${start}-${end}` },
     signal: deadline(signal, FRAME_DEADLINE_MS),
+    cache,
   });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} on ${url}`);
   if (res.status === 206) return res.arrayBuffer();
@@ -144,6 +145,13 @@ const FLAGS_POINTER_BYTES = 2048 * 8;
 const USUAL_IMAGE_BYTES = padded(2040 * 2040 * 4);
 const FLAGS_AHEAD_FROM = 25920 + USUAL_IMAGE_BYTES;
 const FLAGS_AHEAD_TO = 28800 + USUAL_IMAGE_BYTES + FLAGS_HEADER_PROBE + FLAGS_POINTER_BYTES;
+/**
+ * The read ahead stays out of the browser's cache. Two reads of one file at
+ * the same moment queue on its cache entry: the image header waited for the
+ * read ahead, and on a second visit the entry was rewritten and every range
+ * of the file was fetched again (30 MB instead of under 1 MB for ten visits).
+ */
+const AHEAD_CACHE = { cache: 'no-store' };
 
 /**
  * Read the FLAGS plane for the same detector rows as the image.
@@ -278,7 +286,7 @@ function sourceBounds(wcs, grid) {
 export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = true, onFetched } = {}) {
   // The flags' header, read beside the image header when that is still to
   // be read (see FLAGS_AHEAD_FROM).
-  const flagsAhead = headers.has(url) ? null : fetchRange(url, FLAGS_AHEAD_FROM, FLAGS_AHEAD_TO - 1, signal);
+  const flagsAhead = headers.has(url) ? null : fetchRange(url, FLAGS_AHEAD_FROM, FLAGS_AHEAD_TO - 1, signal, AHEAD_CACHE);
   flagsAhead?.catch(() => {});
   const hdu = await readImageHDU(url, signal);
   const cards = hdu.cards;
