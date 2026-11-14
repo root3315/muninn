@@ -102,11 +102,16 @@
   <!-- A visitor whose browser picked the wrong language must not have to open
        a field to change it. -->
   <div class="gate__acts">
-    <a class="link" href="talk.html" data-i18n="gate.talk"></a>
+    <a class="link gate__talk" href="talk.html" data-i18n="gate.talk"></a>
     <!-- Shown only where the browser can run an immersive VR session (app.js offerVR). -->
     <button type="button" class="vr-go" id="gate-vr" hidden data-i18n="gate.vr"></button>
     <button type="button" class="link" id="gate-about" data-i18n="app.about"></button>
     <button type="button" class="link link--lang" id="gate-lang" data-i18n-title="lang.switch" data-i18n-label="lang.switch"><span id="gate-lang-name">RU</span></button>
+    <!-- On a phone the bar carries the theme too; the sky itself stays night. -->
+    <button type="button" class="theme-key gate__theme" id="gate-theme">
+      <svg class="to-day" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.3 5.3l1.55 1.55M17.15 17.15l1.55 1.55M5.3 18.7l1.55-1.55M17.15 6.85l1.55-1.55"/></svg>
+      <svg class="to-night" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 14.6A8 8 0 0 1 9.4 4.5a8 8 0 1 0 10.1 10.1z"/></svg>
+    </button>
   </div>
 
   <div class="gate__poster">
@@ -133,6 +138,8 @@
     <!-- The verified fields, by name. They are rings on the sky too, but the
          sky opens facing the galactic centre and none of them is in view. -->
     <p class="gate__jump" id="gate-jump" hidden></p>
+    <!-- On a phone the talk leaves the bar for the foot of the panel. -->
+    <a class="link gate__foot" href="talk.html" data-i18n="gate.talk"></a>
 
   </div>
 

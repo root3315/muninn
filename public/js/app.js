@@ -4395,9 +4395,47 @@ function hideCard() {
 function wireCard() {
   $('gate-card-go').addEventListener('click', () => { if (cardHit) enterFrom(cardHit); });
   $('gate-card-close').addEventListener('click', hideCard);
+  swipeAway($('gate-card'));
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && !$('gate-card').hidden) hideCard();
   });
+}
+
+/**
+ * On a phone the card is a sheet: drawn down by its handle or its head, it
+ * follows the finger and, let go far enough down, closes. A press on a button
+ * inside it is a press, and a sheet scrolled into its own text scrolls.
+ */
+const SHEET = matchMedia('(max-width: 48rem) and (min-height: 30.0625rem), (max-height: 30rem) and (orientation: landscape) and (pointer: coarse)');
+const SWIPE_CLOSE_PX = 72;
+
+function swipeAway(card) {
+  let pull = null;
+  card.addEventListener('pointerdown', (e) => {
+    if (!SHEET.matches || e.button !== 0 || card.scrollTop > 0) return;
+    if (e.target.closest('button, a')) return;
+    if (e.target !== card && !e.target.closest('.gate-card__head, .gate-card__frame')) return;
+    pull = { id: e.pointerId, y: e.clientY, dy: 0, t: performance.now() };
+    card.setPointerCapture(e.pointerId);
+  });
+  card.addEventListener('pointermove', (e) => {
+    if (pull?.id !== e.pointerId) return;
+    pull.dy = Math.max(0, e.clientY - pull.y);
+    card.style.transition = 'none';
+    card.style.translate = `0 ${pull.dy}px`;
+  });
+  const end = (e) => {
+    if (pull?.id !== e.pointerId) return;
+    const { dy, t } = pull;
+    pull = null;
+    card.style.transition = '';
+    card.style.translate = '';
+    // A quick flick closes as surely as a long drag.
+    const flick = dy > 24 && dy / Math.max(1, performance.now() - t) > 0.6;
+    if (e.type === 'pointerup' && (dy > SWIPE_CLOSE_PX || flick)) hideCard();
+  };
+  card.addEventListener('pointerup', end);
+  card.addEventListener('pointercancel', end);
 }
 
 /**
@@ -4517,6 +4555,16 @@ async function buildGate() {
     onName: nameOnSky,
   });
   window.addEventListener('resize', () => { if (!$('gate').hidden) gate.resize(); });
+  // On a phone the sky is the space between the bar and the panel under it,
+  // and the panel changes height without the window doing so (the fields
+  // arrive, a note appears): the canvas is measured again whenever it moves.
+  // Never mid-flight, which measures the canvas at its own resolution.
+  new ResizeObserver(() => { if (!$('gate').hidden && !flying && gate.stars) gate.resize(); }).observe($('gate-sky'));
+  // The card on a phone is a sheet that covers the panel whole, never half of it.
+  new ResizeObserver(([entry]) => {
+    const tall = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+    $('gate').style.setProperty('--gate-dock', `${Math.ceil(tall)}px`);
+  }).observe(document.querySelector('.gate__poster'));
 
   const [stars, deep] = await Promise.all([
     loadStars().catch(() => null),
@@ -4587,9 +4635,25 @@ function renderGateJump() {
     const head = document.createElement('span');
     head.className = 'gate__jump-k';
     head.textContent = t(label);
-    line.append(head, ...fields.map(jumpButton));
+    // A row of its own, which on a phone scrolls sideways rather than wrapping
+    // into a wall of buttons; on a wide screen it lays out as before.
+    const row = document.createElement('span');
+    row.className = 'gate__jump-row';
+    row.append(...fields.map(jumpButton));
+    row.addEventListener('scroll', () => edgeRow(row), { passive: true });
+    line.append(head, row);
     box.append(line);
+    requestAnimationFrame(() => edgeRow(row));
   }
+}
+
+/** Which ends of a sideways row have more past them: those ends fade. */
+function edgeRow(row) {
+  const left = row.scrollLeft;
+  const more = [];
+  if (left > 2) more.push('start');
+  if (left + row.clientWidth < row.scrollWidth - 2) more.push('end');
+  row.dataset.more = more.join(' ');
 }
 
 /** One name under the search: press it and the sky turns onto that field. */
@@ -4943,8 +5007,10 @@ function applyTheme(theme) {
 
 function labelTheme() {
   const key = currentTheme() === 'light' ? 'theme.toDark' : 'theme.toLight';
-  $('theme').setAttribute('aria-label', t(key));
-  $('theme').title = t(key);
+  for (const id of ['theme', 'gate-theme']) {
+    $(id).setAttribute('aria-label', t(key));
+    $(id).title = t(key);
+  }
 }
 
 /** Keep the chips in step with whatever set the band. */
@@ -5434,6 +5500,13 @@ function wire() {
       key.disabled = false;
       if (wasPlaying) startPlayback();
     });
+  });
+
+  // From the sky's bar the change is direct: the sky stays night either way
+  // and only the panels change, so there is no sunrise to play over it.
+  $('gate-theme').addEventListener('click', () => {
+    if ($('theme').disabled) return;
+    applyTheme(currentTheme() === 'light' ? 'dark' : 'light');
   });
 
   const switchLanguage = () => {
