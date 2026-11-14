@@ -3409,6 +3409,10 @@ async function readOne(entry, grid, signal, { onHeader } = {}) {
     if (!waiting && (sky.visits.length === 1 || state.wantVisit == null || sky.current?.frame === entry.frame)) {
       setPlateState('', { hidden: true });
     }
+    // The tour, once two visits are on screen to blink: waiting for the whole
+    // first batch held it back half a minute on a slow line, and people had
+    // moved on before it came.
+    if (sky.visits.length >= 2 && $('plate-state').hidden) maybeStartTour();
     syncScrub();
     if (state.filling) {
       scheduleFillRefresh();
