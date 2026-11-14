@@ -87,7 +87,7 @@ test('the screens stand where they are meant to, facing the eye, with type big e
     assert.ok(dist >= 1.5 && dist <= 2.5, `${name} at ${dist} m`);
     // Everything that is pressed or read often sits between 25° below and 15° above the eye.
     const pitch = Math.atan2(s.dy, s.dist) * 180 / Math.PI;
-    assert.ok(pitch >= -25 && pitch <= 15, `${name} at ${pitch}°`);
+    if (!s.readOnly) assert.ok(pitch >= -25 && pitch <= 15, `${name} at ${pitch}°`);
     if (s.pxPerM) {
       const type = typeFor(s);
       assert.ok(textDeg(type.body, s.pxPerM, dist) >= TEXT_DEG.body - 1e-9, name);

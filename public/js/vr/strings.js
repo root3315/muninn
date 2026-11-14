@@ -169,6 +169,10 @@ const STRINGS = {
     'vr.resetView': 'Reset view',
     'vr.scaleNow': '1 m here ≈ ×{f} in distance · scene ×{s}',
     'vr.legendCue': 'Fainter toward the far end: a depth cue, not a brightness.',
+    'vr.spectrumTitle': 'Spectrum of the mark, visit by visit',
+    'vr.spectrumWait': 'Reading each visit’s wavelength here: {done} of {total}',
+    'vr.spectrumNone': 'No visit measured a brightness here.',
+    'vr.spectrumLegend': '{n} of {total} visits · dot: detection ± 1σ · arrow: upper limit (5σ)',
   },
   ru: {
     'vr.title': 'Мунин в VR',
@@ -332,6 +336,10 @@ const STRINGS = {
     'vr.resetView': 'Сбросить вид',
     'vr.scaleNow': '1 м здесь ≈ ×{f} по расстоянию · сцена ×{s}',
     'vr.legendCue': 'Тусклее к дальнему концу: подсказка глубины, а не яркость.',
+    'vr.spectrumTitle': 'Спектр метки, заход за заходом',
+    'vr.spectrumWait': 'Читаем длину волны каждого захода здесь: {done} из {total}',
+    'vr.spectrumNone': 'Ни один заход не измерил здесь яркость.',
+    'vr.spectrumLegend': '{n} из {total} заходов · точка: обнаружение ± 1σ · стрелка: верхний предел (5σ)',
   },
 };
 

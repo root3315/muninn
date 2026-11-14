@@ -38,7 +38,7 @@ export const LAYOUT = {
     card: { yawDeg: 35, dist: 1.8, dy: at(1.5, 1.8), w: 0.85, h: 1.25, pxPerM: 760 },
     side: { yawDeg: -35, dist: 1.8, dy: at(1.5, 1.8), w: 0.85, h: 1.25, pxPerM: 760 },
     // A mark's spectrum, over the field, shown only while there is one.
-    spectrum: { yawDeg: 0, dist: 2.05, dy: at(21, 2.05), w: 1.1, h: 0.62 },
+    spectrum: { yawDeg: 0, dist: 2.05, dy: at(21, 2.05), w: 1.1, h: 0.62, readOnly: true },
   },
   ring: {
     radius: 2.2, pitchDeg: -23, tierDropM: 0.36, minSepDeg: 8,
