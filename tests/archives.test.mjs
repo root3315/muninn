@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { archivesQuery, readArchives, ARCHIVE_RADIUS } from '../public/js/archives.js';
+import { archivesQuery, readArchives, cadcSearchUrl, CADC_SEARCH, ARCHIVE_RADIUS } from '../public/js/archives.js';
 
 test('the CADC question carries only three numbers from outside', () => {
   const q = archivesQuery({ ra: 269.452, dec: 4.693, radiusDeg: 0.1 });
@@ -55,4 +55,20 @@ test('NEOSSat: the newest frame, its preview and FITS, and nothing that is not a
   });
   assert.equal(readNeossat(null, []), null);
   assert.equal(readNeossat(obs, [{ uri: 'https://evil.example/x_prev.png' }]), null);
+});
+
+test('a link to CADC opens its search on the field, for one collection or all', () => {
+  const field = { ra: 13.4194, dec: 3.8459, radiusDeg: 0.163 };
+  const one = new URL(cadcSearchUrl(field, 'CFHT'));
+  assert.equal(`${one.origin}${one.pathname}`, CADC_SEARCH);
+  assert.equal(one.hash, '#resultTableTab');
+  assert.equal(one.searchParams.get('Observation.collection'), 'CFHT');
+  assert.equal(one.searchParams.get('Plane.position.bounds'), '13.41940 3.84590 0.1630');
+  assert.equal(one.searchParams.get('Plane.position.bounds@Shape1Resolver.value'), 'ALL');
+  assert.ok(!one.search.includes('+'), 'spaces are written as %20');
+  assert.ok(one.search.includes('Plane.position.bounds@Shape1Resolver.value=ALL'), 'the "@" is left as it is');
+  assert.equal(new URL(cadcSearchUrl(field)).searchParams.has('Observation.collection'), false);
+  // The circle is clamped as the count's own question is.
+  assert.match(new URL(cadcSearchUrl({ ...field, radiusDeg: 40 })).searchParams.get('Plane.position.bounds'), / 0\.3000$/);
+  assert.throws(() => cadcSearchUrl({ ra: NaN, dec: 1, radiusDeg: 0.1 }));
 });

@@ -17,6 +17,21 @@ const ARCHIVES_DEADLINE_MS = 60_000;
 /** Where a person goes to see those observations for themselves. */
 export const CADC_SEARCH = 'https://www.cadc-ccda.hia-iha.nrc-cnrc.gc.ca/en/search/';
 
+/**
+ * CADC's search, opened on the field and run: the same circle the count was
+ * asked over and, given one, a single collection. Without the position the
+ * page opened on an empty form, which read as an archive that did not open.
+ */
+export function cadcSearchUrl({ ra, dec, radiusDeg }, collection = null) {
+  const r = Math.min(ARCHIVE_RADIUS.max, Math.max(ARCHIVE_RADIUS.min, Number(radiusDeg)));
+  const q = new URLSearchParams();
+  if (collection) q.set('Observation.collection', collection);
+  q.set('Plane.position.bounds@Shape1Resolver.value', 'ALL');
+  q.set('Plane.position.bounds', `${fixed(ra, 5)} ${fixed(dec, 5)} ${fixed(r, 4)}`);
+  // CADC's form reads its fields' names as written: "@" escaped, it never runs the search.
+  return `${CADC_SEARCH}?${q.toString().replace(/\+/g, '%20').replace(/%40/g, '@')}#resultTableTab`;
+}
+
 /** The circle a field's question is asked over, in degrees: clamped, so a
  * typo cannot turn into an all-sky query. */
 export const ARCHIVE_RADIUS = { min: 0.005, max: 0.3 };

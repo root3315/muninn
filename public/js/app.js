@@ -41,7 +41,7 @@ import {
 import { loadWise, WISE_BANDS } from './wise.js';
 import { planetHostNear, systemUrl } from './exovision.js';
 import { drawGaiaSky, psfFor } from './gaiasky.js';
-import { fieldArchives, CADC_SEARCH } from './archives.js';
+import { fieldArchives, cadcSearchUrl } from './archives.js';
 import {
   searchFrames, searchAhead, NoRelayError, UpstreamError, groupVisits, findHeldVisit, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, fieldObjects, toS3, surveySources,
@@ -4565,14 +4565,17 @@ function syncLambda() {
 let archives = null;
 /** The newest NEOSSat frame of the field, when CADC has one. */
 let archivesNeossat = null;
+/** The circle CADC was asked about, which every link to its search opens on. */
+let archivesCircle = null;
 
 async function loadArchives(signal) {
   const at = { ra: state.ra, dec: state.dec };
+  archivesCircle = { ...at, radiusDeg: Math.min(0.3, sky.grid.spanDeg / 2) };
   archives = 'asking';
   archivesAll = false;
   renderArchives();
   try {
-    const list = await fieldArchives({ ...at, radiusDeg: Math.min(0.3, sky.grid.spanDeg / 2) }, { signal });
+    const list = await fieldArchives(archivesCircle, { signal });
     if (signal?.aborted || state.ra !== at.ra || state.dec !== at.dec) return;
     archives = list.list;
     archivesNeossat = list.neossat;
@@ -4600,7 +4603,15 @@ function renderArchives() {
   const rows = (cut ? list.slice(0, 8) : list).map((a) => {
     const row = document.createElement('div');
     const dt = document.createElement('dt');
-    dt.textContent = a.name;
+    // Each name opens that collection's observations of this field at CADC.
+    const go = document.createElement('a');
+    go.className = 'link facts__go archives__go';
+    go.href = cadcSearchUrl(archivesCircle, a.name);
+    go.target = '_blank';
+    go.rel = 'noopener';
+    go.textContent = a.name;
+    go.setAttribute('aria-label', t('archives.go', { name: a.name }));
+    dt.append(go);
     const dd = document.createElement('dd');
     const years = a.from && a.to ? (a.from === a.to ? ` · ${a.from}` : ` · ${a.from}–${a.to}`) : '';
     dd.textContent = `${fmt(a.n, 0)}${years}`;
@@ -4613,7 +4624,12 @@ function renderArchives() {
     more.type = 'button';
     more.className = 'link archives__more';
     more.textContent = t('archives.more', { n: list.length - 8 });
-    more.addEventListener('click', () => { archivesAll = true; renderArchives(); });
+    more.addEventListener('click', () => {
+      archivesAll = true;
+      renderArchives();
+      // The button is gone: the keyboard goes on to the first archive it showed.
+      $('archives-list').querySelectorAll('.archives__go')[8]?.focus();
+    });
     const row = document.createElement('div');
     row.append(more);
     rows.push(row);
@@ -4621,7 +4637,7 @@ function renderArchives() {
   $('archives-list').replaceChildren(...rows);
   const link = $('archives-link');
   link.hidden = !list.length;
-  link.href = CADC_SEARCH;
+  if (archivesCircle) link.href = cadcSearchUrl(archivesCircle);
   renderNeossat(Array.isArray(archives) ? archivesNeossat : null);
 }
 
