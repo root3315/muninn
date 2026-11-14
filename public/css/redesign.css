@@ -1591,3 +1591,8 @@ body { font-size: var(--text-base); line-height: 1.5; }
   .mark__fold { inline-size: 44px; block-size: 44px; }
   .spectrum__how summary { padding-block: 13px; }
 }
+/* A phone's browser zooms the page into any box set under 16 px when it is
+   pressed, and leaves it zoomed; the search and the selects are set at 16. */
+@media (pointer: coarse) {
+  .find__input, select.field--compact { font-size: 16px; }
+}
