@@ -1415,3 +1415,30 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .compare__lambda[data-warn="true"] { color: var(--color-counter); }
 .compare__lambda[hidden], .compare__match[hidden] { display: none; }
 .compare__match { justify-self: start; font-size: var(--text-xs); color: var(--color-accent); }
+
+/* Into ExoVision: its night opens out from the card, the star brightens in
+   the middle with its name, and the page changes under it. The colour is
+   ExoVision's own background, so the cut lands on the same night. */
+.exo-jump {
+  position: fixed; inset: 0; z-index: calc(var(--z-tooltip) + 1); pointer-events: none;
+  display: grid; place-items: center; align-content: center; gap: var(--space-lg);
+  background: radial-gradient(circle at 50% 46%, #121a3d 0%, #0a0f24 60%, #070a1a 100%);
+  clip-path: circle(0 at var(--x) var(--y));
+  animation: exo-open 620ms cubic-bezier(0.7, 0, 0.3, 1) forwards;
+}
+.exo-jump__star {
+  inline-size: 10px; block-size: 10px; border-radius: 50%; background: #fff6e8;
+  box-shadow: 0 0 18px 6px rgba(255, 214, 160, 0.55), 0 0 60px 18px rgba(120, 170, 255, 0.18);
+  opacity: 0; transform: scale(0.4);
+  animation: exo-star 520ms var(--ease-out) 300ms forwards;
+}
+.exo-jump__caption {
+  display: grid; justify-items: center; gap: 4px; margin: 0; text-align: center;
+  opacity: 0; transform: translateY(6px);
+  animation: exo-caption 420ms var(--ease-out) 420ms forwards;
+}
+.exo-jump__caption span { font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: 0.08em; text-transform: uppercase; color: #8fa3d9; }
+.exo-jump__caption strong { font-family: var(--font-display); font-size: var(--text-xl); font-weight: 600; color: #eef2ff; }
+@keyframes exo-open { to { clip-path: circle(150vmax at var(--x) var(--y)); } }
+@keyframes exo-star { to { opacity: 1; transform: scale(1); } }
+@keyframes exo-caption { to { opacity: 1; transform: none; } }
