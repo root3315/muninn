@@ -1,0 +1,7 @@
+three.js 0.187.0 (REVISION 187), MIT licence: three.LICENSE.txt.
+
+three.module.js and three.core.js are build/three.module.js and
+build/three.core.js from the npm package three@0.187.0, unchanged. No addons:
+the headset page draws its own controller rays, reticle and Enter VR button.
+
+Used only by vr.html (js/vr/). The main page never loads them.

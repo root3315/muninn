@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Muninn in VR — the SPHEREx sky around you</title>
+<meta name="description" content="Stand inside the real sky and open NASA SPHEREx frames of a field on screens around you. WebXR, for Meta Quest and other headsets; a 3D view on a flat screen.">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#171721">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23171721'/%3E%3Ccircle cx='11' cy='13' r='2.5' fill='%23e6f0f7'/%3E%3Ccircle cx='21' cy='19' r='2.5' fill='%23b9a5f5'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com" crossorigin>
+<link rel="modulepreload" href="js/vendor/three.core.js">
+<link rel="modulepreload" href="js/vendor/three.module.js">
+<link rel="modulepreload" href="js/vr/main.js">
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/redesign.css">
+<link rel="stylesheet" href="css/vr.css">
+</head>
+<body class="vr">
+<canvas id="vr-canvas" class="vr__canvas" aria-label="The sky in 3D"></canvas>
+
+<header class="vr__head">
+  <a id="vr-site" class="vr__site" href="./" data-vr="vr.site">← Muninn</a>
+  <div class="vr__title">
+    <h1 data-vr="vr.title">Muninn in VR</h1>
+    <p class="vr__lede" data-vr="vr.lede"></p>
+  </div>
+  <button id="vr-enter" class="vr__enter" type="button" hidden data-vr="vr.enter">Enter VR</button>
+</header>
+
+<p id="vr-status" class="vr__status" role="status" hidden></p>
+<p id="vr-hint" class="vr__hint" hidden></p>
+
+<footer class="vr__foot">
+  <p class="vr__model" data-vr="vr.model"></p>
+  <button id="vr-diag" class="vr__diag-toggle" type="button" aria-pressed="false" aria-controls="vr-diag-out">Diagnostics</button>
+</footer>
+<pre id="vr-diag-out" class="vr__diag" hidden></pre>
+
+<script type="module" src="js/vr/main.js"></script>
+</body>
+</html>

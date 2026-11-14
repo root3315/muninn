@@ -97,6 +97,124 @@ export function direction(raDeg, decDeg) {
   return [cd * Math.cos(ra), cd * Math.sin(ra), Math.sin(dec)];
 }
 
+/**
+ * How a catalogued star is drawn, from its own numbers: the same mapping for
+ * the sky here and for the sky in the headset (js/vr/).
+ *
+ * The colour is pushed away from grey: the catalogue colours are real, but the
+ * eye sees far more of them against a black sky than a linear rendering gives
+ * back. The size is steep on purpose: the bright stars carry the
+ * constellations, the faint ones are the texture behind them.
+ */
+export function starTint(bv) {
+  const [r0, g0, b0] = starColour(bv);
+  const mid = (r0 + g0 + b0) / 3;
+  const sat = (v) => Math.max(0, Math.min(255, Math.round(mid + (v - mid) * 1.55)));
+  return [sat(r0), sat(g0), sat(b0)];
+}
+
+/** A star's radius in CSS pixels, from its magnitude. */
+export const starRadius = (mag) => Math.max(0.45, 3.0 - 0.42 * mag);
+
+/** A star's opacity, from its magnitude. */
+export const starAlpha = (mag) => Math.max(0.3, Math.min(1, 1.4 - 0.15 * mag));
+
+/** The spread drawn under a bright star: its radius in CSS pixels at the wide view, and its opacity. */
+export const glowRadius = (mag) => Math.max(3, 20 - 3.1 * mag);
+export const glowAlpha = (mag) => Math.max(0.05, Math.min(0.9, 0.62 - 0.1 * mag));
+
+/* ----------------------------------------------------------- milky way */
+
+/**
+ * How bright the disc is in that direction, 0 to 1.
+ *
+ * Four terms, each a real feature described at the crudest useful level —
+ * this is a model, and the page says so:
+ *
+ *   core   a thin, bright disc: most of the light, within a few degrees
+ *   halo   a much wider, fainter one: the thick disc and the near field
+ *   bulge  the inner Galaxy toward Sagittarius, the brightest part of the
+ *          Milky Way in every photograph anyone has ever taken of it
+ *   rift   the Great Rift — dust in the Cygnus-to-Sagittarius arm, which cuts
+ *          the northern band lengthwise and is why it looks split
+ */
+export function discBrightness(l, b, ra, dec) {
+  const ab = Math.abs(b);
+  const core = 0.44 * Math.exp(-ab / 8.5);
+  const halo = 0.26 * Math.exp(-ab / 26);
+  const dl = Math.min(Math.abs(l), 360 - Math.abs(l));
+  const bulge = 2.1 * Math.exp(-((dl / 26) ** 2)) * Math.exp(-((ab / 15) ** 2));
+  let v = (core + halo) * (1 + bulge);
+
+  if (l > 340 || l < 100) {
+    const along = l > 340 ? l - 360 : l;
+    const reach = Math.exp(-(((along - 42) / 50) ** 2));
+    const across = Math.exp(-(((b + 1.4) / 4.2) ** 2));
+    v *= 1 - 0.68 * reach * across;
+    // A second, narrower lane: the dark clouds that break the band into
+    // strands rather than splitting it once.
+    v *= 1 - 0.3 * Math.exp(-(((along - 20) / 26) ** 2))
+      * Math.exp(-(((b + 4.5) / 2.4) ** 2));
+  }
+
+  v *= 0.74 + 0.5 * mottle(ra, dec);
+  return Math.max(0, Math.min(1, v));
+}
+
+/**
+ * Value noise on the sphere, deterministic: the same sky on every machine.
+ *
+ * Two octaves, not three. The band is stretched over tens of degrees and the
+ * third octave was finer than anything the eye could find in it.
+ */
+function mottle(ra, dec) {
+  const a = lattice(ra * 0.55, (dec + 90) * 0.55);
+  const b = lattice(ra * 1.27, (dec + 90) * 1.27);
+  return (a + 0.5 * b) / 1.5;
+}
+
+/**
+ * One cell of value noise.
+ *
+ * The hash is an integer mix rather than the usual fract(sin(...)) — the same
+ * output to the eye, and it does not put a transcendental function inside a
+ * loop that runs half a million times.
+ */
+function lattice(x, y) {
+  const xi = Math.floor(x);
+  const yi = Math.floor(y);
+  const xf = x - xi;
+  const yf = y - yi;
+  const u = xf * xf * (3 - 2 * xf);
+  const v = yf * yf * (3 - 2 * yf);
+  return (hash2(xi, yi) * (1 - u) + hash2(xi + 1, yi) * u) * (1 - v)
+    + (hash2(xi, yi + 1) * (1 - u) + hash2(xi + 1, yi + 1) * u) * v;
+}
+
+/**
+ * The disc as an equirectangular picture: RGBA into `d`, `W` by `H`, right
+ * ascension 0 to 360 across, declination +90 at the top row to −90 at the
+ * bottom.
+ */
+export function paintBand(d, W, H) {
+  for (let py = 0; py < H; py++) {
+    const dec = 90 - (py + 0.5) * (180 / H);
+    for (let px = 0; px < W; px++) {
+      const ra = (px + 0.5) * (360 / W);
+      const [l, b] = galactic(ra, dec);
+      const v = discBrightness(l, b, ra, dec);
+      const i = (py * W + px) * 4;
+      // Warmer where it is bright, bluer where it is faint — which is what
+      // happens, because the bright parts are the crowded inner disc.
+      const warm = Math.min(1, v * 1.25);
+      d[i] = Math.round((92 + 86 * warm) * v);
+      d[i + 1] = Math.round((128 + 58 * warm) * v);
+      d[i + 2] = Math.round((186 + 14 * warm) * v);
+      d[i + 3] = 255;
+    }
+  }
+}
+
 /** The catalogue, fetched once. */
 export async function loadStars(url = 'data/sky/stars.json') {
   const res = await fetch(url, { cache: 'force-cache', signal: AbortSignal.timeout(30_000) });
@@ -201,18 +319,11 @@ export class Gate {
     // Unit vectors once, so a frame is dot products rather than trigonometry.
     this.sv = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) {
-      // Pushed away from grey: the catalogue colours are real, but the eye sees
-      // far more of them against a black sky than a linear rendering gives back.
-      const [r0, g0, b0] = starColour(stars.bv[i]);
-      const mid = (r0 + g0 + b0) / 3;
-      const sat = (v) => Math.max(0, Math.min(255, Math.round(mid + (v - mid) * 1.55)));
-      this.rgb[i] = `${sat(r0)},${sat(g0)},${sat(b0)}`;
+      this.rgb[i] = starTint(stars.bv[i]).join(',');
 
       const m = stars.mag[i];
-      // Steep on purpose: the bright stars carry the constellations, the
-      // faint ones are the texture behind them.
-      this.size[i] = Math.max(0.45, 3.0 - 0.42 * m);
-      this.alpha[i] = Math.max(0.3, Math.min(1, 1.4 - 0.15 * m));
+      this.size[i] = starRadius(m);
+      this.alpha[i] = starAlpha(m);
 
       const [x, y, z] = direction(stars.ra[i], stars.dec[i]);
       this.sv[i * 3] = x;
@@ -408,71 +519,8 @@ export class Gate {
 
   /* --------------------------------------------------------- milky way */
 
-  /**
-   * How bright the disc is in that direction, 0 to 1.
-   *
-   * Four terms, each a real feature described at the crudest useful level —
-   * this is a model, and the page says so:
-   *
-   *   core   a thin, bright disc: most of the light, within a few degrees
-   *   halo   a much wider, fainter one: the thick disc and the near field
-   *   bulge  the inner Galaxy toward Sagittarius, the brightest part of the
-   *          Milky Way in every photograph anyone has ever taken of it
-   *   rift   the Great Rift — dust in the Cygnus-to-Sagittarius arm, which cuts
-   *          the northern band lengthwise and is why it looks split
-   */
-  discBrightness(l, b, ra, dec) {
-    const ab = Math.abs(b);
-    const core = 0.44 * Math.exp(-ab / 8.5);
-    const halo = 0.26 * Math.exp(-ab / 26);
-    const dl = Math.min(Math.abs(l), 360 - Math.abs(l));
-    const bulge = 2.1 * Math.exp(-((dl / 26) ** 2)) * Math.exp(-((ab / 15) ** 2));
-    let v = (core + halo) * (1 + bulge);
-
-    if (l > 340 || l < 100) {
-      const along = l > 340 ? l - 360 : l;
-      const reach = Math.exp(-(((along - 42) / 50) ** 2));
-      const across = Math.exp(-(((b + 1.4) / 4.2) ** 2));
-      v *= 1 - 0.68 * reach * across;
-      // A second, narrower lane: the dark clouds that break the band into
-      // strands rather than splitting it once.
-      v *= 1 - 0.3 * Math.exp(-(((along - 20) / 26) ** 2))
-        * Math.exp(-(((b + 4.5) / 2.4) ** 2));
-    }
-
-    v *= 0.74 + 0.5 * this.mottle(ra, dec);
-    return Math.max(0, Math.min(1, v));
-  }
-
-  /**
-   * Value noise on the sphere, deterministic: the same sky on every machine.
-   *
-   * Two octaves, not three. The band is stretched over tens of degrees and the
-   * third octave was finer than anything the eye could find in it.
-   */
-  mottle(ra, dec) {
-    const a = this.lattice(ra * 0.55, (dec + 90) * 0.55);
-    const b = this.lattice(ra * 1.27, (dec + 90) * 1.27);
-    return (a + 0.5 * b) / 1.5;
-  }
-
-  /**
-   * One cell of value noise.
-   *
-   * The hash is an integer mix rather than the usual fract(sin(...)) — the same
-   * output to the eye, and it does not put a transcendental function inside a
-   * loop that runs half a million times.
-   */
-  lattice(x, y) {
-    const xi = Math.floor(x);
-    const yi = Math.floor(y);
-    const xf = x - xi;
-    const yf = y - yi;
-    const u = xf * xf * (3 - 2 * xf);
-    const v = yf * yf * (3 - 2 * yf);
-    return (hash2(xi, yi) * (1 - u) + hash2(xi + 1, yi) * u) * (1 - v)
-      + (hash2(xi, yi + 1) * (1 - u) + hash2(xi + 1, yi + 1) * u) * v;
-  }
+  /** How bright the disc is in that direction, 0 to 1 (see discBrightness). */
+  discBrightness(l, b, ra, dec) { return discBrightness(l, b, ra, dec); }
 
   /** The disc as an image in sky coordinates, laid on the sphere as a mesh. */
   buildBand() {
@@ -484,22 +532,7 @@ export class Gate {
     const g = c.getContext('2d');
     const img = g.createImageData(W, H);
     const d = img.data;
-    for (let py = 0; py < H; py++) {
-      const dec = 90 - (py + 0.5) * (180 / H);
-      for (let px = 0; px < W; px++) {
-        const ra = (px + 0.5) * (360 / W);
-        const [l, b] = galactic(ra, dec);
-        const v = this.discBrightness(l, b, ra, dec);
-        const i = (py * W + px) * 4;
-        // Warmer where it is bright, bluer where it is faint — which is what
-        // happens, because the bright parts are the crowded inner disc.
-        const warm = Math.min(1, v * 1.25);
-        d[i] = Math.round((92 + 86 * warm) * v);
-        d[i + 1] = Math.round((128 + 58 * warm) * v);
-        d[i + 2] = Math.round((186 + 14 * warm) * v);
-        d[i + 3] = 255;
-      }
-    }
+    paintBand(d, W, H);
     g.putImageData(img, 0, 0);
     this.band = c;
     this.bandW = W;
@@ -767,10 +800,10 @@ export class Gate {
         const x = this.px;
         const y = this.py;
         if (x < -90 || x > width + 90 || y < -90 || y > height + 90) continue;
-        const r = Math.max(3, 20 - 3.1 * mag[i]) * dpr * zoom;
+        const r = glowRadius(mag[i]) * dpr * zoom;
         // The catalogue comes sorted by magnitude, so this only ever steps
         // down: about twenty changes for five thousand stars.
-        const a = Math.round(Math.max(0.05, Math.min(0.9, 0.62 - 0.1 * mag[i])) * 40) / 40;
+        const a = Math.round(glowAlpha(mag[i]) * 40) / 40;
         if (a !== lastAlpha) { ctx.globalAlpha = a; lastAlpha = a; }
         ctx.drawImage(this.glows[this.glowBin(bv[i])], x - r, y - r, r * 2, r * 2);
       }

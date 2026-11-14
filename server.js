@@ -853,17 +853,23 @@ function freshVersion() {
   return freshNext;
 }
 
-/** List js/ and css/ and hash what is there. A new tag drops what was built under the old. */
+/**
+ * List js/ and css/, with the folders inside them (the headset's code and the
+ * library it is drawn with live in js/vr/ and js/vendor/), and hash what is
+ * there. A new tag drops what was built under the old.
+ */
 async function readVersion() {
   versionCheckedAt = Date.now();
   const before = versionTag;
   const hash = createHash('sha1');
-  for (const dir of ['js', 'css']) {
+  const walk = async (dir) => {
     for (const name of (await readdir(join(PUBLIC, dir))).sort()) {
       const info = await stat(join(PUBLIC, dir, name));
       if (info.isFile()) hash.update(`${dir}/${name}:${info.size}:${Math.round(info.mtimeMs)}\n`);
+      else if (info.isDirectory()) await walk(`${dir}/${name}`);
     }
-  }
+  };
+  for (const dir of ['js', 'css']) await walk(dir);
   versionTag = hash.digest('hex').slice(0, 10);
   if (before && before !== versionTag) {
     for (const [path, file] of staticCache) if (file.version) staticCache.delete(path);

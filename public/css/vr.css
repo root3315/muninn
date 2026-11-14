@@ -1,0 +1,137 @@
+/* vr.css — the page around the 3D sky: a title, the way into the headset, and
+   nothing over the sky that does not have to be there. */
+
+html, body.vr {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--color-well);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+}
+
+.vr__canvas {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+  cursor: grab;
+}
+.vr__canvas:active { cursor: grabbing; }
+
+.vr__head {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-lg);
+  padding: var(--space-md) var(--page-gutter);
+  background: linear-gradient(to bottom, var(--gate-veil-deep), transparent);
+  pointer-events: none;
+}
+.vr__head > * { pointer-events: auto; }
+
+.vr__site {
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  padding-top: 0.45rem;
+}
+.vr__site:hover, .vr__site:focus-visible { color: var(--color-ink); }
+
+.vr__title { flex: 1; min-width: 0; }
+.vr__title h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: var(--text-xl);
+  letter-spacing: -0.01em;
+}
+.vr__lede {
+  margin: 0.35rem 0 0;
+  max-width: 44rem;
+  color: var(--color-muted);
+  text-shadow: var(--shade-text);
+}
+
+.vr__enter {
+  font: 600 var(--text-md) var(--font-display);
+  color: var(--color-accent-ink);
+  background: var(--color-accent);
+  border: 0;
+  border-radius: var(--radius-round);
+  padding: 0.8rem 1.6rem;
+  cursor: pointer;
+}
+.vr__enter:hover { filter: brightness(1.08); }
+.vr__enter:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 3px; }
+
+.vr__status, .vr__hint {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  max-width: min(40rem, calc(100% - 2rem));
+  padding: 0.55rem 1rem;
+  border-radius: var(--radius-sm);
+  background: var(--gate-chip);
+  color: var(--color-ink);
+  text-align: center;
+  pointer-events: none;
+}
+.vr__status { top: 40%; }
+.vr__hint { bottom: 4.2rem; color: var(--color-muted); font-size: var(--text-sm); }
+body[data-field="open"] .vr__hint { display: none; }
+
+.vr__foot {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-md);
+  padding: var(--space-sm) var(--page-gutter);
+  background: linear-gradient(to top, var(--gate-veil-deep), transparent);
+}
+.vr__model {
+  flex: 1;
+  margin: 0;
+  color: var(--color-neutral);
+  font-size: var(--text-xs);
+}
+.vr__diag-toggle {
+  font: 500 var(--text-xs) var(--font-mono);
+  color: var(--color-neutral);
+  background: transparent;
+  border: 1px solid var(--color-rule);
+  border-radius: var(--radius-sm);
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+}
+.vr__diag-toggle[aria-pressed="true"] { color: var(--color-ink); border-color: var(--color-accent); }
+.vr__diag {
+  position: fixed;
+  right: var(--page-gutter);
+  bottom: 3.2rem;
+  max-width: min(36rem, calc(100% - 2rem));
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  border-radius: var(--radius-sm);
+  background: var(--gate-veil-deep);
+  color: var(--color-muted);
+  font: 400 var(--text-xs) / 1.45 var(--font-mono);
+  white-space: pre-wrap;
+}
+
+body[data-xr="true"] .vr__hint { display: none; }
+
+@media (max-width: 40rem) {
+  .vr__lede { display: none; }
+  .vr__title h1 { font-size: var(--text-lg); }
+}

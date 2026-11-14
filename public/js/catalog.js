@@ -466,7 +466,7 @@ const VIZIER_CFA = 'https://vizier.cfa.harvard.edu/viz-bin/votable';
 export const SIMBAD_PAGE = 'https://simbad.cfa.harvard.edu/simbad/sim-id?Ident=';
 export const VIZIER_PAGE = 'https://vizier.cfa.harvard.edu/viz-bin/VizieR-4?';
 
-async function simbadTap(query, format, signal) {
+export async function simbadTap(query, format, signal) {
   try {
     return await Promise.any(SIMBAD_TAPS.map((base) => tap(base, query, format, signal)));
   } catch (err) {

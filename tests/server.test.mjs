@@ -125,6 +125,23 @@ test('only code under the current tag is kept for good, not the page or its data
   assert.doesNotMatch((await get('/js/app.js?v=0000000000')).headers.get('cache-control'), IMMUTABLE_RE);
 });
 
+test('the headset page is served with the same policy, and its library under the tag for good', async () => {
+  const page = await get('/vr.html');
+  assert.equal(page.status, 200);
+  assert.match(page.headers.get('content-security-policy') ?? '', /script-src 'self'/);
+  const html = await page.text();
+  const tag = html.match(/js\/vr\/main\.js\?v=([0-9a-f]+)/)?.[1];
+  assert.ok(tag, 'the page names its code under a tag');
+  assert.equal(tag, await pageTag());
+  const three = await get(`/js/vendor/three.module.js?v=${tag}`);
+  assert.equal(three.status, 200);
+  assert.match(three.headers.get('content-type'), /javascript/);
+  assert.match(three.headers.get('cache-control'), IMMUTABLE_RE);
+  // Its import of the core carries the tag too, so the core is kept as well.
+  assert.match(await three.text(), new RegExp(`three\\.core\\.js\\?v=${tag}`));
+  assert.match((await get(`/js/vendor/three.core.js?v=${tag}`)).headers.get('cache-control'), IMMUTABLE_RE);
+});
+
 // Before the tests below move file dates about: the page's tag is reread
 // at most every 30 s, and must match the disk here.
 test('a page load\'s worth of tagged requests at once all get the current tag', async () => {
@@ -164,6 +181,20 @@ test('a picture keeps its ETag across a code deploy', async () => {
     await utimes(file, atime, new Date(mtime.getTime() + 7000));
     await pageTag();
     assert.equal((await get(img)).headers.get('etag'), before);
+  } finally {
+    await utimes(file, atime, mtime);
+  }
+});
+
+test('code changed in a folder under js/ changes the tag', async () => {
+  const { stat, utimes } = await import('node:fs/promises');
+  const tag = await pageTag();
+  const file = fileURLToPath(new URL('../public/js/vr/main.js', import.meta.url));
+  const { atime, mtime } = await stat(file);
+  try {
+    await utimes(file, atime, new Date(mtime.getTime() + 9000));
+    assert.doesNotMatch((await get(`/js/vr/main.js?v=${tag}`)).headers.get('cache-control'), IMMUTABLE_RE);
+    assert.notEqual(await pageTag(), tag);
   } finally {
     await utimes(file, atime, mtime);
   }
