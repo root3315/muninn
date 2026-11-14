@@ -544,7 +544,7 @@ export function openFieldVR(target, env) {
     const was = marksPanel.mesh.visible;
     marksPanel.mesh.visible = sky.marks.length > 0 || Boolean(undo);
     if (!was && marksPanel.mesh.visible) windows.settle(marksPanel.mesh, st.head);
-    if (marksPanel.mesh.visible) marksPanel.render({ marks: sky.marks, visits: sky.visits, undo: Boolean(undo), target: sky.target ?? null });
+    if (marksPanel.mesh.visible) marksPanel.render({ marks: sky.marks, visits: sky.visits, undo: Boolean(undo), target: sky.target ?? null, bright: env.brightList ?? [] });
   }
 
   function markAct(id, i) {
