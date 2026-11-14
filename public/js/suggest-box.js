@@ -1,8 +1,8 @@
 /**
  * The list under a search box: a combobox over the rows `suggest()` gives.
  *
- * ↑ and ↓ move through the rows, Enter takes the lit one (or submits the text
- * when none is lit), Escape closes, a press or a tap takes a row. The list
+ * ↑ and ↓ move through the rows, Enter takes the lit one (or, with none lit,
+ * a target or field at the top or the only row, else submits the text), Escape closes, a press or a tap takes a row. The list
  * keeps the input's focus while it is pressed, and goes away when the input
  * loses it.
  */
@@ -115,6 +115,18 @@ export function attachSuggest(input, { query, pick, say, up = false }) {
       light(next < -1 ? options.length - 1 : next >= options.length ? -1 : next);
     } else if (e.key === 'Enter') {
       if (!list.hidden && active >= 0) { e.preventDefault(); take(options[active].row); return; }
+      // Nothing lit: a challenge target or a prepared field at the top of the
+      // list is what was meant ("WISE 0855", "Atala"), and so is the only
+      // row there is. A name the archive's resolver does not know would
+      // otherwise go to it and come back "not found". Positions are left to
+      // the form, which reads them itself.
+      const first = options.find((o) => o.row.kind !== 'position');
+      const rows = options.filter((o) => o.row.kind !== 'position');
+      if (!list.hidden && first && (['target', 'field'].includes(first.row.kind) || rows.length === 1)) {
+        e.preventDefault();
+        take(first.row);
+        return;
+      }
       close();
     } else if (e.key === 'Escape') {
       if (!list.hidden) { e.preventDefault(); e.stopPropagation(); close(); }
