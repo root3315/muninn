@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { spread, nextVisits, VISITS_PER_BATCH } from '../public/js/visits.js';
+import { spread, nextVisits, mergeFrames, mergeVisits, VISITS_PER_BATCH } from '../public/js/visits.js';
 
 // Fifty-five visits in two seasons a year, like a field near the ecliptic:
 // clusters of a few days, six months apart.
@@ -126,4 +126,22 @@ test('a rounded-up second carries into minutes and hours', async () => {
   assert.equal(formatDec(-7.99999999), '−08° 00′ 00.0″');
   assert.equal(formatDec(10.9999999), '+11° 00′ 00.0″');
   assert.equal(formatDec(-7.245139), '−07° 14′ 42.5″');
+});
+
+test('asking again after a partial list keeps every frame and visit already in hand', () => {
+  const f = (url, mjd) => ({ url, mjd, obsId: url });
+  const first = [f('a', 100), f('b', 110), f('c', 300)];
+  // The second answer has the collection that failed (d, e) and lost another (c).
+  const second = [f('a', 100), f('b', 110), f('d', 200), f('e', 200.1)];
+  const frames = mergeFrames(first, second);
+  assert.deepEqual(frames.map((x) => x.url), ['a', 'b', 'c', 'd', 'e']);
+  assert.equal(frames[0], first[0], 'the frame already held is the same object');
+
+  const kept = [first[0], first[1], first[2]];
+  // A nearer frame of a visit already held (b2, two hours after b) is not a new visit.
+  const fresh = [f('a', 100), f('b2', 110.08), f('d', 200), f('c', 300)];
+  const visits = mergeVisits(kept, fresh);
+  assert.deepEqual(visits.map((v) => v.url), ['a', 'b', 'd', 'c']);
+  for (const v of kept) assert.ok(visits.includes(v), 'every visit held stays, as the same object');
+  assert.deepEqual(mergeVisits(kept, []), kept, 'an empty second answer takes nothing away');
 });

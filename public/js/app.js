@@ -48,7 +48,7 @@ import {
   resolveName, formatRA, formatDec, knownBodies, fieldObjects, toS3, surveySources,
 } from './catalog.js';
 import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP } from './overlay.js';
-import { spread, nextVisits, VISITS_PER_BATCH } from './visits.js';
+import { spread, nextVisits, mergeFrames, mergeVisits, VISITS_PER_BATCH } from './visits.js';
 import { encodeHash, decodeHash, FOV_CHOICES } from './hash.js';
 import { buildIndex, suggest } from './suggest.js';
 import { attachSuggest } from './suggest-box.js';
@@ -482,8 +482,9 @@ function renderFacts() {
   // "nothing moved" would be said about visits nobody was shown.
   if (state.partial && !state.loading) {
     rows.push([t('facts.list'), t('facts.listPartial'), null, {
-      label: t('epochs.retry'),
-      run: () => openField({ ra: state.ra, dec: state.dec, label: state.label }),
+      label: t(listRetry.busy ? 'facts.listAsking' : 'epochs.retry'),
+      run: retryPartialList,
+      busy: listRetry.busy,
     }]);
   }
   const unread = state.visits.filter((v) => v.status === 'failed').length;
@@ -3227,6 +3228,59 @@ async function fillVisits(limit) {
   fillRefresh({ final: true });
 }
 
+/*
+ * Part of the archive did not answer, so the frame list is short. Asking
+ * again asks only for the list: what it adds is merged in, the visits in
+ * hand stay the same objects (mergeVisits), and the background reading picks
+ * up the new ones as it would any other. Nothing already read, on screen or
+ * chosen is touched. Failing again changes nothing but the count of tries:
+ * the page asks again by itself after 5, 15 and 45 seconds, and after that
+ * only on a press.
+ */
+const LIST_RETRY_MS = [5000, 15000, 45000];
+let listRetry = { busy: false, tries: 0, timer: 0 };
+
+function resetListRetry() {
+  clearTimeout(listRetry.timer);
+  listRetry = { busy: false, tries: 0, timer: 0 };
+}
+
+async function retryPartialList() {
+  if (listRetry.busy || !state.partial || state.ra == null) return;
+  const asked = listRetry;
+  clearTimeout(asked.timer);
+  asked.busy = true;
+  renderFacts();
+  const gen = fieldSeq;
+  const { ra, dec } = state;
+  let answer = null;
+  try {
+    answer = await searchFrames({ ra, dec }, { signal: state.abort?.signal });
+  } catch {
+    // Kept as it is: the visits in hand are still the field's visits.
+  }
+  if (gen !== fieldSeq || asked !== listRetry) return;
+  asked.busy = false;
+  if (answer) {
+    const want = state.allVisits[state.wantVisit];
+    state.frames = mergeFrames(state.frames ?? [], answer.frames ?? []);
+    state.allVisits = mergeVisits(state.allVisits, groupVisits(state.frames, { ra, dec, band: state.band }));
+    if (want) state.wantVisit = state.allVisits.indexOf(want);
+    state.truncated = state.truncated || Boolean(answer.truncated);
+    state.partial = Boolean(answer.partial);
+    populateBands();
+    // The new visits are read the way the rest are, in the background.
+    if (!state.filling && !state.loading) fillVisits(Math.max(state.visitGoal, fillCap()));
+  }
+  asked.tries = state.partial ? asked.tries + 1 : 0;
+  if (state.partial && asked.tries <= LIST_RETRY_MS.length) {
+    asked.timer = setTimeout(() => { if (asked === listRetry) retryPartialList(); }, LIST_RETRY_MS[asked.tries - 1]);
+  }
+  updateIdentity();
+  drawAxis();
+  renderFacts();
+}
+
 /** Ask again, by hand, for the visits that were not read. */
 function retryUnread() {
   fillVisits(Math.max(state.visitGoal, state.visits.length));
@@ -3254,6 +3308,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.abChosen = false;
   state.truncated = false;
   state.partial = false;
+  resetListRetry();
   // What the last field measured goes with it: the reading is now built up as
   // this field's visits land, and must not start from someone else's numbers.
   state.loading = true;

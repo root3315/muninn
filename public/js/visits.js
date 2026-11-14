@@ -55,3 +55,27 @@ export function nextVisits(all, chosen, n = VISITS_PER_BATCH) {
   }
   return picked.sort((a, b) => a.mjd - b.mjd);
 }
+
+/**
+ * The frame list after a second answer: everything the first had, and what the
+ * second adds. A frame is the same frame by its file. Asking again after part
+ * of the archive failed to answer must never lose what the first answer gave.
+ */
+export function mergeFrames(kept, fresh) {
+  const have = new Set(kept.map((f) => f.url ?? keyOf(f)));
+  return [...kept, ...fresh.filter((f) => !have.has(f.url ?? keyOf(f)))];
+}
+
+/**
+ * The visit list after a second answer, with every visit of the first kept as
+ * the very same object, so the frames read, the one on screen, A and B and
+ * the marks all stay where they are. A visit of the second list is new only
+ * when no kept visit lies within `minGapHours` of it: the lists are grouped
+ * that way (groupVisits), and a nearer frame of a visit already in hand is
+ * not a new visit. In date order.
+ */
+export function mergeVisits(kept, fresh, minGapHours = 6) {
+  const gap = minGapHours / 24;
+  const added = fresh.filter((v) => !kept.some((k) => Math.abs(k.mjd - v.mjd) < gap));
+  return [...kept, ...added].sort((a, b) => a.mjd - b.mjd);
+}
