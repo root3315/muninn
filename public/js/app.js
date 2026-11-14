@@ -22,18 +22,19 @@ import { themeTransition } from './twilight.js';
 import { planetsNow } from './ephemeris.js';
 import { rankCandidates } from './hunt.js';
 import { searchField } from './huntcore.js';
-import { tooSharp, STAR_MAX_SHARE, MIN_JUDGED_SNR } from './sharpness.js';
+import { STAR_MAX_SHARE, MIN_JUDGED_SNR } from './sharpness.js';
 import { FRAME_FILE_MB } from './release.js';
 import { deadline, CATALOG_DEADLINE_MS } from './net.js';
 import { paint, rampFromToken, sortedFinite, limitsFromSorted } from './render.js';
 import { seasonChunks, chunkAt, forStack, averaged } from './stack.js';
-import { linkSeasons, parallaxArc, distanceGrid, arcPoint, ARC_TICKS_AU, NEAR_AU, FAR_AU, separationArcsec } from './seasons.js';
+import { parallaxArc, distanceGrid, arcPoint, ARC_TICKS_AU, NEAR_AU, FAR_AU, separationArcsec } from './seasons.js';
 import { TangentGrid, separation, deltaRA } from './wcs.js';
 import { loadStamp, loadWavelength } from './stamp.js';
 import { motionOf, visitPool, chooseMeasured, visitPoint, placeInBand, channelOverlap } from './spectrum.js';
 import { spectrumBlock } from './spectrum-view.js';
 import { trackCSV } from './export.js';
-import { SkyView, shortName, mostlySaturated } from './sky.js';
+import { SkyView, shortName } from './sky.js';
+import { measureLink, planLink, markCall, shapeOf } from './marks.js';
 import { loadWise, WISE_BANDS } from './wise.js';
 import { drawGaiaSky, psfFor } from './gaiasky.js';
 import { fieldArchives, CADC_SEARCH } from './archives.js';
@@ -2513,14 +2514,6 @@ function showTip(hit, x = 0, y = 0) {
 }
 
 /** One honest sentence about what the pixels support at a marked position. */
-const CALL = {
-  none: 'mark.callNone',
-  transient: 'mark.callTransient',
-  moving: 'mark.callMoving',
-  fixed: 'mark.callFixed',
-  saturated: 'mark.callSaturated',
-  intermittent: 'mark.callIntermittent',
-};
 
 /** A number to `digits` significant figures: 0,0042 and 21,3 alike, never 0,00. */
 function fmtSig(v, digits) {
@@ -2530,7 +2523,7 @@ function fmtSig(v, digits) {
 }
 
 /** What the measurement amounts to, in the fewest words that are still true. */
-const callOf = (a) => (tooSharp(shapeOf(a)) ? t('sharp.call') : t(CALL[a?.kind ?? 'none'] ?? CALL.none));
+const callOf = (a) => markCall(a, t);
 
 /**
  * The verdict, and how many loaded visits never saw the spot: those are left
@@ -2571,11 +2564,6 @@ function verdictOnly(a) {
  * detector pixel, and the bar a star could not pass at that brightness.
  * Marks seen across many visits are stars or movers by their own record.
  */
-function shapeOf(a) {
-  if (!a?.track?.length || a.seen > 2) return null;
-  const at = a.kind === 'transient' ? a.at : a.track.reduce((b, p) => ((p.snr ?? 0) > (b.snr ?? 0) ? p : b));
-  return at?.sharp ?? null;
-}
 
 /** The shape reading of a mark as a line of its card, or null. */
 function sharpLine(a) {
@@ -2993,21 +2981,14 @@ async function linkMark(m) {
   if (m.link?.state === 'reading') return;
   const ref = sky.visits.find((v) => v.frame.obsId === m.obsId)?.frame ?? sky.current?.frame;
   if (!ref) return;
-  const chunks = bandSeasons(ref.band);
-  const a = chunkAt(chunks, ref.mjd);
-  const others = chunks.map((c, k) => ({ c, k })).filter(({ k }) => k !== a);
-  if (a < 0 || !others.length) {
+  const plan = planLink(bandSeasons(ref.band), ref, sky.visits);
+  if (!plan) {
     m.link = { state: 'single', band: ref.band };
     if (sky.link?.mark === m) showLink(null);
     renderMarks();
     return;
   }
-  // The season nearest in time: SPHEREx comes back about half a year later.
-  const mid = (c) => (c[0].mjd + c[c.length - 1].mjd) / 2;
-  const b = others.sort((x, y) => Math.abs(mid(x.c) - ref.mjd) - Math.abs(mid(y.c) - ref.mjd))[0].k;
-  const loadedB = sky.visits.find((v) => v.frame.band === ref.band && chunkAt(chunks, v.frame.mjd) === b);
-  const framesA = forStack(chunks[a], ref);
-  const framesB = forStack(chunks[b], loadedB?.frame ?? chunks[b][Math.floor(chunks[b].length / 2)]);
+  const { loadedB, framesA, framesB } = plan;
 
   const gen = fieldSeq;
   const link = { state: 'reading', band: ref.band, n: 0, total: framesA.length + framesB.length, shown: true };
@@ -3063,71 +3044,8 @@ async function linkStamps(frames, onEach) {
   return out.sort((x, y) => x.frame.mjd - y.frame.mjd);
 }
 
-/** The measurement half of the link: anchor, sources, static check, decision. */
-async function runLink(m, visitsA, visitsB) {
-  // Where the mark is in season A, measured: the strongest detection of it.
-  let anchorHit = null;
-  const hitsA = [];
-  for (const v of visitsA) {
-    const hit = sky.measure(v, m.ra, m.dec);
-    if (hit) hitsA.push(hit);
-    if (hit && (!anchorHit || hit.snr > anchorHit.snr)) anchorHit = hit;
-  }
-  const refMjd = visitsA.find((v) => v.frame.obsId === m.obsId)?.frame.mjd ?? visitsA[0].frame.mjd;
-  const anchor = anchorHit
-    ? { ra: anchorHit.ra, dec: anchorHit.dec, mjd: anchorHit.mjd }
-    : { ra: m.ra, dec: m.dec, mjd: refMjd };
-
-  const sourcesOf = new Map();
-  for (const v of visitsB) {
-    sourcesOf.set(v.frame.obsId, sky.sources(v));
-    await breathe();
-  }
-  // Inside the plate by the measuring box's own reach, so every point called
-  // checkable could actually be measured.
-  const perPixel = DETECTOR_ARCSEC / (sky.grid.scale * 3600);
-  const margin = Math.ceil(5 * perPixel) + 1;
-  const { width, height } = sky.grid;
-  const inField = (ra, dec) => {
-    const g = sky.grid.worldToIndex(ra, dec);
-    return Boolean(g) && g[0] >= margin && g[1] >= margin && g[0] <= width - 1 - margin && g[1] <= height - 1 - margin;
-  };
-  // Something at the spot in season A, even at 3σ, makes it a fixed source.
-  const occupied = (v, ra, dec) => {
-    const hit = sky.measure(v.item, ra, dec, { minSnr: 3 });
-    return Boolean(hit) && separationArcsec(hit, { ra, dec }) <= 1.5 * DETECTOR_ARCSEC;
-  };
-  const asVisit = (v) => ({ id: v.frame.obsId, mjd: v.frame.mjd, item: v });
-  // The source at the mark, still at the same spot in a season-B visit.
-  const anchorInB = (v) => {
-    const hit = sky.measure(v.item, anchor.ra, anchor.dec);
-    return Boolean(hit) && separationArcsec(hit, anchor) <= 1.5 * DETECTOR_ARCSEC;
-  };
-  const result = linkSeasons({
-    anchor,
-    aVisits: visitsA.map(asVisit),
-    bVisits: visitsB.map(asVisit),
-    sources: (v) => sourcesOf.get(v.id) ?? [],
-    occupied,
-    inField,
-    anchorInB: anchorHit ? anchorInB : undefined,
-    anchorSaturated: mostlySaturated(hitsA),
-    pixelArcsec: DETECTOR_ARCSEC,
-  });
-  // A source at the mark that is still there in season B sits still: a star.
-  const stillThere = result.star?.stillThere
-    ?? (anchorHit ? visitsB.filter((v) => anchorInB(asVisit(v))).length : 0);
-  const limits = visitsB.map((v) => limitAB(v.stamp.meta?.detectorSigma)).filter((x) => x != null).sort((x, y) => x - y);
-  return {
-    anchor,
-    anchored: Boolean(anchorHit),
-    stillThere,
-    result,
-    limit: limits.length ? limits[limits.length >> 1] : null,
-    datesA: [visitsA[0].frame, visitsA[visitsA.length - 1].frame],
-    visitsB: visitsB.map((v) => v.frame),
-  };
-}
+/** The measurement half of the link (marks.js), on this page's plate. */
+const runLink = (m, visitsA, visitsB) => measureLink(sky, m, visitsA, visitsB, { breathe });
 
 /**
  * Draw one mark's arc on the plate, or none. The arc is for the season-B visit
