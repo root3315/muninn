@@ -302,7 +302,7 @@ const STRINGS = {
     'matrix.cell': 'sector {sector}, visit of {date}: score {score} above its usual (an attention score, not a significance)',
     'overlay.skybotBusy': 'Asking SkyBoT…',
     'overlay.skybotNone': 'No catalogued solar-system object crosses this field.',
-    'overlay.skybotCount': '{n} catalogued objects cross this field',
+    'overlay.skybotCount': '{n} catalogued {n:object crosses|objects cross} this field',
     'overlay.skybotFail': 'SkyBoT did not answer. Known-object marks are off.',
 
     'readout.legend': 'Under the cursor',

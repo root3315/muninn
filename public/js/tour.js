@@ -143,9 +143,15 @@ function loadClip(key) {
     schedule();
   };
   clip.onerror = () => { clip.hidden = true; };
+  // Only clips that exist are asked for: a missing one was a 404 in the
+  // console of every visitor who pressed "Not clear".
+  if (!TOUR_CLIPS.has(key)) { clip.hidden = true; return; }
   clip.preload = 'auto';
   clip.src = `video/tour/${key}.webm`;
 }
+
+/** The steps that have a clip in public/video/tour/<key>.webm. */
+const TOUR_CLIPS = new Set([]);
 
 function render() {
   const step = steps[at];
