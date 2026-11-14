@@ -187,9 +187,11 @@ export function rampFromToken(el, token) {
  * not reach the frame's edge is filled white when at least half its rim is
  * at or above the top of the stretch, and smoothly from its rim when only
  * part of it is (a masked block beside the core, its other sides in the
- * star's glow), as is a pinhole of a few pixels walled in by bright glow.
- * A blank whose rim reaches sky stays blank, as does the blank
- * beyond the detector; the measured data are not touched.
+ * star's glow), as is a pinhole of a few pixels walled in by bright glow,
+ * and a hole of any size with half its rim or more clear above the sky:
+ * a star the pipeline masked short of saturation, which had come out as a
+ * black blob in a grey disc. A blank whose rim is mostly sky stays blank, as
+ * does the blank beyond the detector; the measured data are not touched.
  *
  * One pass over each region, where a pixel-at-a-time spread had taken up to
  * sixty-four passes over the whole frame on every repaint, and had crept out
@@ -202,14 +204,20 @@ export function fillCores(data, width, ceiling) {
   const seen = new Uint8Array(n);
   const queue = new Int32Array(n);
   let out = null;
+  let glow = Infinity;
 
   for (let s = 0; s < n; s++) {
     if (seen[s] || data[s] === data[s]) continue;
+    if (glow === Infinity) {
+      const sky = skyOf(data);
+      glow = sky.level + GLOW_SIGMA * sky.sigma;
+    }
     let head = 0;
     let tail = 0;
     let rim = 0;
     let bright = 0;
     let dim = 0;
+    let lit = 0;
     let top = -Infinity;
     let edge = false;
     seen[s] = 1;
@@ -228,6 +236,7 @@ export function fillCores(data, width, ceiling) {
         const v = data[j];
         if (v === v) {
           rim++;
+          if (v > glow) lit++;
           if (v >= ceiling) { bright++; if (v > top) top = v; }
           if (v < ceiling / 2) dim++;
         } else if (!seen[j]) {
@@ -238,7 +247,9 @@ export function fillCores(data, width, ceiling) {
     }
     // A pinhole of a few pixels deep in a star's glow is filled too.
     const pinhole = tail <= 9 && !dim;
-    if (edge || !(bright || pinhole)) continue;
+    // And a hole of any size that lies, half its rim or more, in a source's light.
+    const inLight = rim > 0 && lit * 2 >= rim;
+    if (edge || !(bright || pinhole || inLight)) continue;
     out ??= Float32Array.from(data);
     if (bright * 2 >= rim) {
       for (let i = 0; i < tail; i++) out[queue[i]] = top;
@@ -250,6 +261,24 @@ export function fillCores(data, width, ceiling) {
     }
   }
   return fillWalled(out ?? data, width, height, ceiling);
+}
+
+/** How far above the sky, in its own noise, a pixel of a hole's rim must stand to count as lying in a source's light. */
+const GLOW_SIGMA = 5;
+
+/**
+ * The sky's level and spread, from a sparse sample of the frame: the median
+ * of its finite pixels, and a sigma from the half below it, which the stars
+ * do not reach (a Gaussian's lower quartile is 0.674 sigma under its median).
+ */
+export function skyOf(data) {
+  const step = Math.max(1, Math.floor(data.length / 8192));
+  const sample = [];
+  for (let i = 0; i < data.length; i += step) if (data[i] === data[i]) sample.push(data[i]);
+  if (!sample.length) return { level: Infinity, sigma: 0 };
+  sample.sort((a, b) => a - b);
+  const level = sample[sample.length >> 1];
+  return { level, sigma: (level - sample[sample.length >> 2]) / 0.6745 };
 }
 
 /**
