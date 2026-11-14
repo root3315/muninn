@@ -14,7 +14,9 @@
  * catalogues (/api/tap), and JPL's Small-Body Identification service, for the
  * known asteroids and comets in a field at a moment (/api/sbident). Neither
  * takes a query from the page: the relay writes it from a fixed template and
- * checked numbers.
+ * checked numbers. The search box's asteroid and comet names go to JPL's
+ * Small-Body Database and Horizons the same way (/api/smallbody): the relay
+ * reads a designation out of the text and asks only for that.
  *
  * No dependencies. `node server.js` and open the address it prints.
  */
@@ -33,6 +35,7 @@ import { COLLECTIONS } from './public/js/release.js';
 import { parseCsv } from './public/js/csv.js';
 import { CATALOGUES, ROW_CAP, coneQuery, renameRow, mastGaiaRows } from './public/js/overlay.js';
 import { sbIdentUrl, parseSbIdent } from './public/js/sbident.js';
+import { smallBodyQuery, SBDB_TEXT, sbdbUrl, readSbdb, horizonsUrl, readHorizons } from './public/js/smallbody.js';
 import { archivesQuery, neossatQuery, neossatFilesQuery, readNeossat, ARCHIVE_RADIUS } from './public/js/archives.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
@@ -471,7 +474,7 @@ async function answerSlowly(res, pending) {
  * JPL) fill every slot, and then the frame search answered "busy" to
  * everyone. Each kind now waits only behind its own.
  */
-const POOL_MAX = { search: 6, catalog: 8, jpl: 3, wise: 3 };
+const POOL_MAX = { search: 6, catalog: 8, jpl: 3, wise: 3, names: 3 };
 const pools = Object.fromEntries(Object.keys(POOL_MAX).map((k) => [k, new Set()]));
 
 /**
@@ -940,6 +943,57 @@ async function askJpl(field, key) {
   return { ok: true, cached: false, ...payload };
 }
 
+/* ------------------------------------------- asteroids and comets by name */
+
+/** SBDB and Horizons each answer a name in a second or two. */
+const SMALL_BODY_TIMEOUT_MS = 30_000;
+/** Names per visitor per minute: the box asks once a pause in typing, not per key. */
+const NAMES_PER_MINUTE = 30;
+const namesAsked = new Map();
+
+/**
+ * An asteroid or comet the search box was given, and where it stands today.
+ *
+ *   name   what was typed: "Ceres", "433 Eros", "(152) Atala", "1P/Halley",
+ *          "2024 YR4". The relay reads a designation out of it, and only
+ *          that designation goes to JPL.
+ *
+ * Answers { bodies: [{ des, name, comet, ra, dec }], day }, empty when JPL
+ * knows no such body. Kept for the day, since a body moves.
+ */
+async function handleSmallBody(url, req, res) {
+  const asked = smallBodyQuery(url.searchParams.get('name') ?? '');
+  if (!asked || !SBDB_TEXT.test(asked.sstr)) {
+    return json(res, 400, { ok: false, error: 'name must be an asteroid or comet name or designation' });
+  }
+  if (overLimit(req, namesAsked, NAMES_PER_MINUTE)) {
+    return json(res, 429, { ok: false, error: 'Too many names from here; wait a minute.' });
+  }
+  const day = new Date().toISOString().slice(0, 10);
+  const key = `sb_${day}_${createHash('sha1').update(asked.sstr.toLowerCase()).digest('hex').slice(0, 20)}`;
+  return relay(res, key, () => askSmallBody(asked.sstr, day, key), 'names');
+}
+
+async function askSmallBody(sstr, day, key) {
+  const found = readSbdb(await jplJson(sbdbUrl(sstr), 'SBDB'), sstr);
+  const bodies = [];
+  for (const body of found) {
+    const at = readHorizons(await jplJson(horizonsUrl(body, day), 'Horizons'), body);
+    if (at) bodies.push({ ...body, ...at });
+  }
+  const payload = { bodies, day, via: 'JPL' };
+  await writeCache(key, payload);
+  return { ok: true, cached: false, ...payload };
+}
+
+/** A JPL API's JSON. A busy JPL answers with an HTML page instead: that is an error, not "not found". */
+async function jplJson(target, what) {
+  const res = await withTimeout(target, SMALL_BODY_TIMEOUT_MS);
+  const body = await res.json().catch(() => null);
+  if (!body || (!body.signature && res.status >= 400)) throw new Error(`JPL ${what}: HTTP ${res.status}`);
+  return body;
+}
+
 /* -------------------------------------------------------------------- static */
 
 async function serveStatic(pathname, req, res, asked = null) {
@@ -1137,20 +1191,20 @@ function cachePolicy(rel) {
  * query at someone else's archive on our behalf.
  */
 const PER_MINUTE = 180;
-const asked = new Map();
+const askedApi = new Map();
 
-function overLimit(req) {
+function overLimit(req, book = askedApi, limit = PER_MINUTE) {
   // Behind the tunnel every request comes from 127.0.0.1; Cloudflare says who.
   const who = String(req.headers['cf-connecting-ip'] ?? req.socket.remoteAddress ?? '');
   const now = Date.now();
-  let entry = asked.get(who);
+  let entry = book.get(who);
   if (!entry || now - entry.from > 60_000) {
     entry = { from: now, n: 0 };
-    asked.set(who, entry);
-    if (asked.size > 5000) for (const [k, v] of asked) if (now - v.from > 60_000) asked.delete(k);
+    book.set(who, entry);
+    if (book.size > 5000) for (const [k, v] of book) if (now - v.from > 60_000) book.delete(k);
   }
   entry.n += 1;
-  return entry.n > PER_MINUTE;
+  return entry.n > limit;
 }
 
 const server = createServer(async (req, res) => {
@@ -1174,6 +1228,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/search') return await handleSearch(url, res);
     if (url.pathname === '/api/tap') return await handleTap(url, res);
     if (url.pathname === '/api/sbident') return await handleSbIdent(url, res);
+    if (url.pathname === '/api/smallbody') return await handleSmallBody(url, req, res);
     if (url.pathname === '/api/wise') return await handleWise(url, res);
     if (url.pathname === '/api/archives') return await handleArchives(url, res);
     if (url.pathname === '/api/targets') {

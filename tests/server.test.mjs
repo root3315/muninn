@@ -87,6 +87,15 @@ test('small-body relay: refuses a time that is not UTC to the second', async () 
   assert.equal((await get('/api/sbident?ra=330&dec=95&time=2025-08-15T12:00:00')).status, 400);
 });
 
+test('names relay: only an asteroid or comet name or designation goes to JPL', async () => {
+  for (const name of ['', 'M51', 'TRAPPIST-1', 'NGC 4565', '<script>', 'Ceres&sstr=1', 'a'.repeat(41), '148.1 +1.0', 'ab']) {
+    const res = await get(`/api/smallbody?name=${encodeURIComponent(name)}`);
+    assert.equal(res.status, 400, name);
+    assert.equal((await res.json()).ok, false);
+  }
+  assert.equal((await get('/api/smallbody')).status, 400);
+});
+
 test('a malformed request line is a 400, and the server is still there', async () => {
   const status = await new Promise((resolve, reject) => {
     const req = request({ host: '127.0.0.1', port: PORT, path: '//' }, (res) => { res.resume(); resolve(res.statusCode); });
