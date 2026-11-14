@@ -440,7 +440,10 @@ function initOverlay(fig) {
     const p = plate.getBoundingClientRect();
     const r = src.getBoundingClientRect();
     const x = r.left + r.width / 2 - p.left;
-    tip.style.setProperty('--tx', `${Math.round(Math.min(Math.max(x, 70), p.width - 70))}px`);
+    // The plate clips what crosses its edge, so the tip's centre keeps half
+    // the tip's own width, as filled, clear of either side.
+    const half = Math.min(tip.offsetWidth / 2 + 4, p.width / 2);
+    tip.style.setProperty('--tx', `${Math.round(Math.min(Math.max(x, half), p.width - half))}px`);
     tip.style.setProperty('--ty', `${Math.round(r.top - p.top)}px`);
     tip.dataset.below = String(r.top - p.top < 44);
     if (tip.dataset.below === 'true') tip.style.setProperty('--ty', `${Math.round(r.bottom - p.top)}px`);
