@@ -1278,6 +1278,8 @@ export function openFieldVR(target, env) {
     panels: () => [...windows.list, pages.mesh, ...depthView.panels].filter((m) => m.visible),
     get marks() { return sky.marks; },
     markAct: (id, i) => markAct(id, i),
+    /** For the checks: press any of the field's own buttons by its id. */
+    act: (id, data) => act(id, data),
     /** For the checks: how bright the field’s screen is around a texture point (0–255, a 121 × 121 mean). */
     shade(u, v) {
       showOnMain();
