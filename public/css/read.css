@@ -544,11 +544,13 @@
      of a second behind at most. */
   transition: transform 250ms var(--ease-out), inline-size 250ms var(--ease-out), block-size 250ms var(--ease-out);
 }
+/* The card never outgrows the screen: its words and demo scroll between a
+   fixed head and a fixed row of buttons. */
 .tour__card {
   position: absolute; inset-block-start: 0; inset-inline-start: 0;
   inline-size: min(23rem, calc(100vw - 2 * var(--space-sm)));
-  max-block-size: calc(100dvh - 2 * var(--space-sm)); overflow-y: auto; overflow-x: hidden;
-  display: grid; gap: var(--space-xs);
+  max-block-size: calc(100dvh - 28px); overflow: hidden;
+  display: flex; flex-direction: column; gap: var(--space-xs);
   padding: var(--space-md) var(--space-lg);
   border-radius: var(--radius-lg); background: var(--rec-panel); color: var(--color-ink);
   box-shadow: var(--shade-pop), 0 0 0 1px var(--color-rule-soft);
@@ -558,7 +560,23 @@
 .tour__head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); }
 .tour__count { white-space: nowrap; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-accent); letter-spacing: 0.06em; }
 .tour .tour__skip { font-size: var(--text-xs); margin-inline-end: calc(-1 * var(--space-xs)); padding-inline: var(--space-xs); min-block-size: 32px; }
-.tour__body { display: grid; gap: var(--space-xs); }
+.tour__body {
+  /* Rows at their own height: squeezed by the card's cap, a row whose
+     paragraph clips its overflow would otherwise shrink to nothing. */
+  display: grid; grid-auto-rows: max-content; align-content: start; gap: var(--space-xs); flex: 1 1 auto; min-block-size: 0;
+  overflow-y: auto; overscroll-behavior: contain;
+  margin-inline: calc(-1 * var(--space-lg)); padding-inline: var(--space-lg);
+}
+.tour__head, .tour__acts { flex: none; }
+/* With the demo open, the step's words fold to their first lines. */
+/* Two lines by height and a fade, not line-clamp: clamped inside the card's
+   grid, a paragraph collapsed to nothing in Chrome. */
+.tour__card.is-open:not(.is-full) :is(.tour__say, .tour__more-text) {
+  max-block-size: calc(2 * 1.55em); overflow: hidden;
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 0.9em), transparent);
+}
+.tour .tour__all { justify-self: start; margin-block-start: calc(-1 * var(--space-2xs)); margin-inline-start: calc(-1 * var(--space-xs)); padding-inline: var(--space-xs); min-block-size: 28px; font-size: var(--text-xs); color: var(--color-accent); }
+.tour__all[hidden] { display: none; }
 .tour__title { font-family: var(--font-display); font-weight: 600; font-size: 1.125rem; line-height: 1.25; }
 .tour__say { white-space: pre-line; color: var(--color-muted); line-height: 1.55; font-size: var(--text-sm); }
 .tour__more { display: grid; gap: var(--space-xs); color: var(--color-muted); line-height: 1.55; font-size: var(--text-sm); }
@@ -585,8 +603,9 @@
 .tour__more-x svg { inline-size: 12px; block-size: 12px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
 .tour__demo .read__art { min-block-size: 0; }
 .tour__clip { inline-size: 100%; border-radius: var(--radius-sm); background: var(--color-well); }
-.tour .tour__read { justify-self: start; color: var(--color-accent); margin-inline-start: calc(-1 * var(--space-xs)); padding-inline: var(--space-xs); }
-.tour__acts { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-block-start: var(--space-2xs); }
+.tour .tour__read { color: var(--color-accent); padding-inline: var(--space-xs); min-block-size: 40px; }
+.tour__acts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); margin-block-start: var(--space-2xs); padding-block-start: var(--space-xs); border-block-start: var(--rule-hair) solid var(--color-rule-soft); }
+.tour__acts .tour__read[hidden] { display: none; }
 .tour__acts .btn { min-block-size: 40px; padding-inline: var(--space-md); }
 /* Sixteen steps fit: the pips share what room there is. */
 .tour__pips { display: flex; flex: 1 1 auto; min-inline-size: 0; gap: 3px; }
@@ -614,6 +633,8 @@
     inset-block-start: auto; inset-inline: var(--space-xs); inset-block-end: calc(var(--space-xs) + env(safe-area-inset-bottom, 0px));
     inline-size: auto; max-block-size: 55dvh; transform: none !important;
   }
+  /* The demo needs room on a phone: with it open the card grows. */
+  .tour__card.is-open { max-block-size: 82dvh; }
 }
 
 @media (prefers-reduced-motion: reduce) {

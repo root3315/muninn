@@ -113,6 +113,7 @@ function build() {
       <div class="tour__body" aria-live="polite">
         <h2 class="tour__title" id="tour-title"></h2>
         <p class="tour__say"></p>
+        <button type="button" class="link tour__all" aria-expanded="false" hidden></button>
         <div class="tour__more" id="tour-more" tabindex="-1" hidden>
           <div class="tour__more-head">
             <p class="tour__more-text"></p>
@@ -120,19 +121,19 @@ function build() {
           </div>
           <div class="tour__demo is-on"></div>
           <video class="tour__clip" muted loop playsinline preload="none" hidden></video>
-          <button type="button" class="link tour__read"></button>
         </div>
       </div>
       <div class="tour__acts">
         <button type="button" class="btn btn--primary tour__next"></button>
         <button type="button" class="btn btn--quiet tour__toggle" aria-expanded="false" aria-controls="tour-more"></button>
+        <button type="button" class="link tour__read" hidden></button>
       </div>
     </section>`;
   document.body.append(root);
   const q = (sel) => root.querySelector(sel);
   ui = {
     root, hole: q('.tour__hole'), card: q('.tour__card'), count: q('.tour__count'), pips: q('.tour__pips'),
-    skip: q('.tour__skip'), title: q('.tour__title'), say: q('.tour__say'), more: q('.tour__more'),
+    skip: q('.tour__skip'), title: q('.tour__title'), say: q('.tour__say'), more: q('.tour__more'), all: q('.tour__all'),
     moreText: q('.tour__more-text'), clip: q('.tour__clip'), read: q('.tour__read'),
     demo: q('.tour__demo'), moreX: q('.tour__more-x'),
     next: q('.tour__next'), toggle: q('.tour__toggle'),
@@ -142,7 +143,10 @@ function build() {
   ui.toggle.addEventListener('click', () => setExpanded(!expanded, { animate: true }));
   ui.moreX.addEventListener('click', () => { setExpanded(false, { animate: true }); ui.toggle.focus(); });
   ui.read.addEventListener('click', () => { const id = steps[at]?.read; if (id) openRead(id); });
+  ui.all.addEventListener('click', () => setFull(!ui.card.classList.contains('is-full')));
   root.addEventListener('keydown', trap);
+  // A demo's pictures arrive after it opens and make the card taller: placed again then.
+  if ('ResizeObserver' in window) new ResizeObserver(() => schedule()).observe(ui.card);
 }
 
 /** Keys while the tour is up: Esc leaves, arrows step, nothing reaches the field. */
@@ -179,11 +183,37 @@ function afterLeaving(el, cls, done) {
   setTimeout(finish, 320);
 }
 
+/**
+ * With the demo open the card would outgrow the screen: the step's own words
+ * fold to their first lines, with "more" to unfold them, so the demo and the
+ * buttons fit.
+ */
+function setFull(on) {
+  ui.card.classList.toggle('is-full', on);
+  ui.all.setAttribute('aria-expanded', String(on));
+  ui.all.textContent = t(on ? 'tour.textLess' : 'tour.textMore');
+  schedule();
+}
+
+/** Whether the folded words hide anything: the "more" is offered only then. */
+function offerAll() {
+  ui.all.hidden = true;
+  if (!expanded) return;
+  requestAnimationFrame(() => {
+    const cut = [ui.say, ui.moreText].some((el) => el.scrollHeight > el.clientHeight + 1);
+    ui.all.hidden = !cut && !ui.card.classList.contains('is-full');
+  });
+}
+
 function setExpanded(on, { animate = false } = {}) {
   expanded = on;
   const step = steps[at];
   ui.toggle.setAttribute('aria-expanded', String(on));
   ui.toggle.textContent = t(on ? 'tour.less' : 'tour.more');
+  ui.card.classList.toggle('is-open', on);
+  ui.read.hidden = !on || !step.read;
+  setFull(false);
+  offerAll();
   if (on) {
     ui.more.classList.remove('is-leaving');
     ui.more.hidden = false;
@@ -256,8 +286,9 @@ function render() {
   ui.title.textContent = t(`tour.${words}H`);
   ui.say.textContent = touchWords(`tour.${words}P`);
   ui.moreText.textContent = touchWords(`tour.${words}More`);
-  ui.read.hidden = !step.read;
+  ui.read.hidden = !expanded || !step.read;
   ui.read.textContent = t('tour.read');
+  ui.all.textContent = t(ui.card.classList.contains('is-full') ? 'tour.textLess' : 'tour.textMore');
   ui.moreX.setAttribute('aria-label', t('tour.demoClose'));
   demo?.relabel();
   ui.next.textContent = t(last ? 'tour.finish' : 'tour.next');
@@ -342,7 +373,10 @@ function place() {
   } else {
     const cw = ui.card.offsetWidth;
     const ch = ui.card.offsetHeight;
-    const [cx, cy] = cardSpot(hole, cw, ch, vw, vh).map(Math.round);
+    const [sx, sy] = cardSpot(hole, cw, ch, vw, vh);
+    // Whatever side it stands on, the card stays on the screen whole.
+    const cx = Math.round(Math.min(Math.max(GAP, sx), vw - cw - GAP));
+    const cy = Math.round(Math.min(Math.max(GAP, sy), vh - ch - GAP));
     card = { x: cx, y: cy, w: cw, h: ch };
     ui.card.style.transform = `translate(${cx}px, ${cy}px)`;
   }
