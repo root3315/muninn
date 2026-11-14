@@ -118,6 +118,21 @@ test('coordinates with a decimal comma, degree signs, tabs, or no seconds', asyn
   assert.equal(parseCoordinates('1e1 0x10'), null, 'not plain decimals');
 });
 
+test('right ascension with seconds beside a declination without, and the other way round', async () => {
+  const { parseCoordinates } = await import('../public/js/catalog.js');
+  const close = (a, b) => Math.abs(a - b) < 1e-4;
+  const mixed = parseCoordinates('08:55:10 -07:14');
+  assert.ok(mixed && close(mixed.ra, (8 + 55 / 60 + 10 / 3600) * 15) && close(mixed.dec, -(7 + 14 / 60)), JSON.stringify(mixed));
+  const spaced = parseCoordinates('08 55 10.8 +07 14');
+  assert.ok(spaced && close(spaced.ra, (8 + 55 / 60 + 10.8 / 3600) * 15) && close(spaced.dec, 7 + 14 / 60), JSON.stringify(spaced));
+  const unsigned = parseCoordinates('08:55:10, 07:14');
+  assert.ok(unsigned && close(unsigned.dec, 7 + 14 / 60), 'no sign: the words part it');
+  const other = parseCoordinates('08:55 -07:14:42');
+  assert.ok(other && close(other.ra, 133.75) && close(other.dec, -(7 + 14 / 60 + 42 / 3600)), JSON.stringify(other));
+  assert.equal(parseCoordinates('08 55 10 07 14'), null, 'five bare numbers are not guessed at');
+  assert.equal(parseCoordinates('08:55:10 -07:75'), null, 'minutes of 75');
+});
+
 test('a rounded-up second carries into minutes and hours', async () => {
   const { formatRA, formatDec } = await import('../public/js/catalog.js');
   assert.equal(formatRA(359.99999), '00ʰ 00ᵐ 00.00ˢ');
