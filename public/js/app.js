@@ -47,6 +47,8 @@ import { spread, nextVisits, VISITS_PER_BATCH } from './visits.js';
 import { encodeHash, decodeHash, FOV_CHOICES } from './hash.js';
 import { buildIndex, suggest } from './suggest.js';
 import { attachSuggest } from './suggest-box.js';
+import { initRead, relabelCue } from './read.js';
+import { startTour, maybeStartTour, relabelTour } from './tour.js';
 
 /* The reprojected grid is shaped like the viewport so the sky can fill it. 640
    across is already four times finer than SPHEREx's 6.15" pixel, so the canvas
@@ -3727,6 +3729,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   if (holding < 0 && sky.visits.length > 1 && !state.playing && !stillness && sky.mode === 'blink') startPlayback();
   // The rest of the field's visits, in the background (see fillVisits).
   fillVisits(fillCap());
+  maybeStartTour();
 }
 
 /** How little of the archive this field actually cost. */
@@ -5378,16 +5381,7 @@ function wire() {
   $('bare').addEventListener('click', () => setBare(!state.bare));
   $('restore').addEventListener('click', () => setBare(false));
 
-  const openAbout = () => {
-    // Without this the dialog focuses its Close button and opens scrolled to the
-    // end of the text.
-    const sheet = $('about');
-    sheet.showModal();
-    sheet.scrollTop = 0;
-  };
-  $('about-open').addEventListener('click', openAbout);
-  $('gate-about').addEventListener('click', openAbout);
-  $('about-close').addEventListener('click', () => $('about').close());
+  initRead({ onTour: startTour });
 
   $('theme').addEventListener('click', () => {
     const key = $('theme');
@@ -5478,6 +5472,8 @@ function labelSky() {
 
 function relabel() {
   applyTranslations();
+  relabelCue();
+  relabelTour();
   if (cardHit && !$('gate-card').hidden) {
     showCard(cardHit.kind === 'field' && cardHit.key ? { ...cardHit, label: t(`preset.${cardHit.key}`) } : cardHit);
   }
