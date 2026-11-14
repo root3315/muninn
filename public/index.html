@@ -187,7 +187,7 @@
     <!-- A line to type on, not a filled box with a bright button beside it. -->
     <form class="find" id="find">
       <label class="vh" for="target" data-i18n="target.input"></label>
-      <input id="target" name="target" type="text" autocomplete="off" spellcheck="false"
+      <input id="target" name="target" type="text" autocomplete="off" spellcheck="false" enterkeyhint="search"
              class="find__input" data-i18n-ph="target.placeholder">
       <button type="submit" class="find__go" data-i18n-label="target.go">
         <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h11M9 4l4 4-4 4"/></svg>
@@ -198,8 +198,15 @@
       <!-- What is done with the picture in front of you, kept together and
            quieter than where you can go from here. -->
       <div class="mast__group">
-        <button type="button" class="link" id="save-png" data-i18n="export.png" data-i18n-title="export.pngWhat"></button>
-        <button type="button" class="link" id="copy-link" data-i18n="export.link" data-i18n-title="export.linkWhat"></button>
+        <!-- On a phone saving and sharing fold under "⋯", so the bar keeps to
+             one row of links; on a desk the fold is not there. -->
+        <button type="button" class="link mast__more-key" id="more-key" aria-expanded="false" aria-controls="more" data-i18n-label="export.more">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>
+        </button>
+        <div class="mast__more" id="more">
+          <button type="button" class="link" id="save-png" data-i18n="export.png" data-i18n-title="export.pngWhat"></button>
+          <button type="button" class="link" id="copy-link" data-i18n="export.link" data-i18n-title="export.linkWhat"></button>
+        </div>
         <button type="button" class="link" id="tools-toggle" aria-expanded="false" aria-controls="tools" data-i18n="tools.toggle"></button>
       </div>
       <button type="button" class="link" id="random" data-i18n="target.random"></button>

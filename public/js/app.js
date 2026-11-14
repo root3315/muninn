@@ -3963,6 +3963,31 @@ function savePNG() {
   link.click();
 }
 
+/**
+ * "⋯" on a phone's bar: saving and sharing, folded so the bar keeps one row.
+ * A press anywhere else or Escape folds it again; a copied link stays in view
+ * long enough to read "Copied".
+ */
+function setMore(open) {
+  $('more-key').setAttribute('aria-expanded', String(open));
+  $('more').dataset.open = String(open);
+}
+
+function wireMore() {
+  const key = $('more-key');
+  key.addEventListener('click', () => setMore(key.getAttribute('aria-expanded') !== 'true'));
+  $('copy-link').addEventListener('click', (e) => {
+    const btn = e.currentTarget;
+    setTimeout(() => { if (btn.dataset.state === 'done') setMore(false); }, 1500);
+  });
+  document.addEventListener('pointerdown', (e) => {
+    if (key.getAttribute('aria-expanded') === 'true' && !e.target.closest('#more, #more-key')) setMore(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && key.getAttribute('aria-expanded') === 'true') { setMore(false); key.focus(); }
+  });
+}
+
 async function copyLink(btn) {
   writeHash();
   // The language travels in the fragment; a `?lang=` the page was opened with
@@ -5419,8 +5444,9 @@ function wire() {
     addMark(state.ra, state.dec);
     retrackMarks();
   });
-  $('save-png').addEventListener('click', savePNG);
+  $('save-png').addEventListener('click', () => { setMore(false); savePNG(); });
   $('copy-link').addEventListener('click', (e) => copyLink(e.currentTarget));
+  wireMore();
 
   const record = $('record');
   if (typeof MediaRecorder !== 'undefined' && sky.canvas.captureStream) {

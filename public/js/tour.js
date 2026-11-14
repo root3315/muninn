@@ -33,7 +33,8 @@ const STEPS = [
   { key: 'depth', find: () => $('depth'), read: 'read-depth' },
   { key: 'hunt', find: () => $('hunt'), read: 'read-hunt' },
   { key: 'view', find: () => $('tools-toggle'), read: 'read-overlay' },
-  { key: 'link', find: () => $('copy-link'), read: null },
+  // On a phone the link is folded under "⋯"; the tour points at the fold.
+  { key: 'link', find: () => (shown($('copy-link')) ? $('copy-link') : $('more-key')), read: null },
 ];
 
 const PAD = 8;
