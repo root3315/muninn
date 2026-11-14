@@ -431,7 +431,8 @@
 /* Until How to read this has been opened once, its buttons are an accent
    pill that glows, with a tag under them saying where to begin. */
 .link[data-cue] {
-  position: relative; isolation: isolate;
+  /* Above the panels that follow the header, so the tag under it shows. */
+  position: relative; isolation: isolate; z-index: var(--z-dropdown);
   background-color: var(--color-accent); color: var(--color-accent-ink); font-weight: 600;
   text-shadow: none;
 }
