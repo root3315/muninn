@@ -3369,6 +3369,15 @@ function addVisitInPlace(frame, stamp) {
   // Each held by its frame, separately: when A and B were the same visit,
   // neither was moved, and the list shifted under them as visits landed.
   if (a || b) sky.setAB(a ? sky.visits.indexOf(a) : null, b ? sky.visits.indexOf(b) : null);
+  // The visit a link or a reload holds goes on screen the moment it lands,
+  // not after the whole first batch: the page showed whichever frame came
+  // first for seconds and wrote that one into the link.
+  if (state.wantVisit != null && frame === state.allVisits[state.wantVisit]) {
+    stopPlayback();
+    if (sky.mode === 'blink') selectMode('single');
+    sky.setIndex(sky.visits.findIndex((v) => v.frame === frame));
+    syncScrub();
+  }
 }
 
 /**
@@ -3392,8 +3401,14 @@ async function readOne(entry, grid, signal, { onHeader } = {}) {
     entry.status = 'ready';
     entry.landedAt = performance.now();
     entry.bytes = stamp.meta.bytesRead;
+    // A held visit is waited for: the plate stays on its loading note rather
+    // than showing another night first and then jumping (it is uncovered at
+    // the end of the batch regardless, if that visit cannot be read).
+    const waiting = state.wantVisit != null && state.allVisits[state.wantVisit] !== entry.frame;
     addVisitInPlace(entry.frame, stamp);
-    if (sky.visits.length === 1) setPlateState('', { hidden: true });
+    if (!waiting && (sky.visits.length === 1 || state.wantVisit == null || sky.current?.frame === entry.frame)) {
+      setPlateState('', { hidden: true });
+    }
     syncScrub();
     if (state.filling) {
       scheduleFillRefresh();
@@ -3691,6 +3706,8 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   if (visit == null && held) {
     const at = findHeldVisit(state.allVisits, held);
     if (at >= 0) state.wantVisit = visit = at;
+    // Said in the link at once, while its frame is on the way.
+    writeHash();
   }
   // A visit a link holds is read with the first ten, wherever it falls.
   const wanted = state.allVisits[visit];
