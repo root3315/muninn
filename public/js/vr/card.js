@@ -21,6 +21,8 @@ const W_M = 0.95;
 const H_M = 0.8;
 const PX_PER_M = 640;
 const DIST = 2.0;
+/** The gap between a card and the thing it is about, metres at DIST: about 3°. */
+const CLEAR_M = 0.1;
 
 export function createCard({ look }) {
   const panel = createPanel({ widthM: W_M, heightM: H_M, pxPerM: PX_PER_M, name: 'card-pop' });
@@ -31,6 +33,8 @@ export function createCard({ look }) {
   const px = minTextPx(PX_PER_M, DIST);
   let content = null;
   let hover = null;
+  /** How much of the plate's height the drawn card uses, from the top: the rest is see-through and not there. */
+  let used = 1;
 
   function draw() {
     if (!content) return;
@@ -58,6 +62,7 @@ export function createCard({ look }) {
       const bodyLines = content.lines.map((l) => wrapLines(lineFont(l), l.text, w, 6));
       const textH = titleLines.length * px * 1.3 + 6 + bodyLines.reduce((n, ls) => n + ls.length * px * 1.25 + 2, 0);
       const Hc = Math.min(H, Math.ceil(pad + px + textH + 10 + rows.length * (bh + gap) - gap + pad));
+      used = Hc / H;
       roundRect(ctx, 2, 2, W - 4, Hc - 4, 26);
       ctx.fillStyle = look.paper;
       ctx.fill();
@@ -99,6 +104,8 @@ export function createCard({ look }) {
   };
   panel.mesh.userData.pick = (uv) => { const h = panel.hitAt(uv); if (h) content?.run?.[h.id]?.(); };
   panel.mesh.userData.pickable = (uv) => Boolean(panel.hitAt(uv));
+  // Only the drawn card stops a ray: what is seen through the rest can be chosen.
+  panel.mesh.userData.solid = (uv) => uv.y >= 1 - used;
 
   return {
     mesh: panel.mesh,
@@ -107,11 +114,17 @@ export function createCard({ look }) {
       content = c;
       hover = null;
       draw();
-      // A little nearer than the thing it is about, so it reads in front of it.
-      const dir = at.clone().sub(head);
-      const pos = head.clone().addScaledVector(dir.normalize(), DIST);
+      // A little nearer than the thing it is about, and just above it (below
+      // it, high in the sky), so the thing and its ring stay in view and can
+      // still be chosen.
+      const dir = at.clone().sub(head).normalize();
+      const pos = head.clone().addScaledVector(dir, DIST);
       panel.mesh.position.copy(pos);
       panel.mesh.lookAt(head);
+      const plate = used * H_M;
+      const high = dir.y > Math.sin(35 * Math.PI / 180);
+      const up = new THREE.Vector3(0, 1, 0).applyQuaternion(panel.mesh.quaternion);
+      panel.mesh.position.addScaledVector(up, high ? -H_M / 2 - CLEAR_M : plate - H_M / 2 + CLEAR_M);
       panel.mesh.visible = true;
     },
     hide,

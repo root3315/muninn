@@ -33,10 +33,14 @@ const at = (pitchDeg, dist) => Math.tan(pitchDeg * D2R) * dist;
 export const LAYOUT = {
   screens: {
     main: { yawDeg: 0, dist: 2.0, dy: at(2.5, 2.0), w: 1.3, h: 0.93 },
-    // Two rows' room: the second is used only when the row is full ("More" open).
-    bar: { yawDeg: 0, dist: 1.95, dy: at(-18.6, 1.95), w: 1.65, h: 0.24, rowH: 0.115, pxPerM: 760 },
+    // Three rows' room: the second and third are used only while "More" is open.
+    bar: { yawDeg: 0, dist: 1.95, dy: at(-20.2, 1.95), w: 1.65, h: 0.345, rowH: 0.115, pxPerM: 760 },
     card: { yawDeg: 35, dist: 1.8, dy: at(1.5, 1.8), w: 0.85, h: 1.25, pxPerM: 760 },
     side: { yawDeg: -35, dist: 1.8, dy: at(1.5, 1.8), w: 0.85, h: 1.25, pxPerM: 760 },
+    // The marks made on the field, past the card on the left, shown while there are any.
+    marks: { yawDeg: 66, dist: 1.8, dy: at(1.5, 1.8), w: 1.0, h: 1.3, pxPerM: 760 },
+    // A mark's spectrum, past the findings on the right, shown when asked for.
+    spectrum: { yawDeg: -66, dist: 1.9, dy: at(1.5, 1.9), w: 1.1, h: 0.8 },
   },
   ring: {
     radius: 2.2, pitchDeg: -23, tierDropM: 0.36, minSepDeg: 8,

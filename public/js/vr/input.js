@@ -297,13 +297,13 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
     flat.fov = Math.max(15, Math.min(100, flat.fov * Math.exp(e.deltaY * 0.001)));
     applyLook();
   }, { passive: false });
-  // On a flat screen, W A S D walk, Q and E turn, R and F fly.
+  // On a flat screen, W A S D walk, Q and E turn, R and F fly; G held is a grip on what the mouse points at.
   window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
   window.addEventListener('blur', () => keys.clear());
   window.addEventListener('keydown', (e) => {
     if (!renderer.xr.isPresenting && !e.target?.closest?.('input')) {
       const k = e.key.toLowerCase();
-      if ('wasdrf'.includes(k) && k.length === 1) keys.add(k);
+      if ('wasdrfg'.includes(k) && k.length === 1) keys.add(k);
       if (k === 'q') onTurn?.(1);
       if (k === 'e') onTurn?.(-1);
     }
@@ -387,6 +387,10 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
     /** The hands squeezing their grips: [{ id, pos (world) }]. */
     grips() {
       const out = [];
+      if (!renderer.xr.isPresenting && keys.has('g') && flat.mouse) {
+        const ray = flatRay();
+        if (ray) out.push({ id: 'mouse', pos: ray.origin.clone().addScaledVector(ray.dir, 0.5) });
+      }
       for (const e of controllers) {
         if (!e.source?.gamepad?.buttons?.[1]?.pressed && !(e.hold?.kind === 'squeeze')) continue;
         out.push({ id: e.id, pos: new THREE.Vector3().setFromMatrixPosition(e.c.matrixWorld) });

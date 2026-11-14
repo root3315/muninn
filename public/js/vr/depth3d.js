@@ -13,6 +13,7 @@
 
 import { LAYOUT } from './layout.js';
 import { propagate, GAIA_EPOCH } from '../overlay.js';
+import { PLANET_NINE_V, PLANET_NINE_NOMINAL_V, PLANET_NINE_AU, PLANET_NINE_MAX_BETA } from '../depth.js';
 
 const D2R = Math.PI / 180;
 
@@ -133,21 +134,18 @@ export function lookbackGyr(z, { h0 = 67.7, omegaM = 0.31 } = {}) {
   return (977.8 / h0) * (step / 3) * sum;
 }
 
-/**
- * Where Planet X is predicted to be, in AU: Brown & Batygin (2021, AJ 162,
- * 219) find a = 380 (+140/−80) AU, perihelion about 300 AU, a 6.2 Earth-mass
- * planet; the shell runs from that perihelion to the far end of a's range.
- */
-export const PLANET_X_AU = [300, 660];
+/** Where Planet X is predicted to be, in AU: the site's own range (depth.js). */
+export const PLANET_X_AU = PLANET_NINE_AU;
 
 /**
- * Its predicted brightness, V: 21.7 for the nominal 10 Earth masses at 700 AU,
- * 24.3 for 5 Earth masses at aphelion (Linder & Mordasini 2016, A&A 589, A134).
+ * Its predicted brightness, V, as the site gives it (depth.js): 22.6–24.3 near
+ * aphelion for 5 to 50 Earth masses, and 21.7 for the nominal 10 Earth
+ * masses at 700 AU (Linder & Mordasini 2016, A&A 589, A134).
  */
-export const PLANET_X_V = { nominal: 21.7, faint: 24.3 };
+export const PLANET_X_V = { ...PLANET_NINE_V, nominal: PLANET_NINE_NOMINAL_V };
 
-/** The band of ecliptic latitude Planet X's predicted orbits keep to, degrees. */
-export const PLANET_X_MAX_BETA = 21;
+/** How far from the ecliptic Planet X is expected, degrees (depth.js). */
+export const PLANET_X_MAX_BETA = PLANET_NINE_MAX_BETA;
 
 /** Ecliptic latitude of an equatorial position (J2000), degrees. */
 export function eclipticLatitude(raDeg, decDeg) {
