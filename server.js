@@ -120,6 +120,9 @@ const json = (res, code, value, headers = {}) =>
  */
 const KEEP_FRAME_LIST = { 'cache-control': 'public, max-age=3600' };
 
+/** A whole answer from the server's own cache: the browser may keep it for five minutes. Errors never get it. */
+const KEEP_PRIVATE = { 'cache-control': 'private, max-age=300' };
+
 /**
  * A fetch whose deadline covers the body as well as the headers: an archive
  * that sends headers and then stalls would otherwise hold its slot until the
@@ -288,7 +291,7 @@ const pools = Object.fromEntries(Object.keys(POOL_MAX).map((k) => [k, new Set()]
  * question already out, or by asking. `ask` caches its own answer, since only
  * it knows whether the answer is whole.
  */
-async function relay(res, key, ask, pool = 'catalog', keep = {}) {
+async function relay(res, key, ask, pool = 'catalog', keep = KEEP_PRIVATE) {
   const cached = await readCache(key);
   if (cached) return json(res, 200, { ok: true, cached: true, ...cached }, keep);
 
@@ -308,9 +311,11 @@ async function relay(res, key, ask, pool = 'catalog', keep = {}) {
  * A number from the query string. Number(null) and Number('') are both 0: an
  * absent coordinate would otherwise be a query at the vernal equinox.
  */
+const PLAIN_DECIMAL = /^[+-]?\d+(\.\d+)?$/;
+
 function param(url, name) {
   const raw = url.searchParams.get(name)?.trim();
-  return raw ? Number(raw) : NaN;
+  return raw && PLAIN_DECIMAL.test(raw) ? Number(raw) : NaN;
 }
 
 const clamp = (value, lo, hi) => Math.min(hi, Math.max(lo, value));
@@ -510,13 +515,21 @@ async function handleWise(url, res) {
   }
 }
 
+/** One more try, after a short wait, when the archive's gateway answers 502, 503 or 504. */
+async function retryOnGateway(fetchOnce, waitMs = 700) {
+  const first = await fetchOnce();
+  if (![502, 503, 504].includes(first.status)) return first;
+  await new Promise((done) => setTimeout(done, waitMs));
+  return fetchOnce();
+}
+
 async function cutWise({ ra, dec }, band, size, file) {
   // Both steps under one deadline, short of the tunnel's 100 s cut-off, so a
   // slow cut fails as JSON the page can read rather than as the proxy's page.
   const until = Date.now() + WISE_DEADLINE_MS;
   const left = () => Math.max(1000, until - Date.now());
   const pos = encodeURIComponent(`circle ${ra} ${dec} 0.002`);
-  const listed = await withTimeout(`${SIA}?COLLECTION=${WISE_COLLECTION}&POS=${pos}&MAXREC=40`, left());
+  const listed = await retryOnGateway(() => withTimeout(`${SIA}?COLLECTION=${WISE_COLLECTION}&POS=${pos}&MAXREC=40`, left()));
   if (!listed.ok) throw new Error(`IRSA ${WISE_COLLECTION}: HTTP ${listed.status}`);
   const { rows } = parseVOTable(await listed.text());
   const want = `-w${band}-int-3.fits`;
@@ -528,7 +541,7 @@ async function cutWise({ ra, dec }, band, size, file) {
   if (!tiles.length) throw new Error('AllWISE has no tile here');
   // The cutout's address comes from IRSA's answer: fetched only if it is IRSA's.
   if (!isIrsaUrl(tiles[0].url)) throw new Error('AllWISE: the cutout address is not at IRSA');
-  const cut = await withTimeout(`${tiles[0].url}?center=${ra.toFixed(5)},${dec.toFixed(5)}&size=${size.toFixed(3)}deg`, left());
+  const cut = await retryOnGateway(() => withTimeout(`${tiles[0].url}?center=${ra.toFixed(5)},${dec.toFixed(5)}&size=${size.toFixed(3)}deg`, left()));
   if (!cut.ok) throw new Error(`IRSA cutout: HTTP ${cut.status}`);
   let body = Buffer.from(await cut.arrayBuffer());
   if (body[0] === 0x1f && body[1] === 0x8b) body = gunzipSync(body, { maxOutputLength: 64 << 20 });
@@ -755,7 +768,7 @@ async function serveStatic(pathname, req, res, asked = null) {
   try {
     file = await loadStatic(target);
   } catch {
-    return send(res, 404, 'Not found');
+    return send(res, 404, 'Not found', { 'content-type': 'text/plain; charset=utf-8' });
   }
   const ext = extname(target);
   const headers = {
