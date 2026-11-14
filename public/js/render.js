@@ -13,6 +13,21 @@
 
 const CLAMP01 = (t) => (t < 0 ? 0 : t > 1 ? 1 : t);
 
+/** A stretch as a table from 0–1 (in 65,536 steps) to a colour index 0–255, kept per curve. */
+const STRETCH_STEPS = 65536;
+const stretchTables = new Map();
+function stretchTable(fn, softening) {
+  const key = `${Object.keys(STRETCHES).find((k) => STRETCHES[k] === fn) ?? 'custom'}|${softening ?? ''}`;
+  let table = stretchTables.get(key);
+  if (!table) {
+    table = new Uint8Array(STRETCH_STEPS);
+    for (let k = 0; k < STRETCH_STEPS; k++) table[k] = (CLAMP01(fn(k / (STRETCH_STEPS - 1), softening)) * 255) | 0;
+    if (key.startsWith('custom')) return table;
+    stretchTables.set(key, table);
+  }
+  return table;
+}
+
 export const STRETCHES = {
   linear: (t) => t,
   sqrt: (t) => Math.sqrt(t),
@@ -334,14 +349,19 @@ export function paint(target, data, lut, {
   const fn = STRETCHES[stretch] ?? STRETCHES.asinh;
   const span = hi - lo || 1e-6;
   const px = target.data;
+  // The stretch is a curve from 0–1 to a colour index: worked out once over a
+  // fine table, not once per pixel. A frame is seven hundred thousand pixels,
+  // and an asinh for each was most of the time a phone spent on a new frame.
+  const table = stretchTable(fn, softening);
+  const last = table.length - 1;
   for (let i = 0, p = 0; i < data.length; i++, p += 4) {
     const v = data[i];
     if (!(v === v)) {
       px[p] = blank[0]; px[p + 1] = blank[1]; px[p + 2] = blank[2]; px[p + 3] = blankAlpha;
       continue;
     }
-    const t = CLAMP01(fn(CLAMP01((v - lo) / span), softening));
-    const k = (t * 255) | 0;
+    const u = (v - lo) / span;
+    const k = table[u <= 0 ? 0 : u >= 1 ? last : (u * last + 0.5) | 0];
     px[p] = lut[k * 3];
     px[p + 1] = lut[k * 3 + 1];
     px[p + 2] = lut[k * 3 + 2];
