@@ -639,8 +639,9 @@
         <figure class="read__art art-north">
           <div class="art-north__stage">
             <span class="art-north__ghost"></span>
-            <span class="art-north__frame"><img class="art-north__img" src="img/talk/read-atala-a.webp" width="514" height="322" alt="" decoding="async" loading="lazy"></span>
-            <svg class="art-north__rose" viewBox="0 0 40 40" aria-hidden="true"><path d="M32 32H14M32 32V12"/><text x="32" y="9" text-anchor="middle">N</text><text x="8" y="35" text-anchor="middle">E</text></svg>
+            <span class="art-north__frame"><img class="art-north__img" src="img/talk/read-atala-a.webp" width="514" height="322" alt="" decoding="async" loading="lazy">
+              <svg class="art-north__rose" viewBox="0 0 32 32" aria-hidden="true"><path class="art-north__needle" d="M22 26V9M22 6l-3 5h6z"/><path d="M22 26H9"/><text x="22" y="5" text-anchor="middle">N</text><text x="5" y="28.5" text-anchor="middle">E</text></svg>
+            </span>
           </div>
           <div class="art__chips" role="group">
             <button type="button" class="art__chip art-north__raw" aria-pressed="false" data-i18n="about.northRaw"></button>
@@ -672,6 +673,7 @@
             <label class="art__chip"><input type="radio" name="art-mode" value="single"><span data-i18n="mode.single"></span></label>
             <label class="art__chip"><input type="radio" name="art-mode" value="stack"><span data-i18n="mode.stack"></span></label>
           </fieldset>
+          <p class="art__readout art-modes__what" aria-live="polite"></p>
         </figure>
         <div class="read__text">
           <p class="read__n num">04</p>
@@ -704,12 +706,15 @@
             <div class="art__plate art-mark__plate">
               <img class="art__img" src="img/talk/read-mark.webp" width="340" height="250" alt="" decoding="async" loading="lazy">
               <span class="art-mark__ring" aria-hidden="true"></span>
-              <span class="art-mark__label num" data-i18n="about.markFixed"></span>
-              <button type="button" class="art-mark__star" aria-pressed="false" data-i18n-label="about.markTap"></button>
+              <span class="art-mark__label num"></span>
               <span class="art__hint art-mark__hint" data-i18n="about.markTap"></span>
             </div>
             <div class="art-mark__card">
               <img class="art-mark__card-img" src="img/talk/read-mark-card.en.webp" data-src-lang="img/talk/read-mark-card.{lang}.webp" width="483" height="613" alt="" decoding="async" loading="lazy">
+              <div class="art-mark__note">
+                <p class="art-mark__note-h"><span class="art-mark__note-n num">1</span><b class="art-mark__note-v"></b></p>
+                <p class="art-mark__note-p" data-i18n="about.markIllus"></p>
+              </div>
             </div>
           </div>
         </figure>
@@ -820,9 +825,10 @@
             <div class="art-ov__zoom">
               <img class="art__img" src="img/talk/read-barnard-spherex.webp" width="900" height="676" alt="" decoding="async" loading="lazy">
               <!-- Where each catalogue puts its sources on this frame, as Muninn drew them in the talk. -->
-              <svg class="art-ov__layer art-ov__gaia" viewBox="0 0 900 676" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><path d="M464 187a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M537 200a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M277 206a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M292 232a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M476 253a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M667 276a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M352 276a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M414 306a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M395 312a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M665 313a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M687 318a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M203 319a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M362 320a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M307 328a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M633 330a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M441 340a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M261 362a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M585 396a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M278 409a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M551 412a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M699 416a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M233 442a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M500 473a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M462 492a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M560 503a7 7 0 1 0 14 0a7 7 0 1 0 -14 0"/></svg>
-              <svg class="art-ov__layer art-ov__wise" viewBox="0 0 900 676" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><path d="M210 311l8 8-8 8-8-8zM695 354l8 8-8 8-8-8zM285 426l8 8-8 8-8-8zM471 179l8 8-8 8-8-8zM592 388l8 8-8 8-8-8zM268 353l8 8-8 8-8-8zM408 282l8 8-8 8-8-8zM477 267l8 8-8 8-8-8zM313 319l8 8-8 8-8-8zM671 305l8 8-8 8-8-8zM402 304l8 8-8 8-8-8zM705 408l8 8-8 8-8-8zM239 434l8 8-8 8-8-8zM285 401l8 8-8 8-8-8zM507 465l8 8-8 8-8-8zM560 403l8 8-8 8-8-8zM567 495l8 8-8 8-8-8zM421 298l8 8-8 8-8-8zM544 191l8 8-8 8-8-8zM296 224l8 8-8 8-8-8zM483 245l8 8-8 8-8-8zM708 330l8 8-8 8-8-8zM673 269l8 8-8 8-8-8zM431 352l8 8-8 8-8-8z"/></svg>
+              <svg class="art-ov__layer art-ov__gaia" viewBox="0 0 900 676" preserveAspectRatio="xMidYMid slice"></svg>
+              <svg class="art-ov__layer art-ov__wise" viewBox="0 0 900 676" preserveAspectRatio="xMidYMid slice"></svg>
             </div>
+            <p class="art-ov__tip num" role="status" hidden></p>
           </div>
           <div class="art__chips" role="group">
             <button type="button" class="art__chip art-ov__chip--gaia" data-layer="gaia" aria-pressed="true" data-i18n="about.ovGaia"></button>
@@ -915,8 +921,7 @@
       <li class="read__step" id="read-seasons">
         <figure class="read__art art-seasons" data-au="500">
           <svg viewBox="0 0 240 124" aria-hidden="true">
-            <path class="art-seasons__arc" d="M37.1 94.6Q100 6 222 58"/>
-            <path class="art__faint" d="M30 104L37.1 94.6"/>
+            <path class="art-seasons__arc" d="M30 104Q100 6 222 58"/>
             <g class="art-seasons__ticks">
               <circle cx="44.5" cy="85.9" r="1.8"/><circle cx="60.1" cy="70.8" r="1.8"/><circle cx="113" cy="43.5" r="1.8"/><circle cx="222" cy="58" r="1.8"/>
             </g>

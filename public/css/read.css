@@ -82,6 +82,8 @@
   background: var(--color-well); color: var(--color-ink);
   min-block-size: 100%;
   contain: layout paint;
+  /* A drag inside a picture never selects the sheet's text. */
+  user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
 }
 .read__art svg { display: block; inline-size: 100%; block-size: auto; overflow: visible; }
 .read__art svg * { transform-box: fill-box; transform-origin: center; }
@@ -216,12 +218,18 @@
 }
 .art-north[data-raw] { --raw: 1; }
 .art-north__img { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; object-fit: cover; transform: scale(1.18); }
-.art-north__rose { position: absolute; inset-block-start: 10px; inset-inline-end: 10px; inline-size: 34px; block-size: 34px; }
-.art-north__rose path { fill: none; stroke: var(--color-ink); stroke-width: 1.2; }
-.art-north__rose text { font-family: var(--font-mono); font-size: 9px; fill: var(--color-ink); }
+/* The compass sits inside the frame and turns with it: tilted on the raw
+   frame, upright once it is re-gridded. */
+.read__art .art-north__rose { position: absolute; inset-block-end: 6px; inset-inline-end: 6px; inline-size: 26px; block-size: 26px; overflow: visible; }
+.art-north__rose path { fill: none; stroke: var(--color-ink); stroke-width: 1.4; stroke-linecap: round; }
+.art-north__rose .art-north__needle { stroke: var(--color-accent); }
+.art-north__rose .art-north__needle + path { stroke-opacity: 0.8; }
+.art-north__rose path:first-child { fill: var(--color-accent); }
+.art-north__rose text { font-family: var(--font-mono); font-size: 7px; font-weight: 600; fill: var(--color-ink); }
 
 /* 04 · the five modes, one chosen at a time, on the same frames. */
 .art-modes__plate { --k: 1.143; }
+.art-modes__what { min-block-size: 3em; text-align: center; font-family: inherit; }
 .art-modes__plate .art__img, .art-modes__wipe, .art-modes__plate .art-wipe__divider { visibility: hidden; }
 .art-modes .art-modes__a { visibility: visible; }
 .art-modes[data-mode="wipe"] :is(.art-modes__wipe, .art-modes__wipe .art__img, .art-wipe__divider) { visibility: visible; }
@@ -241,7 +249,7 @@
   box-shadow: inset 0 0 0 1.5px transparent;
   transition: background-color var(--dur-short) var(--ease-out), box-shadow var(--dur-short) var(--ease-out);
 }
-.art-run__f:hover { background: var(--color-paper-2); }
+.art-run__f:hover:not([aria-pressed="true"]) { box-shadow: inset 0 0 0 1px var(--color-rule-strong); color: var(--color-ink); }
 .art-run__f[aria-pressed="true"] { box-shadow: inset 0 0 0 1.5px var(--color-accent); color: var(--color-ink); }
 .art-run__f:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 .art-run__thumb { display: block; inline-size: 100%; aspect-ratio: 96 / 67; border-radius: 3px; object-fit: cover; background: var(--color-paper-3); }
@@ -281,31 +289,44 @@
 .art-flags[data-flags="on"] .art-flags__names div { color: var(--color-ink); }
 .art-flags[data-flags="on"] .art-flags__names dt { color: var(--color-accent); }
 
-/* 07 · a mark on a real frame, and the card it makes. */
-.art-mark__pair { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: var(--space-xs); align-items: stretch; }
-.art-mark__plate { aspect-ratio: auto; min-block-size: 10rem; }
+/* 06 · any star can be marked; the talk's own star brings its real card. */
+.art-mark__pair { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: var(--space-xs); align-items: center; }
+.art-mark__plate { aspect-ratio: 340 / 250; }
 .art-mark__ring, .art-mark__star {
-  position: absolute; inset-inline-start: 50.3%; inset-block-start: 49%;
-  inline-size: 2.75rem; block-size: 2.75rem; margin: -1.375rem 0 0 -1.375rem; border-radius: 50%;
+  position: absolute; inset-inline-start: var(--sx, 50.5%); inset-block-start: var(--sy, 49.5%);
+  inline-size: 2.5rem; block-size: 2.5rem; margin: -1.25rem 0 0 -1.25rem; border-radius: 50%;
 }
-.art-mark__ring { border: 1.5px solid var(--color-accent); opacity: 0; transform: scale(2.2); transition: opacity var(--dur-long) var(--ease-out), transform 0.7s var(--ease-out); pointer-events: none; }
+.art-mark__ring {
+  border: 1.5px solid var(--color-accent); opacity: 0; transform: scale(2.2); pointer-events: none;
+  transition: opacity var(--dur-long) var(--ease-out), transform 0.7s var(--ease-out);
+}
 .art-mark__star { padding: 0; border: 0; background: transparent; cursor: crosshair; }
 .art-mark__star:hover { background: color-mix(in oklch, var(--color-accent) 16%, transparent); }
 .art-mark__star:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 .art-mark__label {
-  position: absolute; inset-inline-end: calc(49.7% + 1.6rem); inset-block-start: 49%; margin-block-start: -0.7em;
-  font-size: var(--text-2xs); color: var(--color-ink); white-space: nowrap;
+  position: absolute; inset-block-start: var(--sy, 49.5%); margin-block-start: -0.7em;
+  font-size: var(--text-2xs); color: var(--color-ink); white-space: nowrap; text-shadow: 0 0 4px oklch(8% 0.02 285);
   opacity: 0; transition: opacity var(--dur-long) var(--ease-out) 0.25s; pointer-events: none;
 }
+.art-mark[data-side="left"] .art-mark__label { inset-inline-end: calc(100% - var(--sx, 50.5%) + 1.5rem); }
+.art-mark[data-side="right"] .art-mark__label { inset-inline-start: calc(var(--sx, 50.5%) + 1.5rem); }
 .art-mark__hint { position: absolute; inset-block-end: 6px; inset-inline: 0; text-align: center; transition: opacity var(--dur-short) var(--ease-out); }
-.art-mark__card { position: relative; border-radius: 10px; overflow: hidden; background: var(--color-paper-2); min-block-size: 10rem; }
-.art-mark__card-img {
-  position: absolute; inset: 0 0 auto; inline-size: 100%; block-size: auto;
+.art-mark__card { position: relative; align-self: stretch; border-radius: 10px; overflow: hidden; background: var(--color-paper-2); min-block-size: 10rem; }
+.art-mark__card-img, .art-mark__note {
+  position: absolute; inset: 0 0 auto; inline-size: 100%;
   opacity: 0; transform: translateX(14px); transition: opacity var(--dur-long) var(--ease-out) 0.35s, transform 0.6s var(--ease-out) 0.35s;
 }
+.art-mark__card-img { block-size: auto; }
+.art-mark__note { display: grid; gap: var(--space-2xs); padding: var(--space-sm); }
+.art-mark__note-h { display: flex; align-items: center; gap: var(--space-xs); margin: 0; font-size: var(--text-sm); color: var(--color-ink); }
+.art-mark__note-n {
+  display: grid; place-items: center; inline-size: 1.4rem; block-size: 1.4rem; border-radius: 50%;
+  background: var(--color-paper-3); font-size: var(--text-2xs);
+}
+.art-mark__note-p { margin: 0; font-size: var(--text-2xs); line-height: 1.45; color: var(--color-neutral); }
 .art-mark__card::after { content: ""; position: absolute; inset: auto 0 0; block-size: 2.5rem; background: linear-gradient(transparent, var(--color-paper-2)); }
-.art-mark.is-marked .art-mark__ring { opacity: 1; transform: none; }
-.art-mark.is-marked .art-mark__label, .art-mark.is-marked .art-mark__card-img { opacity: 1; transform: none; }
+.art-mark.is-marked .art-mark__ring, .art-mark.is-marked .art-mark__label { opacity: 1; transform: none; }
+.art-mark.is-marked.is-real .art-mark__card-img, .art-mark.is-marked:not(.is-real) .art-mark__note { opacity: 1; transform: none; }
 .art-mark.is-marked .art-mark__hint { opacity: 0; }
 
 /* 08 · the words a mark can end in, and three visits that would earn each. */
@@ -379,9 +400,25 @@
 /* 11 · the catalogues of Gaia and WISE, drawn over a real frame. */
 .art-ov__zoom { position: absolute; inset: 0; transform: scale(1.9); }
 .art-ov__layer { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; transition: opacity var(--dur-long) var(--ease-out); }
-.art-ov__layer path { fill: none; stroke-width: 1.4; vector-effect: non-scaling-stroke; }
-.art-ov__gaia path { stroke: var(--color-counter); }
-.art-ov__wise path { stroke: oklch(88% 0.02 285); }
+.art-ov__layer { pointer-events: none; }
+.art-ov__src { pointer-events: auto; cursor: pointer; }
+.art-ov__src > :first-child { fill: none; stroke-width: 1.4; vector-effect: non-scaling-stroke; transition: stroke-width var(--dur-short) var(--ease-out); }
+.art-ov__src.is-on > :first-child, .art-ov__src:hover > :first-child { stroke-width: 2.6; }
+.art-ov__hit { fill: transparent; stroke: none; }
+.art-ov__gaia .art-ov__src > :first-child { stroke: var(--color-counter); }
+.art-ov__wise .art-ov__src > :first-child { stroke: oklch(88% 0.02 285); }
+.art-ov[data-gaia="off"] .art-ov__gaia .art-ov__src, .art-ov[data-wise="off"] .art-ov__wise .art-ov__src { pointer-events: none; }
+/* What a pointed-at source is, as the site's overlay says it. */
+.art-ov__tip {
+  position: absolute; inset-block-start: 0; inset-inline-start: 0; z-index: 2; max-inline-size: 15rem;
+  margin: 0; padding: 4px var(--space-xs); border-radius: var(--radius-sm);
+  background: var(--rec-panel, var(--color-paper-2)); color: var(--color-ink); font-size: var(--text-2xs); line-height: 1.4;
+  box-shadow: 0 0 0 1px var(--color-rule-soft); pointer-events: none;
+  transform: translate(calc(var(--tx) - 50%), calc(var(--ty) - 100% - 8px));
+}
+.art-ov__tip[data-below="true"] { transform: translate(calc(var(--tx) - 50%), calc(var(--ty) + 8px)); }
+.art-ov__tip[data-layer="gaia"] { border-inline-start: 2px solid var(--color-counter); }
+.art-ov__tip[data-layer="wise"] { border-inline-start: 2px solid oklch(88% 0.02 285); }
 .art-ov__wise { transition-delay: 0.5s; }
 .art-ov[data-gaia="off"] .art-ov__gaia, .art-ov[data-wise="off"] .art-ov__wise,
 .read.is-watching .read__step:not(.is-seen) .art-ov__layer { opacity: 0; }
@@ -503,12 +540,14 @@
   inline-size: 0; block-size: 0; border-radius: var(--radius-sm);
   box-shadow: 0 0 0 2px var(--color-accent), 0 0 0 200vmax var(--color-backdrop);
   pointer-events: none;
-  transition: transform var(--dur-long) var(--ease-out), inline-size var(--dur-long) var(--ease-out), block-size var(--dur-long) var(--ease-out);
+  /* The frame glides between parts and follows a scrolling one, a quarter
+     of a second behind at most. */
+  transition: transform 250ms var(--ease-out), inline-size 250ms var(--ease-out), block-size 250ms var(--ease-out);
 }
 .tour__card {
   position: absolute; inset-block-start: 0; inset-inline-start: 0;
   inline-size: min(23rem, calc(100vw - 2 * var(--space-sm)));
-  max-block-size: calc(100dvh - 2 * var(--space-sm)); overflow-y: auto;
+  max-block-size: calc(100dvh - 2 * var(--space-sm)); overflow-y: auto; overflow-x: hidden;
   display: grid; gap: var(--space-xs);
   padding: var(--space-md) var(--space-lg);
   border-radius: var(--radius-lg); background: var(--rec-panel); color: var(--color-ink);
@@ -517,14 +556,24 @@
 }
 .tour__card:focus-visible { outline: none; }
 .tour__head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); }
-.tour__count { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-accent); letter-spacing: 0.06em; }
+.tour__count { white-space: nowrap; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-accent); letter-spacing: 0.06em; }
 .tour .tour__skip { font-size: var(--text-xs); margin-inline-end: calc(-1 * var(--space-xs)); padding-inline: var(--space-xs); min-block-size: 32px; }
 .tour__body { display: grid; gap: var(--space-xs); }
 .tour__title { font-family: var(--font-display); font-weight: 600; font-size: 1.125rem; line-height: 1.25; }
 .tour__say { color: var(--color-muted); line-height: 1.55; font-size: var(--text-sm); }
 .tour__more { display: grid; gap: var(--space-xs); color: var(--color-muted); line-height: 1.55; font-size: var(--text-sm); }
 .tour__more[hidden], .tour__clip[hidden], .tour__demo[hidden] { display: none; }
-.tour__more:not([hidden]) { animation: tour-in var(--dur-long) var(--ease-out); }
+.tour__more:not([hidden]) { animation: tour-more-in 260ms var(--ease-out); transform-origin: 50% 0; }
+.tour__more.is-leaving { animation: tour-more-out 200ms var(--ease-out) forwards; }
+@keyframes tour-more-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } }
+@keyframes tour-more-out { to { opacity: 0; transform: translateY(-4px) scale(0.98); } }
+/* The tour arrives and leaves as a whole: scrim, frame and card together. */
+.tour:not([hidden]) { animation: tour-fade-in 220ms var(--ease-out); }
+.tour.is-leaving { animation: tour-fade-out 220ms var(--ease-out) forwards; pointer-events: none; }
+.tour.is-leaving .tour__card { animation: tour-card-out 220ms var(--ease-out) forwards; }
+@keyframes tour-fade-in { from { opacity: 0; } }
+@keyframes tour-fade-out { to { opacity: 0; } }
+@keyframes tour-card-out { to { scale: 0.97; } }
 .tour__more:focus-visible { outline: none; }
 .tour__more-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-xs); align-items: start; }
 .tour__more-x {
@@ -539,8 +588,9 @@
 .tour .tour__read { justify-self: start; color: var(--color-accent); margin-inline-start: calc(-1 * var(--space-xs)); padding-inline: var(--space-xs); }
 .tour__acts { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-block-start: var(--space-2xs); }
 .tour__acts .btn { min-block-size: 40px; padding-inline: var(--space-md); }
-.tour__pips { display: flex; gap: 4px; }
-.tour__pips span { inline-size: 12px; block-size: 3px; border-radius: 2px; background: var(--color-paper-4); transition: background-color var(--dur-short) var(--ease-out); }
+/* Sixteen steps fit: the pips share what room there is. */
+.tour__pips { display: flex; flex: 1 1 auto; min-inline-size: 0; gap: 3px; }
+.tour__pips span { flex: 0 1 12px; min-inline-size: 3px; block-size: 3px; border-radius: 2px; background: var(--color-paper-4); transition: background-color var(--dur-short) var(--ease-out); }
 .tour__pips span.is-done { background: var(--color-accent); }
 .tour.is-entering .tour__hole, .tour.is-entering .tour__card { transition: none; }
 .tour__card.is-fresh .tour__body { animation: tour-in var(--dur-long) var(--ease-out); }
@@ -556,6 +606,9 @@
   .read__text { padding-inline: var(--space-2xs); }
   .art-verdicts__list div { grid-template-columns: minmax(0, 8rem) minmax(0, 1fr); }
   .art-run__strip { gap: 3px; }
+  /* The mark and its card one above the other, so the card can be read. */
+  .art-mark__pair { grid-template-columns: minmax(0, 1fr); }
+  .art-mark__card { min-block-size: 9rem; }
   .art-run__date { font-size: 9px; }
   .tour__card {
     inset-block-start: auto; inset-inline: var(--space-xs); inset-block-end: calc(var(--space-xs) + env(safe-area-inset-bottom, 0px));
@@ -568,6 +621,7 @@
   .read__text, .tour__hole, .tour__card { transition: none; }
   .read.is-watching .read__step:not(.is-seen) .read__text { opacity: 1; transform: none; }
   .tour__card.is-fresh .tour__body { animation: none; }
+  .tour:not([hidden]), .tour__more:not([hidden]), .tour.is-leaving, .tour.is-leaving .tour__card, .tour__more.is-leaving { animation: none; }
   .link[data-cue]::before { animation: none; opacity: 0.6; }
   .link[data-cue]::after { animation: none; opacity: 1; }
 }
