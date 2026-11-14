@@ -341,8 +341,38 @@ export async function skybotCone({ ra, dec, radiusDeg, iso }, { signal, magLimit
 export async function jplBodies({ ra, dec, radiusDeg, iso }, { signal, magLimit = 20 } = {}) {
   const query = `ra=${ra.toFixed(6)}&dec=${dec.toFixed(6)}&r=${Math.min(2, radiusDeg).toFixed(4)}`
     + `&time=${encodeURIComponent(iso.slice(0, 19))}&mag=${magLimit}`;
-  const body = await fromRelay(`api/sbident?${query}`, signal, SEARCH_DEADLINE_MS);
+  const body = await jplTurn(() => fromRelay(`api/sbident?${query}`, signal, SEARCH_DEADLINE_MS), signal);
   return body.bodies;
+}
+
+/**
+ * JPL questions take turns: the relay keeps three open to JPL and answers
+ * the rest "busy" (503), and a field asked about every visit at once, a dozen
+ * and more. Two at a time from a page, and a "busy" asked again after a
+ * pause, rather than a wall of refusals and visits left unchecked.
+ */
+const JPL_AT_ONCE = 2;
+const JPL_RETRIES = 2;
+let jplRunning = 0;
+const jplQueue = [];
+
+async function jplTurn(ask, signal) {
+  if (jplRunning >= JPL_AT_ONCE) await new Promise((go) => jplQueue.push(go));
+  jplRunning += 1;
+  try {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await ask();
+      } catch (err) {
+        const busy = /HTTP 503|busy/i.test(String(err?.message));
+        if (!busy || attempt >= JPL_RETRIES || signal?.aborted) throw err;
+        await new Promise((wait) => setTimeout(wait, 1200 * (attempt + 1)));
+      }
+    }
+  } finally {
+    jplRunning -= 1;
+    jplQueue.shift()?.();
+  }
 }
 
 /**
