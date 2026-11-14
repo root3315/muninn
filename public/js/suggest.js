@@ -2,9 +2,10 @@
  * What the search box offers while it is being typed into.
  *
  * Everything here is already in the page: the challenge targets and ready
- * fields, the named bright stars, the Messier list and the planets. Nothing
- * goes over the network; a name not on the list is still resolved by SIMBAD
- * when the text is submitted.
+ * fields, the named bright stars, the Messier list and the planets, and the
+ * stars with known planets (hosts.js). Nothing here goes over the network;
+ * the box asks SIMBAD, NED and JPL itself (lookup.js) once typing pauses,
+ * and the form asks them when the text is submitted.
  *
  * Matching folds case, accents and the Greek letters (α, alpha, альфа are one
  * word), and counts a hit at the start of the name or of any word in it.
@@ -70,6 +71,9 @@ const DEEP_KIND = {
 /** Which kinds come first when two names match equally well. */
 const KIND_ORDER = { target: 0, field: 1, planet: 2, star: 3, galaxy: 4, nebula: 4, cluster: 4 };
 
+/** Rows this close (degrees) are the same thing, found twice. */
+const SAME_PLACE_DEG = 0.01;
+
 /** Lower case, no accents, ё as е, the typographic minus as a hyphen. */
 export function fold(text) {
   return String(text ?? '')
@@ -82,7 +86,8 @@ export function fold(text) {
     .trim();
 }
 
-const compact = (s) => s.replace(/[\s·.'’-]+/g, '');
+// Brackets go too: "152 atala" and "(152) atala" are one name.
+const compact = (s) => s.replace(/[\s·.'’()-]+/g, '');
 
 /** A Bayer name with its Greek letter spelled out: "α Lyr" also reads "alpha Lyr". */
 function spelledBayer(bayer) {
@@ -227,4 +232,25 @@ const isReady = (e) => (e.kind === 'target' || e.kind === 'field' ? 0 : 1);
 export function shortPosition(ra, dec) {
   const sign = dec < 0 ? '−' : '+';
   return `${ra.toFixed(3)} ${sign}${Math.abs(dec).toFixed(3)}`;
+}
+
+/**
+ * The box's own rows with rows from elsewhere (the planet hosts, the remote
+ * resolvers) after them, up to `room`. A planet named in full ("TRAPPIST-1
+ * e") goes first unless an entry here is named exactly what was typed. A row
+ * already in the list, by name or by place, is not repeated.
+ */
+export function mergeRows(text, local, extra, room = SUGGEST_MAX) {
+  const q = fold(text);
+  const exact = local.some((r) => r.folded?.includes(q));
+  const lead = exact ? [] : extra.filter((r) => r.host);
+  const out = [...lead, ...local];
+  const seen = (row) => out.some((r) => fold(r.label) === fold(row.label)
+    || (r.kind !== 'position' && Math.abs(r.ra - row.ra) < SAME_PLACE_DEG && Math.abs(r.dec - row.dec) < SAME_PLACE_DEG
+      && (row.kind !== 'host' || r.kind === 'star')));
+  for (const row of extra) {
+    if (out.length >= room) break;
+    if (!out.includes(row) && !seen(row)) out.push(row);
+  }
+  return out.slice(0, Math.max(0, room));
 }

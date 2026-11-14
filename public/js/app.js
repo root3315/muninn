@@ -3813,7 +3813,7 @@ async function showCard(hit, { focus = false } = {}) {
   $('gate-card-name').textContent = hit.label ?? t('card.sky');
   $('gate-card-kind').textContent = preset ? (preset.why?.[getLanguage()] ?? preset.why?.en ?? '')
     : hit.kind === 'planet' ? t('card.planet')
-      : hit.kind === 'star' ? t('card.star')
+      : hit.kind === 'star' ? (hit.what ?? t('card.star'))
         : hit.kind === 'deep' ? hit.what : '';
   $('gate-card-kind').hidden = !$('gate-card-kind').textContent;
   $('gate-card-go-label').textContent = t(preset ? 'card.open' : 'card.search');
@@ -4262,6 +4262,8 @@ const suggestFor = (text) => suggest(text, suggestIndex());
 
 /** A row as the sky's own hit, the same shape a press on the sky gives. */
 function hitOfRow(row) {
+  // Rows from beyond the page (planet hosts, SIMBAD, NED, JPL) bring their own.
+  if (row.hit) return row.hit;
   const ref = row.ref;
   if (row.kind === 'target' || row.kind === 'field') {
     return { kind: 'field', key: ref.key, ra: ref.ra, dec: ref.dec, fov: ref.fov, band: ref.band ?? 'all', label: row.label };
@@ -4300,7 +4302,7 @@ function pickOnSky(row) {
 function pickInField(row) {
   const hit = hitOfRow(row);
   $('target').value = row.label;
-  $('find-note').textContent = '';
+  $('find-note').textContent = hit.note ?? '';
   if (hit.kind === 'field' && hit.fov) { state.fov = nearestFov(hit.fov); $('fov').value = String(state.fov); }
   openField({ ra: hit.ra, dec: hit.dec, label: hit.label ?? '', band: hit.kind === 'field' ? hit.band : null });
 }

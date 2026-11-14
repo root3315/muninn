@@ -176,6 +176,21 @@ const STRINGS = {
     'suggest.kind.cluster': 'cluster',
     'suggest.kind.planet': 'planet',
 
+    // The wider search: planet hosts, SIMBAD/NED/JPL answers, small bodies.
+    'suggest.kind.host': 'planet host',
+    'suggest.kind.exoplanet': 'exoplanet',
+    'suggest.kind.quasar': 'quasar',
+    'suggest.kind.object': 'object',
+    'suggest.kind.smallbody': 'small body',
+    'search.planets': '{n} {n:planet|planets}',
+    'search.searching': 'Searching SIMBAD and NED…',
+    'search.searchingJpl': 'Searching SIMBAD, NED and JPL…',
+    'search.notFound': 'Not found in SIMBAD or NED.',
+    'search.notFoundJpl': 'Not found in SIMBAD, NED or JPL.',
+    'search.notFoundNoJpl': 'Not found in SIMBAD or NED; JPL did not answer.',
+    'search.offline': 'SIMBAD, NED and JPL did not answer. Try again, or enter coordinates.',
+    'search.today': 'position today, {day}; it moves, so SPHEREx’s visits here show it only if they were taken now',
+
     'field.ra': 'RA',
     'field.dec': 'Dec',
     'field.fov': 'Field size (short side)',
@@ -938,6 +953,21 @@ const STRINGS = {
     'suggest.kind.nebula': 'туманность',
     'suggest.kind.cluster': 'скопление',
     'suggest.kind.planet': 'планета',
+
+    // The wider search: planet hosts, SIMBAD/NED/JPL answers, small bodies.
+    'suggest.kind.host': 'звезда с планетами',
+    'suggest.kind.exoplanet': 'экзопланета',
+    'suggest.kind.quasar': 'квазар',
+    'suggest.kind.object': 'объект',
+    'suggest.kind.smallbody': 'малое тело',
+    'search.planets': '{n} {n:планета|планеты|планет}',
+    'search.searching': 'Ищу в SIMBAD и NED…',
+    'search.searchingJpl': 'Ищу в SIMBAD, NED и JPL…',
+    'search.notFound': 'В SIMBAD и NED не найдено.',
+    'search.notFoundJpl': 'В SIMBAD, NED и JPL не найдено.',
+    'search.notFoundNoJpl': 'В SIMBAD и NED не найдено; JPL не ответил.',
+    'search.offline': 'SIMBAD, NED и JPL не ответили. Попробуйте ещё раз или введите координаты.',
+    'search.today': 'положение на сегодня, {day}; тело движется, и заходы SPHEREx сюда покажут его, только если сделаны сейчас',
 
     'field.ra': 'RA',
     'field.dec': 'Dec',

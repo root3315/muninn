@@ -1154,6 +1154,12 @@ body { font-size: var(--text-base); line-height: 1.5; }
   .suggest__pos { min-inline-size: 0; }
 }
 .suggest__hint { padding: var(--space-2xs) var(--space-sm); font-size: var(--text-xs); line-height: 1.4; color: var(--color-neutral); }
+/* A small body's place is today's: said under its row, across the whole width. */
+.suggest__note { grid-column: 1 / -1; font-size: var(--text-xs); line-height: 1.35; color: var(--color-neutral); }
+/* The remote resolvers at work: the line breathes until they answer. */
+.suggest__status[data-state="busy"] { animation: suggest-busy 1.4s var(--ease-out) infinite alternate; }
+@keyframes suggest-busy { to { opacity: 0.45; } }
+@media (prefers-reduced-motion: reduce) { .suggest__status[data-state="busy"] { animation: none; } }
 
 /* Clearing the marks: a pill with its sign, at the head of the section beside
    the count. For a few seconds after, it is the way back, and a thin line
