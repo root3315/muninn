@@ -2748,8 +2748,10 @@ function renderMarks() {
       });
       lightNodes.push(b);
     }
-    body.append(call, brief, ...[
-      group('mark.kVerdict', ...verdictNodes),
+    // The verdict's own sentence reads as its subtitle: a heading "Verdict"
+    // over it only repeated the title.
+    for (const node of verdictNodes) node.classList.add('mark__lead');
+    body.append(call, brief, ...verdictNodes, ...[
       group('mark.kWho', ...whoNodes),
       group('mark.kLight', ...lightNodes),
       group('mark.kWhere', pos),
@@ -2758,7 +2760,13 @@ function renderMarks() {
     const kill = document.createElement('button');
     kill.type = 'button';
     kill.className = 'mark__kill';
-    kill.textContent = '×';
+    const cross = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    cross.setAttribute('viewBox', '0 0 24 24');
+    cross.setAttribute('aria-hidden', 'true');
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    line.setAttribute('d', 'M7 7l10 10M17 7 7 17');
+    cross.append(line);
+    kill.append(cross);
     kill.title = t('mark.remove');
     kill.setAttribute('aria-label', `${t('mark.remove')} ${i + 1}`);
     kill.addEventListener('click', () => {

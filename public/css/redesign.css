@@ -481,7 +481,6 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .cand:has(.cand__where[data-known="false"]) { background: var(--color-accent-wash); }
 .cand__where, .mark__call { font-family: var(--font-body); font-weight: 600; }
 .cands__head { font-family: var(--font-body); font-weight: 600; }
-.mark { border-block-end: 0; }
 .mark__n { border: 0; background: var(--color-paper-3); color: var(--color-ink); }
 
 /* A mark's spectrum: every exposure that saw it, across the six bands. It
@@ -1394,19 +1393,39 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .mark[data-open="false"] .mark__body > :not(.mark__call, .mark__brief),
 .mark[data-open="false"] > :nth-child(n + 4) { display: none; }
 .mark[data-open="false"] .mark__call { font-size: var(--text-sm); }
-.mark__group {
-  display: grid; gap: var(--space-3xs);
-  margin-block-start: var(--space-2xs); padding: var(--space-xs) var(--space-sm);
-  background: var(--color-paper-2); border-radius: var(--radius-md);
-}
-/* The verdict's group carries the call's colour on its edge, so the answer
-   and its evidence are told apart from the catalogues at a glance. */
-.mark__group:first-of-type { box-shadow: inset 2px 0 0 var(--color-accent-dim); }
-.mark__group .mark__detail, .mark__group .mark__who { color: var(--color-ink); }
+.mark__group { display: grid; gap: 2px; padding-block: var(--space-xs) 0; }
+.mark__group + .mark__group { margin-block-start: var(--space-xs); }
 .mark__k {
-  font-family: var(--font-mono); font-size: 0.6875rem; letter-spacing: 0.06em; text-transform: uppercase;
+  margin: 0; font-family: var(--font-mono); font-size: 0.6875rem; letter-spacing: 0.06em; text-transform: uppercase;
   color: var(--color-neutral);
 }
+.mark__group .mark__who { color: var(--color-ink); font-size: var(--text-sm); line-height: 1.5; }
+.mark__group .mark__detail, .mark__group .mark__id { color: var(--color-muted); font-size: var(--text-sm); line-height: 1.5; }
+.mark__group .mark__phot, .mark__group .mark__pos { font-size: var(--text-sm); }
+/* The head is one row (number, verdict, fold, remove). Under it, the evidence
+   lines up with the verdict, the number staying in the margin like a list's,
+   and the buttons' column no longer squeezes the sentences. */
+.mark { row-gap: 0; padding-block: var(--space-md); border-block-end: var(--rule-hair) solid var(--color-rule-soft); }
+.mark:last-child { border-block-end: 0; }
+.mark[data-open="false"] { padding-block: var(--space-xs); }
+.mark__body { display: contents; }
+.mark__n { grid-column: 1; grid-row: 1; align-self: start; margin-block-start: 2px; }
+.mark__call { grid-column: 2; grid-row: 1; align-self: start; font-size: 1.125rem; font-weight: 500; line-height: 1.2; }
+.mark__acts { grid-column: 3; grid-row: 1; align-self: start; }
+.mark__brief { grid-column: 2 / -1; grid-row: 2; padding-block-start: var(--space-3xs); }
+.mark__body > :not(.mark__call, .mark__brief) { grid-column: 2 / -1; }
+.mark > :nth-child(n + 4) { grid-column: 2 / -1; }
+/* The verdict's sentence: its subtitle, in the ink of an answer. */
+.mark__lead { margin-block-start: var(--space-3xs); color: var(--color-ink); font-size: var(--text-sm); line-height: 1.5; }
+.mark__lead::first-letter { text-transform: uppercase; }
+.mark__body > .mark__csv { margin-inline-start: 0; margin-block-start: var(--space-xs); justify-self: start; }
+.mark__kill svg { inline-size: 16px; block-size: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.mark__kill { display: grid; place-items: center; }
+/* The spectrum's cost in one line, how it is counted folded under it. */
+.spectrum__cost { margin: 0; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-neutral); }
+.spectrum__how summary { cursor: pointer; font-size: var(--text-xs); color: var(--color-muted); list-style-position: inside; }
+.spectrum__how summary:hover { color: var(--color-ink); }
+.spectrum__how[open] summary { margin-block-end: var(--space-2xs); }
 @media (pointer: coarse) { .mark__fold { inline-size: 40px; block-size: 40px; } }
 @media (prefers-reduced-motion: reduce) { .mark__fold svg { transition: none; } }
 /* Under A and B: the light each saw at the field's centre. Amber when the two
