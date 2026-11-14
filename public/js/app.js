@@ -92,6 +92,10 @@ const state = {
   allVisits: [],
   /** A visit index from a link, held until that visit has landed. */
   wantVisit: null,
+  /** A preset's own night, shown first as it lands; the blink starts from it. */
+  leadVisit: null,
+  /** Whether this field's blink has started by itself already. */
+  autoPlayed: false,
   readingSince: 0, huntAgain: false,
   /** Visits being read in the background, and how many the field is meant to reach. */
   filling: false, visitGoal: 0,
@@ -278,10 +282,17 @@ function hashNow() {
 
 function writeHash() {
   if (state.ra == null) return;
+  // Back on the sky the address is the sky's: the field left behind is the
+  // page Forward goes to, not what this one says.
+  if (!$('gate').hidden && $('gate').dataset.entering !== 'true') return;
   const next = `#${hashNow()}`;
   // Playback moves the visit twice a second; the address bar is only touched
   // when what it says has actually changed.
-  if (location.hash !== next) history.replaceState(null, '', next);
+  if (location.hash === next) return;
+  // Going into a field from the sky is a step Back can undo: a new entry in
+  // the history, where every later change to the view replaces its own.
+  if (readHash().position) history.replaceState(null, '', next);
+  else history.pushState(null, '', next);
 }
 
 const readHash = () => decodeHash(location.hash);
@@ -1411,7 +1422,7 @@ function drawAxis() {
     bands: state.band === 'all',
     paint: runPaint,
     now: performance.now(),
-    motion: !REDUCED_MOTION.matches && !MODEST_DEVICE,
+    motion: !REDUCED_MOTION.matches && !MODEST_DEVICE && !NARROW_RUN.matches,
   });
   if (canvas.height !== heightBefore || !runHeightRead) { runHeight = box.offsetHeight || runHeight; runHeightRead = true; }
   if (wide) keepInView(lane, shown, slots.length, wide);
@@ -1440,6 +1451,8 @@ function laneWidth(lane) {
 }
 
 const REDUCED_MOTION = matchMedia('(prefers-reduced-motion: reduce)');
+/** A phone's width: the run is drawn as frames land, not animated between. */
+const NARROW_RUN = matchMedia('(max-width: 40rem)');
 
 /** A frame's place in the scrolling run, wide enough to read its date. */
 const RUN_SLOT_PX = 72;
@@ -1481,8 +1494,10 @@ let runFrame = 0;
  */
 function animateRun(slots) {
   // A modest device keeps its time for the frames being read: the run is
-  // redrawn when a frame lands, not animated while it waits.
-  if (runFrame || MODEST_DEVICE || REDUCED_MOTION.matches) return;
+  // redrawn when a frame lands, not animated while it waits. So does a phone:
+  // redrawing the strip thirty times a second there took the main thread the
+  // frames were being decoded on.
+  if (runFrame || MODEST_DEVICE || REDUCED_MOTION.matches || NARROW_RUN.matches) return;
   const now = performance.now();
   const busy = slots.some((s) => s.status === 'reading' || !s.frame)
     || slots.some((s) => s.landedAt && now - s.landedAt < 460);
@@ -1595,6 +1610,15 @@ async function renderCompareLambda() {
   const comparing = sky && (sky.mode === 'wipe' || sky.mode === 'difference');
   const pair = comparing ? comparedFrames() : null;
   match.hidden = !pair;
+  // A against itself shows nothing, and says why rather than leaving a blank.
+  const same = comparing && !state.reference && sky.visits.length > 1 && sky.a === sky.b;
+  if (same) {
+    lambdaSeq++;
+    line.hidden = false;
+    line.dataset.warn = 'true';
+    line.textContent = t('compare.same');
+    return;
+  }
   if (!pair) { line.hidden = true; return; }
   if (matching) return;
   const seq = ++lambdaSeq;
@@ -2981,6 +3005,10 @@ function fieldTarget({ ra, dec, label, target, pm }) {
   if (target !== undefined) return target;
   const preset = presetAt(ra, dec);
   if (preset?.target) return { ...preset.target, key: preset.key, label: t(`preset.${preset.key}`) };
+  // A preset field without a catalogue position is about something that
+  // moves, like (152) Atala: a ring at its place on one date would sit on
+  // empty sky in every other visit. SkyBoT rings it where it was each time.
+  if (preset) return null;
   const kept = state.target;
   if (kept?.field && kept.label === label && Math.abs(kept.field.ra - ra) < 1e-6 && Math.abs(kept.field.dec - dec) < 1e-6) {
     return kept;
@@ -3035,7 +3063,53 @@ function addVisitInPlace(frame, stamp) {
     if (sky.mode === 'blink') selectMode('single');
     sky.setIndex(sky.visits.findIndex((v) => v.frame === frame));
     syncScrub();
+  } else if (state.leadVisit != null && frame === state.allVisits[state.leadVisit] && !state.playing) {
+    // A preset's own night goes on screen as it lands; the blink starts from it.
+    sky.setIndex(sky.visits.findIndex((v) => v.frame === frame));
+    syncScrub();
   }
+}
+
+/**
+ * How long a preset's own night is waited for once another visit is in hand:
+ * counted from that landing, not from the start, so a slow line or a slow
+ * phone that takes ten seconds over every frame still opens on the right one.
+ */
+const LEAD_PATIENCE_MS = 8000;
+
+/** Whether the plate should still wait for the preset's own night rather than show `frame`. */
+function leadPending(frame) {
+  if (state.leadVisit == null) return false;
+  const lead = state.allVisits[state.leadVisit];
+  return frame !== lead && !sky.visits.some((v) => v.frame === lead)
+    && !(performance.now() - (state.firstLandedAt ?? Infinity) >= LEAD_PATIENCE_MS);
+}
+
+/** From the first landing, the preset's night is given its patience, then the plate shows what it has. */
+function waitForLead() {
+  state.firstLandedAt = performance.now();
+  if (state.leadVisit == null) return;
+  const gen = fieldSeq;
+  setTimeout(() => {
+    if (gen !== fieldSeq || !sky.visits.length || state.wantVisit != null) return;
+    setPlateState('', { hidden: true });
+    autoBlink();
+  }, LEAD_PATIENCE_MS + 50);
+}
+
+/**
+ * The blink starts as soon as there are two visits to flip between, once
+ * per field: waiting for the whole first batch kept a still frame on screen
+ * for ten or twenty seconds on a slow line. A link that holds a visit, a
+ * mode chosen meanwhile, or a wish for less motion keep it still.
+ */
+function autoBlink({ final = false } = {}) {
+  if (state.autoPlayed || state.wantVisit != null || state.playing || sky.visits.length < 2) return;
+  if (sky.mode !== 'blink' || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  // The preset's own night is the first frame seen: waited for, within its patience.
+  if (!final && leadPending(null)) return;
+  state.autoPlayed = true;
+  startPlayback();
 }
 
 /**
@@ -3062,8 +3136,9 @@ async function readOne(entry, grid, signal, { onHeader } = {}) {
     // A held visit is waited for: the plate stays on its loading note rather
     // than showing another night first and then jumping (it is uncovered at
     // the end of the batch regardless, if that visit cannot be read).
-    const waiting = state.wantVisit != null && state.allVisits[state.wantVisit] !== entry.frame;
+    const waiting = (state.wantVisit != null && state.allVisits[state.wantVisit] !== entry.frame) || leadPending(entry.frame);
     addVisitInPlace(entry.frame, stamp);
+    if (sky.visits.length === 1) waitForLead();
     if (!waiting && (sky.visits.length === 1 || state.wantVisit == null || sky.current?.frame === entry.frame)) {
       setPlateState('', { hidden: true });
     }
@@ -3071,6 +3146,7 @@ async function readOne(entry, grid, signal, { onHeader } = {}) {
     // first batch held it back half a minute on a slow line, and people had
     // moved on before it came.
     if (sky.visits.length >= 2 && $('plate-state').hidden) maybeStartTour();
+    if (!state.filling) autoBlink();
     syncScrub();
     if (state.filling) {
       scheduleFillRefresh();
@@ -3117,7 +3193,7 @@ async function readVisits(entries, grid, signal) {
   // rows was a second sooner still to the first picture but a second or two
   // later to the tenth. The one a link holds goes first, as that is the one
   // the page will show.
-  const lead = entries.find((e) => e.frame === state.allVisits[state.wantVisit]) ?? entries[0];
+  const lead = entries.find((e) => e.frame === state.allVisits[state.wantVisit ?? state.leadVisit]) ?? entries[0];
   let leadIn;
   const leadStarted = new Promise((resolve) => { leadIn = resolve; });
   const first = step(lead, { onHeader: leadIn }).finally(leadIn);
@@ -3344,6 +3420,9 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.visits = [];
   state.allVisits = [];
   state.wantVisit = visit;
+  state.leadVisit = null;
+  state.autoPlayed = false;
+  state.firstLandedAt = null;
   // A and B the person chose stay chosen when the last visits land.
   state.abChosen = false;
   state.truncated = false;
@@ -3443,6 +3522,16 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   // A visit a link holds is read with the first ten, wherever it falls.
   const wanted = state.allVisits[visit];
   if (wanted && !chosen.includes(wanted)) chosen.push(wanted);
+  // Without one, a preset leads with the visit its card shows.
+  if (!wanted) {
+    const lead = await presetLead(ra, dec, state.allVisits);
+    if (ctrl.signal.aborted) return;
+    const first = state.allVisits[lead];
+    if (first) {
+      state.leadVisit = lead;
+      if (!chosen.includes(first)) chosen.push(first);
+    }
+  }
   chosen.sort((p, q) => p.mjd - q.mjd);
   state.visits = chosen.map((frame) => ({ frame, status: 'pending' }));
   drawAxis();
@@ -3516,8 +3605,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   measureDepth({ final: true });
   if (sky.marks.length) retrackMarks();
 
-  const stillness = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (holding < 0 && sky.visits.length > 1 && !state.playing && !stillness && sky.mode === 'blink') startPlayback();
+  if (holding < 0) autoBlink({ final: true });
   // The rest of the field's visits, in the background (see fillVisits).
   fillVisits(fillCap());
   maybeStartTour();
@@ -3916,6 +4004,23 @@ function nameOnSky(hit) {
 
 /** One stored frame per ready field: which exposure each picture is. */
 let cardThumbs = null;
+/** The stored card frames, fields and sky, asked for once. */
+const loadThumbs = () => (cardThumbs ? Promise.resolve(cardThumbs) : Promise.all(['data/thumbs.json', 'data/sky/thumbs.json'].map((url) => (
+  fetch(url, { signal: deadline(null, CATALOG_DEADLINE_MS) }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}))
+))).then(([fields, deep]) => { cardThumbs ??= { fields, deep }; return cardThumbs; }));
+
+/**
+ * The visit a preset field leads with: the date its card shows, so (152)
+ * Atala opens on 25 Dec 2025, the night it sits in the middle, and not on
+ * whichever visit's bytes came first.
+ */
+async function presetLead(ra, dec, visits) {
+  const preset = presetAt(ra, dec);
+  if (!preset) return -1;
+  const thumb = (await loadThumbs()).fields?.[preset.key];
+  const mjd = thumb?.iso ? Date.parse(`${thumb.iso}Z`) / 86400000 + 40587 : NaN;
+  return Number.isFinite(mjd) ? findHeldVisit(visits, { mjd, band: thumb.band }) : -1;
+}
 /** The frame lists of ready fields, asked for once each. */
 const cardFields = new Map();
 /** What the card is showing, so only its own answers are written into it. */
@@ -4073,9 +4178,7 @@ async function showCard(hit, { focus = false } = {}) {
   showPlanets(hit);
 
   // The frame: only where one is stored. No picture stands in for a missing one.
-  cardThumbs ??= await Promise.all(['data/thumbs.json', 'data/sky/thumbs.json'].map((url) => (
-    fetch(url, { signal: deadline(null, CATALOG_DEADLINE_MS) }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}))
-  ))).then(([fields, deep]) => ({ fields, deep }));
+  await loadThumbs();
   if (cardHit !== hit) return;
   // A named star is stored under its place on the sky, as the bake wrote it.
   const skyKey = hit.kind === 'deep' ? hit.key
@@ -4322,6 +4425,8 @@ const isGone = (v) => v.status === 'dropped' || v.status === 'failed';
 /** Back out to the sky, the same way, run backwards. */
 async function leaveToSky() {
   if (flying) return;
+  // The address follows: the sky has no field in it.
+  if (readHash().position) history.replaceState(null, '', location.pathname + location.search);
   // Opened from a link, the sky was not built while the field loaded.
   if (!gate) await ensureGate();
   if (flying || !gate) return;
@@ -4399,13 +4504,27 @@ async function buildGate() {
   // On a wide screen the sky opens with its proof beside it: the field this
   // tool was tested on, two real visits blinking. A phone has no room for both.
   const proven = state.presets.find((p) => p.key === 'atala');
-  if (proven && !$('gate').hidden && !cardHit && matchMedia('(min-width: 60rem)').matches) {
-    showCard({
+  if (proven && !$('gate').hidden && !cardHit && ROOM_FOR_PROOF.matches) {
+    const hit = {
       kind: 'field', key: proven.key, ra: proven.ra, dec: proven.dec, fov: proven.fov,
       band: proven.band ?? 'all', label: t(`preset.${proven.key}`),
-    });
+    };
+    showCard(hit);
+    provenCard = hit;
   }
 }
+
+/**
+ * Room for the proof beside the sky: a wide, tall screen with a mouse. A
+ * phone, even one asking for the desktop site, keeps its title, search and
+ * fields clear; the card it would have covered them with is one tap away.
+ */
+const ROOM_FOR_PROOF = matchMedia('(min-width: 60rem) and (min-height: 36rem) and (hover: hover)');
+/** The card the sky opened by itself, which leaves again if the room goes. */
+let provenCard = null;
+ROOM_FOR_PROOF.addEventListener('change', (e) => {
+  if (!e.matches && provenCard && cardHit === provenCard) hideCard();
+});
 
 /** The ready fields are markers on the sky now; nothing else lists them. */
 /**
@@ -4637,10 +4756,27 @@ function refreshStack() {
   });
 }
 
-/** One step along the run: a visit, or in the stack a whole season. */
+/** One step along the run: a visit, or in the stack a whole season; in Wipe and Difference, B. */
 function stepBy(dir) {
+  if (sky.mode === 'wipe' || sky.mode === 'difference') { stepB(dir); return; }
   holdStill();
   sky.setIndex(sky.mode === 'stack' ? stackStep(dir) : sky.index + dir);
+  syncScrub();
+  refreshKnownObjects();
+}
+
+/**
+ * In Wipe and Difference the picture is A against B, and a step moves B
+ * through the visits, round from the last to the first. B on another
+ * telescope's picture comes back to a visit with the first step.
+ */
+function stepB(dir) {
+  const n = sky.visits.length;
+  if (!n) return;
+  stopPlayback();
+  if (state.reference) chooseReference(null);
+  state.abChosen = true;
+  sky.setAB(null, (((sky.b ?? 0) + dir) % n + n) % n);
   syncScrub();
   refreshKnownObjects();
 }
@@ -5003,6 +5139,10 @@ function gaiaHint() {
 
 function applyMode(mode) {
   sky.setMode(mode);
+  // A minus B is taken between two SPHEREx visits only: AllWISE or the Gaia
+  // model as B would have been named in the picker while a visit was
+  // subtracted. Difference goes back to a visit as B, and the picker says so.
+  if (mode === 'difference' && state.reference) chooseReference(null);
   $('plate').dataset.mode = mode;
   $('mode-hint').textContent = modeHint(mode);
   const comparing = mode === 'wipe' || mode === 'difference';
@@ -5278,7 +5418,11 @@ function wire() {
     // The language is its own thing: a link that differs only in `lang` still has
     // to switch, so it is applied before the "did the field move" shortcut.
     if (next.lang && next.lang !== getLanguage()) { setLanguage(next.lang); relabel(); }
-    if (!next.position) return;
+    // Back from a field entered from the sky: the sky again, the way it came.
+    if (!next.position) {
+      if ($('gate').hidden && state.ra != null) leaveToSky();
+      return;
+    }
     if (next.survey !== state.survey) chooseSurvey(next.survey);
     if (next.mode && sky.mode !== next.mode) selectMode(next.mode);
     const moved = state.ra == null
@@ -5286,7 +5430,11 @@ function wire() {
       || Math.abs(next.position.dec - state.dec) > 1e-4
       || next.band !== state.band
       || (next.fov ?? state.fov) !== state.fov;
-    if (!moved) return;
+    // Forward to the field the sky was left from: it is still loaded underneath.
+    if (!moved) {
+      if (!$('gate').hidden && !flying) closeGate();
+      return;
+    }
     if (next.fov) { state.fov = nearestFov(next.fov); $('fov').value = String(state.fov); }
     $('find-note').textContent = '';
     // A link pasted into the address bar of a page that is still showing the

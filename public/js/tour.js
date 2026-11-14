@@ -52,7 +52,12 @@ const STEPS = [
   { key: 'run', find: () => $('run-scroll'), read: 'read-run' },
   { key: 'marks', find: () => $('marks')?.closest('.part'), read: 'read-mark' },
   { key: 'spectrum', find: () => document.querySelector('#marks .spectrum'), read: 'read-spectrum' },
-  { key: 'seasons', find: linkButton, read: 'read-seasons' },
+  // Offered only on a mark that is not a known body; with marks but none of
+  // those, the step says so over the marks instead of quietly dropping out.
+  {
+    key: 'seasons', find: () => linkButton() ?? (document.querySelector('#marks li') ? $('marks').closest('.part') : null),
+    read: 'read-seasons', words: (el) => (el?.matches('button') ? 'seasons' : 'seasonsGhost'),
+  },
   { key: 'depth', find: () => $('depth'), read: 'read-depth' },
   { key: 'hunt', find: () => $('hunt'), read: 'read-hunt' },
   { key: 'view', find: () => $('tools-toggle'), read: 'read-overlay' },
@@ -68,6 +73,14 @@ const PAD = 8;
 const GAP = 14;
 const PHONE = window.matchMedia('(max-width: 720px)');
 const STILL = window.matchMedia('(prefers-reduced-motion: reduce)');
+/** A finger, not a mouse: the words say "tap" where they would say "click". */
+const TOUCH = window.matchMedia('(hover: none) and (pointer: coarse)');
+/**
+ * A shared view (a link that holds a visit or carries marks) is someone
+ * showing something: the tour would stand in front of it, so it waits to be
+ * asked for. Read once, from the address the page was opened with.
+ */
+const SHARED_VIEW = /(?:^#|&)(?:v|marks)=/.test(window.location.hash);
 
 let ran = false;
 let ui = null;
@@ -227,6 +240,12 @@ function loadClip(key) {
 /** The steps that have a clip in public/video/tour/<key>.webm. */
 const TOUR_CLIPS = new Set([]);
 
+/** A string, in its touch wording where it has one and the screen is touched. */
+function touchWords(key) {
+  const touch = `${key}Touch`;
+  return TOUCH.matches && t(touch) !== touch ? t(touch) : t(key);
+}
+
 function render() {
   const step = steps[at];
   const last = at === steps.length - 1;
@@ -240,8 +259,8 @@ function render() {
   ui.skip.textContent = t('tour.skip');
   const words = step.words?.(step.el) ?? step.key;
   ui.title.textContent = t(`tour.${words}H`);
-  ui.say.textContent = t(`tour.${words}P`);
-  ui.moreText.textContent = t(`tour.${words}More`);
+  ui.say.textContent = touchWords(`tour.${words}P`);
+  ui.moreText.textContent = touchWords(`tour.${words}More`);
   ui.read.hidden = !step.read;
   ui.read.textContent = t('tour.read');
   ui.moreX.setAttribute('aria-label', t('tour.demoClose'));
@@ -435,7 +454,7 @@ export function relabelTour() {
 
 /** Called when a field has finished opening: the first time in this page load, the tour starts. */
 export function maybeStartTour() {
-  if (ran) return;
+  if (ran || SHARED_VIEW) return;
   if (!$('gate')?.hidden || $('about')?.open) return;
   ran = true;
   // After the frame that shows the field, so every part has its size.

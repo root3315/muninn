@@ -89,6 +89,13 @@ const median = (sorted) => sorted[sorted.length >> 1];
  * the score or null where the frame had no coverage there. Nulls are kept
  * rather than zeroed: "no data" and "nothing happened" are different answers and
  * the grid draws them differently.
+ *
+ * Each visit is scored against the visits of its own band. A field opened in
+ * all bands mixes D1 to D6, and a star is not the same brightness at 1 µm as
+ * at 4: against a median of every band, a red star stood out in each long-wave
+ * visit and a pole field lit two hundred cells. A band with fewer than three
+ * visits has nothing to be usual against, and its visits stay unscored.
+ * `sigmas`, when given one a visit, sets each band's pixel-noise floor.
  */
 export function scoreSectors(visits, { cols = SECTOR_COLS, rows = SECTOR_ROWS, sigmas = [] } = {}) {
   const count = cols * rows;
@@ -98,27 +105,42 @@ export function scoreSectors(visits, { cols = SECTOR_COLS, rows = SECTOR_ROWS, s
     peaks.push(visits.map((v) => sectorPeak(v.stamp.data, v.stamp.width, v.stamp.height, bounds)));
   }
 
-  // One number for the whole frame, so it is measured once rather than once
-  // per sector.
-  const finite = sigmas.filter((x) => x > 0).sort((a, b) => a - b);
-  const pixel = finite.length ? median(finite) : 0;
+  const bandOf = (v) => v.frame?.band ?? '';
+  const bands = new Map();
+  visits.forEach((v, i) => {
+    const list = bands.get(bandOf(v)) ?? [];
+    list.push(i);
+    bands.set(bandOf(v), list);
+  });
+  const perVisit = sigmas.length === visits.length;
+  // One pixel-noise number a band (or for the whole frame), measured once
+  // rather than once per sector.
+  const floorOf = (members) => {
+    const list = (perVisit ? members.map((i) => sigmas[i]) : sigmas).filter((x) => x > 0).sort((a, b) => a - b);
+    return list.length ? median(list) : 0;
+  };
 
-  const cells = [];
+  const cells = peaks.map((row) => row.map(() => null));
   let max = 0;
-  for (let s = 0; s < count; s++) {
-    const seen = peaks[s].filter((p) => p != null).sort((a, b) => a - b);
-    if (seen.length < 3) { cells.push(peaks[s].map(() => null)); continue; }
-    const mid = median(seen);
-    // Spread of the peaks themselves, from the half that a single bright visit
-    // cannot inflate — the same trick the black point uses.
-    const lower = seen[Math.max(0, Math.round(0.1587 * (seen.length - 1)))];
-    const noise = Math.max(mid - lower, pixel, 1e-6);
-    cells.push(peaks[s].map((p) => {
-      if (p == null) return null;
-      const z = (p - mid) / noise;
-      if (z > max) max = z;
-      return z;
-    }));
+  for (const members of bands.values()) {
+    if (members.length < 3) continue;
+    const pixel = floorOf(members);
+    for (let s = 0; s < count; s++) {
+      const seen = members.map((i) => peaks[s][i]).filter((p) => p != null).sort((a, b) => a - b);
+      if (seen.length < 3) continue;
+      const mid = median(seen);
+      // Spread of the peaks themselves, from the half that a single bright visit
+      // cannot inflate — the same trick the black point uses.
+      const lower = seen[Math.max(0, Math.round(0.1587 * (seen.length - 1)))];
+      const noise = Math.max(mid - lower, pixel, 1e-6);
+      for (const i of members) {
+        const p = peaks[s][i];
+        if (p == null) continue;
+        const z = (p - mid) / noise;
+        if (z > max) max = z;
+        cells[s][i] = z;
+      }
+    }
   }
   return { cols, rows, visits: visits.length, cells, max };
 }
