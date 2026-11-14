@@ -176,3 +176,26 @@ test('a ghost in one visit over empty sky does not become a flash', () => {
   // Without the flag the same light is a one-visit detection: the test bites.
   assert.equal(track([...quiet, visit({ mjd: 60010 })]).kind, 'transient');
 });
+
+test('a masked block on a saturated star\'s side is filled from its rim, not left black', async () => {
+  const { fillCores } = await import('../public/js/render.js');
+  // A 9 × 7 frame of sky at 1 with a bright core column (100) at x = 2, and a
+  // 2 × 3 masked block beside it whose other sides are the star's glow (40):
+  // only one side of its rim reaches the top of the stretch.
+  const W = 9; const H = 7;
+  const data = new Float32Array(W * H).fill(1);
+  for (let y = 1; y < 6; y++) { data[y * W + 2] = 100; for (let x = 3; x < 7; x++) data[y * W + x] = 40; }
+  for (let y = 2; y < 5; y++) for (let x = 3; x < 5; x++) data[y * W + x] = NaN;
+  const out = fillCores(data, W, 100);
+  for (let y = 2; y < 5; y++) {
+    for (let x = 3; x < 5; x++) {
+      const v = out[y * W + x];
+      assert.ok(v === v, `filled at ${x},${y}`);
+      assert.ok(v >= 40 && v <= 100, 'between its rim values');
+    }
+  }
+  // A hole out in plain sky still stays a hole.
+  const sky = new Float32Array(W * H).fill(1);
+  sky[3 * W + 4] = NaN;
+  assert.ok(Number.isNaN(fillCores(sky, W, 100)[3 * W + 4]));
+});

@@ -168,10 +168,13 @@ export function rampFromToken(el, token) {
 /**
  * For the eye only: the hole the pipeline leaves in a saturated star's core,
  * filled from its rim. A bright star came out as a white disc with a black
- * square in it, which reads as a broken picture. A blank region is filled
- * when at least half its rim is at or above the top of the stretch and it
- * does not reach the frame's edge, so the blank beyond the detector, which
- * meets sky, stays blank; the measured data are not touched.
+ * square in it, which reads as a broken picture. A blank region that does
+ * not reach the frame's edge is filled white when at least half its rim is
+ * at or above the top of the stretch, and smoothly from its rim when only
+ * part of it is (a masked block beside the core, its other sides in the
+ * star's glow), as is a pinhole of a few pixels walled in by bright glow.
+ * A blank whose rim reaches sky stays blank, as does the blank
+ * beyond the detector; the measured data are not touched.
  *
  * One pass over each region, where a pixel-at-a-time spread had taken up to
  * sixty-four passes over the whole frame on every repaint, and had crept out
@@ -191,6 +194,7 @@ export function fillCores(data, width, ceiling) {
     let tail = 0;
     let rim = 0;
     let bright = 0;
+    let dim = 0;
     let top = -Infinity;
     let edge = false;
     seen[s] = 1;
@@ -210,17 +214,59 @@ export function fillCores(data, width, ceiling) {
         if (v === v) {
           rim++;
           if (v >= ceiling) { bright++; if (v > top) top = v; }
+          if (v < ceiling / 2) dim++;
         } else if (!seen[j]) {
           seen[j] = 1;
           queue[tail++] = j;
         }
       }
     }
-    if (edge || bright * 2 < rim) continue;
+    // A pinhole of a few pixels deep in a star's glow is filled too.
+    const pinhole = tail <= 9 && !dim;
+    if (edge || !(bright || pinhole)) continue;
     out ??= Float32Array.from(data);
-    for (let i = 0; i < tail; i++) out[queue[i]] = top;
+    if (bright * 2 >= rim) {
+      for (let i = 0; i < tail; i++) out[queue[i]] = top;
+    } else {
+      // A masked block against the core on one side and the star's glow on
+      // the others: filled from its rim inwards, so it takes the glow's
+      // values where it meets the glow and the core's where it meets the core.
+      fillFromRim(out, width, height, queue.subarray(0, tail));
+    }
   }
   return fillWalled(out ?? data, width, height, ceiling);
+}
+
+/**
+ * Fill a blank region layer by layer from its rim: each pass gives every
+ * blank pixel that touches a filled one the mean of its filled neighbours,
+ * until none is left. `cells` lists the region's pixel indices.
+ */
+function fillFromRim(out, width, height, cells) {
+  let left = cells.length;
+  const value = new Float64Array(cells.length);
+  const ready = new Uint8Array(cells.length);
+  while (left > 0) {
+    let filled = 0;
+    for (let i = 0; i < cells.length; i++) {
+      const k = cells[i];
+      if (out[k] === out[k]) continue;
+      const x = k % width;
+      const y = (k - x) / width;
+      let sum = 0;
+      let n = 0;
+      if (x > 0 && out[k - 1] === out[k - 1]) { sum += out[k - 1]; n++; }
+      if (x < width - 1 && out[k + 1] === out[k + 1]) { sum += out[k + 1]; n++; }
+      if (y > 0 && out[k - width] === out[k - width]) { sum += out[k - width]; n++; }
+      if (y < height - 1 && out[k + width] === out[k + width]) { sum += out[k + width]; n++; }
+      if (n) { value[i] = sum / n; ready[i] = 1; filled++; }
+    }
+    if (!filled) return;
+    // Written after the pass, so one layer does not feed itself.
+    for (let i = 0; i < cells.length; i++) {
+      if (ready[i]) { out[cells[i]] = value[i]; ready[i] = 0; left--; }
+    }
+  }
 }
 
 /**
