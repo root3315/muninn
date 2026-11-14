@@ -655,19 +655,26 @@ const CFA_CONES = {
   },
 };
 
-/** One catalogue's rows in a circle from the CfA's VizieR, under the shared column names. */
-async function cfaRows(kind, { ra, dec, radiusDeg, top }, signal) {
+/**
+ * One catalogue's rows in a circle from the CfA's VizieR, under the shared
+ * column names. A magnitude cut goes to the mirror as its own column
+ * constraint and is applied again here, so a row fainter than the cut never
+ * reaches the overlay whichever way the mirror reads it.
+ */
+async function cfaRows(kind, { ra, dec, radiusDeg, limit = null, top }, signal) {
   const { source, mag, columns } = CFA_CONES[kind];
   const q = new URLSearchParams({
     '-source': source, '-c': `${ra.toFixed(6)} ${dec >= 0 ? '+' : ''}${dec.toFixed(6)}`,
     '-c.rs': (radiusDeg * 3600).toFixed(2), '-out': Object.values(columns).join(','),
     '-sort': mag, '-out.max': String(top),
   });
+  if (limit !== null) q.set(mag, `<=${limit.toFixed(2)}`);
   const res = await fetch(`${VIZIER_CFA}?${q}`, { signal: deadline(signal, CATALOG_DEADLINE_MS) });
   if (!res.ok) throw new Error(`VizieR ${res.status}`);
   const { status, message, rows } = parseVOTable(await res.text());
   if (status === 'ERROR') throw new Error(message);
-  const named = rows.map((row) => Object.fromEntries(Object.entries(columns).map(([name, col]) => [name, row[col] ?? ''])));
+  const within = limit === null ? rows : rows.filter((row) => row[mag] !== '' && row[mag] != null && Number(row[mag]) <= limit);
+  const named = within.map((row) => Object.fromEntries(Object.entries(columns).map(([name, col]) => [name, row[col] ?? ''])));
   return { rows: named, via: 'VizieR' };
 }
 
@@ -684,9 +691,8 @@ export async function catalogueRows(kind, field, { signal } = {}) {
   if (vizier) {
     asks.push(tap(VIZIER_TAP, coneQuery(vizier, field), 'csv', signal).then((text) => ({ rows: parseCsv(text), via: 'VizieR' })));
   }
-  // The CfA's VizieR answers when Strasbourg does not; it is asked only
-  // without a magnitude cut, as a mark's own lookup is.
-  if (CFA_CONES[kind] && field.limit == null) asks.push(cfaRows(kind, field, signal));
+  // The CfA's VizieR answers when Strasbourg does not, with or without a magnitude cut.
+  if (CFA_CONES[kind]) asks.push(cfaRows(kind, field, signal));
   try {
     return await Promise.any(asks);
   } catch (err) {
