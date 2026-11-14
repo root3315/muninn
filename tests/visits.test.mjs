@@ -57,3 +57,19 @@ test('the choice is the same every time', () => {
   const first = spread(archive, VISITS_PER_BATCH);
   assert.deepEqual(nextVisits(archive, first), nextVisits(archive, first.slice().reverse()));
 });
+
+test('a held visit is found again by its file, then by its moment and band', async () => {
+  const { findHeldVisit } = await import('../public/js/catalog.js');
+  const list = [
+    { url: 'a', mjd: 100, band: 'D1' },
+    { url: 'b', mjd: 200, band: 'D1' },
+    { url: 'c', mjd: 200, band: 'D4' },
+    { url: 'd', mjd: 300, band: 'D4' },
+  ];
+  assert.equal(findHeldVisit(list, { url: 'c', mjd: 200, band: 'D4' }), 2, 'the same file');
+  assert.equal(findHeldVisit(list, { url: 'gone', mjd: 200, band: 'D4' }), 2, 'same moment, same band, not the first');
+  assert.equal(findHeldVisit(list, { url: 'gone', mjd: 200.00001, band: 'D2' }), 1, 'same moment, another band: the first of it');
+  assert.equal(findHeldVisit(list, { mjd: 290, band: 'D1' }), 3, 'otherwise the nearest night');
+  assert.equal(findHeldVisit(list, null), -1);
+  assert.equal(findHeldVisit([], { mjd: 1 }), -1);
+});

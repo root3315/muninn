@@ -36,6 +36,7 @@ const RAMP_TOKENS = { deep: '--cmap-deep', ice: '--cmap-ice', infrared: '--cmap-
 export function coreQuality(quality, width, height, ci, cj, reach) {
   let overflow = 0;
   let holes = 0;
+  let ghost = 0;
   let n = 0;
   let sx = 0;
   let sy = 0;
@@ -44,10 +45,11 @@ export function coreQuality(quality, width, height, ci, cj, reach) {
       const q = quality[j * width + i];
       n += 1;
       if (q & QUALITY.HOLE) holes += 1;
+      if (q & QUALITY.GHOST) ghost += 1;
       if (q & QUALITY.OVERFLOW) { overflow += 1; sx += i; sy += j; }
     }
   }
-  return { overflow, holeShare: n ? holes / n : 0, centre: overflow ? [sx / overflow, sy / overflow] : null };
+  return { overflow, ghost, holeShare: n ? holes / n : 0, centre: overflow ? [sx / overflow, sy / overflow] : null };
 }
 
 /**
@@ -1190,15 +1192,12 @@ export class SkyView {
   /* ----------------------------------------------------------- photometry */
 
   /**
-   * Find the brightest coherent thing near (ra, dec) in one visit and return its
-   * flux-weighted centre. Used to turn a click into a measured position in every
-   * visit, which is what makes a drift number honest rather than eyeballed.
-   */
-  /**
    * Whether a visit could have shown the spot at all: the spot lies inside
    * its frame with room for the measurement's ring, and most of the pixels
    * there hold sky rather than a blank. A saturated core, blanked around
    * OVERFLOW pixels near it, still counts: the star was there, only too bright.
+   * A spot on an optical ghost does not: the light there is a reflection, and
+   * counted either way it would read as something that came and went.
    */
   covers(visit, ra, dec, boxPixels = 2) {
     const g = this.grid.worldToIndex(ra, dec);
@@ -1210,6 +1209,7 @@ export class SkyView {
     const ci = Math.round(g[0]);
     const cj = Math.round(g[1]);
     if (ci - out < 0 || cj - out < 0 || ci + out >= W || cj + out >= H) return false;
+    if (quality && coreQuality(quality, W, H, ci, cj, r).ghost) return false;
     if (quality && coreQuality(quality, W, H, ci, cj, out).overflow) return true;
     let sky = 0;
     let all = 0;
@@ -1222,6 +1222,11 @@ export class SkyView {
     return sky * 2 >= all;
   }
 
+  /**
+   * Find the brightest coherent thing near (ra, dec) in one visit and return its
+   * flux-weighted centre. Used to turn a click into a measured position in every
+   * visit, which is what makes a drift number honest rather than eyeballed.
+   */
   measure(visit, ra, dec, { boxPixels = 2, minSnr = 5, orLimit = false } = {}) {
     const g = this.grid.worldToIndex(ra, dec);
     if (!g) return null;

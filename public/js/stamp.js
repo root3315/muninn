@@ -89,8 +89,9 @@ async function scanImageHDU(url, signal) {
  *
  * Deliberately not masked: OVERFLOW (the cores of bright stars), OUTLIER (set
  * on real sources too) and SOURCE (a known source, i.e. the sky itself); nor
- * DR1's GHOST, CROSSTALK and HALO planes, which cover real sky around bright
- * stars and would cut holes in it.
+ * GHOST, an optical reflection of a very bright source that can spread over
+ * tens of pixels of real sky. It is kept in the picture and carried in the
+ * quality plane instead, so a mark on it is not measured (see QUALITY).
  *
  * Without this the "flash" that opened the Atala field on 6 Jul 2025 was one
  * pixel at eleven times its neighbours: FLAGS 0x80005 in QR2 (TRANSIENT,
@@ -103,6 +104,11 @@ const MASK_BITS = {
   // of charge from a particle shower) are each a one-visit bright patch:
   // exactly what a mover hunt would otherwise report.
   STREAK: 25, SNOWBALL: 27,
+  // A star's copy elsewhere on the detector, and the ring the pipeline draws
+  // round a cosmic-ray hit or a snowball. Both are tied to the detector, so
+  // on the sky they land somewhere new each visit: a one-visit spot, the
+  // size of a star. Bit numbers per the DR1 FLAGS header (MSKN0020, MSKN0028).
+  CROSSTALK: 20, HALO: 28,
 };
 const FLAG_MASK = Object.values(MASK_BITS).reduce((m, bit) => m | (1 << bit), 0);
 
@@ -114,7 +120,9 @@ const FLAG_MASK = Object.values(MASK_BITS).reduce((m, bit) => m | (1 << bit), 0)
  * (a flag is a statement about one pixel; averaging it means nothing).
  */
 const OVERFLOW_BIT = 1;
-export const QUALITY = { OVERFLOW: 1, HOLE: 2 };
+/** An optical ghost of a bright source (MSKN0022): real-looking light that is not sky. */
+const GHOST_BIT = 22;
+export const QUALITY = { OVERFLOW: 1, HOLE: 2, GHOST: 4 };
 const FLAGS_HEADER_PROBE = 5 * 2880 * 4;
 /**
  * A compressed FLAGS plane's row pointers, 8 bytes for each of the
@@ -317,6 +325,7 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = 
       const nearest = base + (tx >= 0.5 ? 1 : 0) + (ty >= 0.5 ? nx : 0);
       let q = plane[nearest] === plane[nearest] ? 0 : QUALITY.HOLE;
       if (flagRows && flagRows[nearest] & (1 << OVERFLOW_BIT)) { q |= QUALITY.OVERFLOW; overflow++; }
+      if (flagRows && flagRows[nearest] & (1 << GHOST_BIT)) q |= QUALITY.GHOST;
       quality[j * gw + i] = q;
       const a = plane[base];
       const b = plane[base + 1];
@@ -344,7 +353,8 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = 
   return {
     data: out,
     // Per sample: QUALITY.OVERFLOW where the nearest detector pixel saturated,
-    // QUALITY.HOLE where it holds no value (masked, or blanked by the pipeline).
+    // QUALITY.HOLE where it holds no value (masked, or blanked by the pipeline),
+    // QUALITY.GHOST where the pipeline marked an optical ghost.
     quality,
     width: gw,
     height: gh,

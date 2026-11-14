@@ -151,3 +151,28 @@ test('a visit that never saw the spot is not counted against a steady star', () 
   assert.equal(a.total, 5);
   assert.equal(a.loaded, 6);
 });
+
+test('a spot on an optical ghost is not counted in that visit, either way', () => {
+  const steady = [1, 2, 3, 4, 5].map((k) => visit({ mjd: 60000 + k }));
+  const ghosted = visit({ mjd: 60010 });
+  ghosted.stamp.quality[MID * SIZE + MID] |= QUALITY.GHOST;
+  const a = track([...steady, ghosted]);
+  assert.equal(a.kind, 'fixed');
+  assert.equal(a.total, 5);
+  assert.equal(coreQuality(ghosted.stamp.quality, SIZE, SIZE, MID, MID, 2).ghost, 1);
+});
+
+test('a ghost in one visit over empty sky does not become a flash', () => {
+  const empty = () => {
+    const v = visit({ mjd: 0 });
+    v.stamp.data.fill(0.4);
+    for (let k = 0; k < v.stamp.data.length; k++) v.stamp.data[k] += ((k * 7919) % 13 - 6) * 1e-4;
+    return v;
+  };
+  const quiet = [1, 2, 3, 4].map((k) => Object.assign(empty(), { frame: { mjd: 60000 + k, obsId: `q${k}`, band: 'D2' } }));
+  const ghost = visit({ mjd: 60010 });
+  ghost.stamp.quality[MID * SIZE + MID] |= QUALITY.GHOST;
+  assert.equal(track([...quiet, ghost]).kind, 'none');
+  // Without the flag the same light is a one-visit detection: the test bites.
+  assert.equal(track([...quiet, visit({ mjd: 60010 })]).kind, 'transient');
+});

@@ -38,7 +38,7 @@ import { drawGaiaSky, psfFor } from './gaiasky.js';
 import { fieldArchives, CADC_SEARCH } from './archives.js';
 import {
   SIMBAD_PAGE, VIZIER_PAGE,
-  searchFrames, NoRelayError, UpstreamError, groupVisits, bandsPresent, bandRange, parseCoordinates,
+  searchFrames, NoRelayError, UpstreamError, groupVisits, findHeldVisit, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, identifySource, arcsecBetween, fieldObjects, toS3, surveySources,
 } from './catalog.js';
 import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP, propagate, epochOfMjd } from './overlay.js';
@@ -81,8 +81,6 @@ const state = {
   allVisits: [],
   /** A visit index from a link, held until that visit has landed. */
   wantVisit: null,
-  /** A held visit's date, carried to another band or size of the same field. */
-  wantMjd: null,
   readingSince: 0, huntAgain: false,
   /** Visits being read in the background, and how many the field is meant to reach. */
   filling: false, visitGoal: 0,
@@ -1945,10 +1943,17 @@ function identifyMark(m) {
   const a = m.analysis;
   const ready = a && IDENTIFY.has(a.kind)
     && (STILL.has(a.kind) || ['none', 'failed', 'off'].includes(m.catalog?.state));
-  // Waiting on SkyBoT again (a band change re-measures every mark) keeps
-  // what the catalogues already said; only a mark that is no longer a
-  // thing to identify loses it.
-  if (!ready) { if (!(a && IDENTIFY.has(a.kind))) m.who = null; return; }
+  // While SkyBoT is asked again about newly landed visits, what the star
+  // catalogues said stays. A mark that is no longer a thing to identify, or
+  // that SkyBoT has matched to a body in any visit, loses it: a neighbouring
+  // star's name must not sit on an asteroid.
+  if (!ready) {
+    if (!(a && IDENTIFY.has(a.kind)) || m.catalog?.state === 'match') {
+      m.whoStop?.abort();
+      m.who = null;
+    }
+    return;
+  }
 
   // The measured centre, not the click: that is what a catalogue should be asked about.
   const pts = a.track.length ? a.track : [{ ra: m.ra, dec: m.dec }];
@@ -3150,12 +3155,12 @@ const markPlaces = () => (sky?.marks ?? []).map(({ ra, dec, obsId }) => ({ ra, d
 /** Open the same field again, as it is now: a new size or band keeps the marks and the visit held. */
 function reopenField() {
   if (state.ra == null) return;
-  // Held by its date, not its place in the list: another band's list is
-  // another list, and its 25th visit is another night.
-  const held = heldVisit();
-  const visitMjd = state.wantVisit != null ? state.allVisits[state.wantVisit]?.mjd
-    : held != null ? state.allVisits[held]?.mjd : null;
-  openField({ ra: state.ra, dec: state.dec, label: state.label, marks: markPlaces(), visitMjd: visitMjd ?? null });
+  // Held by its file, date and band, not its place in the list: another
+  // band's list is another list, and its 25th visit is another night.
+  const at = state.wantVisit ?? heldVisit();
+  const frame = at != null ? state.allVisits[at] : null;
+  const held = frame ? { url: frame.url, mjd: frame.mjd, band: frame.band } : null;
+  openField({ ra: state.ra, dec: state.dec, label: state.label, marks: markPlaces(), held });
 }
 
 /**
@@ -3371,7 +3376,7 @@ function retryUnread() {
   fillVisits(Math.max(state.visitGoal, state.visits.length));
 }
 
-async function openField({ ra, dec, label = '', band = null, target, pm, marks = [], visit = null, visitMjd = null }) {
+async function openField({ ra, dec, label = '', band = null, target, pm, marks = [], visit = null, held = null }) {
   dropMarksUndo();
   fieldSeq += 1;
   const gen = fieldSeq;
@@ -3389,7 +3394,6 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.visits = [];
   state.allVisits = [];
   state.wantVisit = visit;
-  state.wantMjd = visitMjd;
   state.truncated = false;
   state.partial = false;
   // What the last field measured goes with it: the reading is now built up as
@@ -3471,6 +3475,11 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
 
   state.allVisits = groupVisits(frames, { ra, dec, band: state.band });
   const chosen = spread(state.allVisits, MAX_VISITS);
+  // A visit held before a reload is found again in the new list.
+  if (visit == null && held) {
+    const at = findHeldVisit(state.allVisits, held);
+    if (at >= 0) state.wantVisit = visit = at;
+  }
   // A visit a link holds is read with the first ten, wherever it falls.
   const wanted = state.allVisits[visit];
   if (wanted && !chosen.includes(wanted)) chosen.push(wanted);
@@ -3519,17 +3528,12 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   setPlateState('', { hidden: true });
   sky.setAB(0, Math.max(0, sky.visits.length - 1));
   // A visit asked for by a link is held on screen, which is a single frame.
-  let held = sky.visits.findIndex((v) => v.frame === state.allVisits[state.wantVisit]);
-  if (held < 0 && Number.isFinite(state.wantMjd) && sky.visits.length) {
-    held = sky.visits.reduce((best, v, i) => (Math.abs(v.frame.mjd - state.wantMjd)
-      < Math.abs(sky.visits[best].frame.mjd - state.wantMjd) ? i : best), 0);
-  }
+  const holding = sky.visits.findIndex((v) => v.frame === state.allVisits[state.wantVisit]);
   state.wantVisit = null;
-  state.wantMjd = null;
-  if (held >= 0) {
+  if (holding >= 0) {
     stopPlayback();
     if (sky.mode === 'blink') selectMode('single');
-    sky.setIndex(held);
+    sky.setIndex(holding);
   }
   syncScrub();
   // The marks card offers a one-press demonstration, which only makes sense once
@@ -3548,7 +3552,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   if (sky.marks.length) retrackMarks();
 
   const stillness = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (held < 0 && sky.visits.length > 1 && !state.playing && !stillness && sky.mode === 'blink') startPlayback();
+  if (holding < 0 && sky.visits.length > 1 && !state.playing && !stillness && sky.mode === 'blink') startPlayback();
   // The rest of the field's visits, in the background (see fillVisits).
   fillVisits(fillCap());
 }
