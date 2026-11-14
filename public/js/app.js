@@ -1033,10 +1033,16 @@ function sharpCard(sharp) {
   const li = document.createElement('li');
   li.className = 'cand cand--sharp';
 
-  const title = document.createElement('p');
+  const fold = document.createElement('details');
+  fold.className = 'cand__fold';
+  const title = document.createElement('summary');
   title.className = 'cand__where';
   title.dataset.known = 'sharp';
   title.textContent = t('sharp.title', { n: sharp.length });
+  const hint = document.createElement('span');
+  hint.className = 'cand__hint';
+  hint.textContent = t('sharp.short');
+  title.append(' ', hint);
 
   const why = document.createElement('p');
   why.className = 'cand__id';
@@ -1059,7 +1065,8 @@ function sharpCard(sharp) {
     dates.append(row);
   }
 
-  li.append(title, why, dates);
+  fold.append(title, why, dates);
+  li.append(fold);
   return li;
 }
 
