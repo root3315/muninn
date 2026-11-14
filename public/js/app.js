@@ -37,7 +37,9 @@ import {
   measureLink, planLink, markCall, skybotVerdict as skybotVerdictOf, skybotLine as skybotLineOf, skybotTone, seenAt,
   matchArcsec, identifyMark as identifyMarkOf, tagOf, STILL, whoWords, verdict, sharpWords,
   saturatedMotion as saturatedMotionOf, linkArc, linkWords, pct, predictedWords, peaksOf, brightnessWords,
+  brightNeighbourWords,
 } from './marks.js';
+import { brightStars } from './brightstars.js';
 import { loadWise, WISE_BANDS } from './wise.js';
 import { planetHostNear, systemUrl } from './exovision.js';
 import { drawGaiaSky, psfFor } from './gaiasky.js';
@@ -54,6 +56,9 @@ import { buildIndex, suggest } from './suggest.js';
 import { attachSuggest } from './suggest-box.js';
 import { initRead, relabelCue } from './read.js';
 import { startTour, maybeStartTour, relabelTour } from './tour.js';
+
+/* The catalogue's stars bright enough to saturate (brightstars.js): read once, after the page is up. */
+let brightList = [];
 
 /* The reprojected grid is shaped like the viewport so the sky can fill it. 640
    across is already four times finer than SPHEREx's 6.15" pixel, so the canvas
@@ -1806,12 +1811,26 @@ function renderWhen() {
   const masked = shown?.stamp?.meta?.flaggedPixels;
   $('when-flags').textContent = masked == null ? (shown ? t('frame.noFlags') : '')
     : t('frame.flagged', { n: masked });
+  brightStarNotes(shown);
 
   for (const [id, at] of [['prev', i - 1], ['next', i + 1]]) {
     $(id).disabled = !list[at];
     $(`${id}-date`).textContent = list[at] ? fmtDay(list[at].frame.iso) : '';
   }
   renderSurveyNote();
+}
+
+/**
+ * Under the mask count, when the frame holds a very bright star: why so much
+ * of it is closed (the star saturated a patch too large to be a core, see
+ * render.js saturatedPatches), and that its ghosts come and go with the roll.
+ */
+function brightStarNotes(shown) {
+  const notes = [];
+  if (shown?.patches?.length) notes.push(t('frame.brightStar'));
+  if (shown && sky.brightInField) notes.push(t('frame.ghosts'));
+  const el = $('when-flags');
+  for (const note of notes) el.append(document.createElement('br'), note);
 }
 
 /* ------------------------------------------------------------------- readout */
@@ -2353,6 +2372,7 @@ function showTip(hit, x = 0, y = 0) {
     title.textContent = `${t('tip.mark', { n: hit.n })} · ${callOf(m.analysis)}`;
     if (m.tag && m.tag !== callOf(m.analysis)) rows.push(m.tag);
     if (m.analysis) rows.push(verdict(m.analysis));
+    rows.push(brightNeighbourWords(m, brightList));
   }
   tip.replaceChildren(title, ...rows.filter(Boolean).map((text) => {
     const p = document.createElement('p');
@@ -2584,6 +2604,13 @@ function renderMarks() {
       const p = document.createElement('p');
       p.className = 'mark__detail';
       p.textContent = motion;
+      verdictNodes.push(p);
+    }
+    const neighbour = brightNeighbourWords(m, brightList);
+    if (neighbour) {
+      const p = document.createElement('p');
+      p.className = 'mark__detail';
+      p.textContent = neighbour;
       verdictNodes.push(p);
     }
     const whoNodes = [];
@@ -5483,6 +5510,9 @@ function wire() {
 /** The words the picture draws itself, in the reader's language. */
 function labelSky() {
   sky.labels.rate = (r) => t('overlay.rate', { rate: fmt(r, r < 10 ? 1 : 0) });
+  sky.labels.saturated = (name, n) => (name
+    ? t('plate.saturated', { name, n: fmt(n, 0) })
+    : t('plate.saturatedAnon', { n: fmt(n, 0) }));
   // A preset's name is the reader's language's; a looked-up name is SIMBAD's.
   if (state.target?.key) state.target.label = t(`preset.${state.target.key}`);
 }
@@ -5558,6 +5588,13 @@ async function boot() {
     onRepainted: () => { if (!$('run').hidden) drawAxis(); },
   });
   labelSky();
+  // The bright stars, for what the plate says round one (sky.js drawPatches)
+  // and beside a mark near one. Not waited for: a field opens without them.
+  loadStars().then((stars) => {
+    brightList = brightStars(stars);
+    sky.setBrightStars(brightList);
+    renderWhen();
+  }).catch(() => {});
 
   if (hash.fov) state.fov = nearestFov(hash.fov);
   state.survey = hash.survey;

@@ -18,6 +18,7 @@ import { separation, deltaRA } from './wcs.js';
 import { identifySource, arcsecBetween, SIMBAD_PAGE, VIZIER_PAGE } from './catalog.js';
 import { deadline } from './net.js';
 import { propagate, epochOfMjd } from './overlay.js';
+import { brightStarNear } from './brightstars.js';
 
 /**
  * Which seasons a mark is followed between: its own (A) and the one nearest
@@ -504,6 +505,26 @@ function verdictOnly(a) {
     return t('mark.intermittentDates', { seen: a.seen, total: a.total, dates });
   }
   return t('mark.intermittent', { seen: a.seen, total: a.total, rms: fmt(a.rms, 1) });
+}
+
+/**
+ * Context for a spot that comes and goes near a very bright star, or null.
+ * Such a star's ghosts and stray light land somewhere new with each roll of
+ * the spacecraft, so they show in a few visits only, and no catalogue lists
+ * them. The verdict stays what the visits say; this only names the likely
+ * cause beside it. `stars` is the catalogue's bright list (brightstars.js
+ * brightStars). A mark on the star itself gets no such line.
+ */
+const BLINKS = new Set(['intermittent', 'transient']);
+const ON_THE_STAR_ARCMIN = 1;
+
+export function brightNeighbourWords(m, stars) {
+  if (!BLINKS.has(m?.analysis?.kind) || !Number.isFinite(m.ra) || !Number.isFinite(m.dec)) return null;
+  const star = brightStarNear(stars, m.ra, m.dec);
+  if (!star?.name || star.distArcmin < ON_THE_STAR_ARCMIN) return null;
+  return t('mark.brightNeighbour', {
+    name: star.name, dist: fmt(star.distArcmin, 0), mag: fmt(star.mag, 2).replace('-', '−'),
+  });
 }
 
 /** The shape reading of a mark in words, with its verdict (sharp, star, …), or null. */

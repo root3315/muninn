@@ -18,7 +18,11 @@
  */
 
 import { DETECTOR_ARCSEC, magAB } from './depth.js';
-import { limitsFromSorted, limitsFromTable, quantileTable, quantileAt, sortedFinite, paint, paintDifference, rampFromToken, resolveColor } from './render.js';
+import {
+  limitsFromSorted, limitsFromTable, quantileTable, quantileAt, sortedFinite, paint, paintDifference, rampFromToken, resolveColor,
+  coreCap, saturatedPatches,
+} from './render.js';
+import { brightStarNear } from './brightstars.js';
 import { SECTOR_COLS, SECTOR_ROWS, sectorBounds } from './sectors.js';
 import { deltaRA } from './wcs.js';
 import { coadd } from './stack.js';
@@ -127,7 +131,12 @@ export class SkyView {
        epoch and a motion in mas a year, either of which may be missing. */
     this.target = null;
     /* Words the picture needs in the reader's language, set by the page. */
-    this.labels = { rate: (r) => `${r.toFixed(r < 10 ? 1 : 0)}″/h` };
+    this.labels = {
+      rate: (r) => `${r.toFixed(r < 10 ? 1 : 0)}″/h`,
+      saturated: (name, n) => `${name ? `${name}: ` : ''}saturated — pixels masked by the pipeline (${n} px)`,
+    };
+    /* The catalogue's stars bright enough to saturate (brightstars.js), set by the page. */
+    this.brightStars = [];
     this.hover = null;
     this.diffCache = null;
     this.cssW = 0;
@@ -363,10 +372,43 @@ export class SkyView {
     const lim = shared ?? v.stamp.limits ?? this.ownLimits(v);
     v.limits = lim;
     const img = v.ctx.createImageData(v.stamp.width, v.stamp.height);
-    paint(img, v.stamp.data, lut, { lo: lim.lo, hi: lim.hi, stretch: this.render.stretch, quality: v.stamp.quality });
+    const cap = this.coreCap;
+    // The saturated regions too large to be a star's core: worked out once a visit.
+    v.patches ??= saturatedPatches(v.stamp.quality, v.stamp.width, v.stamp.height, cap);
+    paint(img, v.stamp.data, lut, {
+      lo: lim.lo, hi: lim.hi, stretch: this.render.stretch, quality: v.stamp.quality, cap, patches: v.patches,
+    });
     v.ctx.putImageData(img, 0, 0);
     // The run keeps a small copy of each picture; a repaint makes it stale.
     v.canvasVersion = (v.canvasVersion ?? 0) + 1;
+  }
+
+  /** Grid samples to one detector pixel, for sizes stated in detector pixels. */
+  get samplesPerPixel() { return this.grid ? DETECTOR_ARCSEC / (this.grid.scale * 3600) : 1; }
+
+  /**
+   * The star brighter than V 3 whose light reaches this field, or null. Only
+   * such a star saturates a patch too large to be a core; a field without one
+   * (M42's bright nebula, Barnard's Star) is painted exactly as it always was.
+   */
+  get brightInField() {
+    const g = this.grid;
+    if (!g || !this.brightStars.length) return null;
+    if (this.brightFor?.grid !== g || this.brightFor.list !== this.brightStars) {
+      this.brightFor = { grid: g, list: this.brightStars, star: brightStarNear(this.brightStars, g.ra, g.dec, { extraArcmin: (g.spanDeg * 60) / 2 }) };
+    }
+    return this.brightFor.star;
+  }
+
+  /** The largest hole, in samples, the display fills as a star's core (render.js coreCap): no limit without a bright star. */
+  get coreCap() { return this.brightInField ? coreCap(this.samplesPerPixel) : Infinity; }
+
+  /** The catalogue's bright stars (brightstars.js brightStars), once they are read: every visit is painted again. */
+  setBrightStars(list) {
+    this.brightStars = list ?? [];
+    for (const v of this.visits) v.patches = undefined;
+    this.stackCache = null;
+    this.repaintAll();
   }
 
   setRender(patch) { Object.assign(this.render, patch); this.repaintAll(); }
@@ -463,7 +505,7 @@ export class SkyView {
     const ctx = cv.getContext('2d');
     const img = ctx.createImageData(cv.width, cv.height);
     const lut = this.ramps[this.render.palette] ?? this.ramps.deep;
-    paint(img, data, lut, { lo: lim.lo, hi: lim.hi, stretch: this.render.stretch });
+    paint(img, data, lut, { lo: lim.lo, hi: lim.hi, stretch: this.render.stretch, cap: this.coreCap });
     ctx.putImageData(img, 0, 0);
     this.stackCache = { key, canvas: cv, data, members };
     return this.stackCache;
@@ -550,6 +592,7 @@ export class SkyView {
     if (this.grid) {
       if (this.overlays.grid) this.drawGrid(ctx);
       if (this.overlays.compass) this.taken.push(this.compassBox(ctx));
+      if (this.mode !== 'difference' && this.mode !== 'stack') this.drawPatches(ctx, this.current);
       // The field's own target and the user's crosses first: the names drawn
       // after them step around them ("(8270) 37″/h" sat on "Atala").
       if (this.overlays.marks && this.target) this.drawTarget(ctx);
@@ -979,6 +1022,42 @@ export class SkyView {
         { x: x + r + 6, y, align: 'left' },
         { x: x - r - 6, y, align: 'right' },
       ], this.colors.ink);
+    }
+    ctx.restore();
+  }
+
+  /**
+   * A very bright star's saturated patch (render.js saturatedPatches), which
+   * the picture shows flat at the sky's level: a thin ring round it, and a
+   * line saying what it is, so a blank disc is not read as a glitch or as a
+   * star's size.
+   */
+  drawPatches(ctx, v) {
+    if (!v?.patches?.length) return;
+    const { scale } = this.view;
+    const perPixel = this.samplesPerPixel;
+    ctx.save();
+    ctx.font = this.fonts.compass;
+    ctx.textBaseline = 'middle';
+    for (const p of v.patches) {
+      const [x, y] = this.toCanvas(p.ci, p.cj);
+      const r = (p.reach + 0.5) * scale;
+      ctx.strokeStyle = this.colors.muted;
+      ctx.globalAlpha = 0.8;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      const [ra, dec] = this.grid.indexToWorld(p.ci, p.cj);
+      const star = brightStarNear(this.brightStars, ra, dec);
+      const text = this.labels.saturated(star?.name ?? null, Math.round(p.area / (perPixel * perPixel)));
+      this.placeLabel(ctx, text, [
+        { x, y: y - r - 10, align: 'center' },
+        { x, y: y + r + 10, align: 'center' },
+        { x: x + r + 6, y, align: 'left' },
+        { x: x - r - 6, y, align: 'right' },
+      ], this.colors.muted);
     }
     ctx.restore();
   }

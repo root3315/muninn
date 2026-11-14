@@ -196,8 +196,13 @@ export function rampFromToken(el, token) {
  * One pass over each region, where a pixel-at-a-time spread had taken up to
  * sixty-four passes over the whole frame on every repaint, and had crept out
  * along the frame's edge into the blank beyond it.
+ *
+ * Only a star's core is filled: a region of more than `cap` samples (see
+ * coreCap) is left blank. Around a very bright star the pipeline closes
+ * arcminutes of sky, and filling that from its rim made a white disc that
+ * was never measured.
  */
-export function fillCores(data, width, ceiling) {
+export function fillCores(data, width, ceiling, cap = Infinity) {
   if (!(ceiling === ceiling)) return data;
   const n = data.length;
   const height = Math.floor(n / width);
@@ -249,7 +254,7 @@ export function fillCores(data, width, ceiling) {
     const pinhole = tail <= 9 && !dim;
     // And a hole of any size that lies, half its rim or more, in a source's light.
     const inLight = rim > 0 && lit * 2 >= rim;
-    if (edge || !(bright || pinhole || inLight)) continue;
+    if (edge || tail > cap || !(bright || pinhole || inLight)) continue;
     out ??= Float32Array.from(data);
     if (bright * 2 >= rim) {
       for (let i = 0; i < tail; i++) out[queue[i]] = top;
@@ -260,11 +265,132 @@ export function fillCores(data, width, ceiling) {
       fillFromRim(out, width, height, queue.subarray(0, tail));
     }
   }
-  return fillWalled(out ?? data, width, height, ceiling);
+  return fillWalled(out ?? data, width, height, ceiling, cap);
 }
 
 /** How far above the sky, in its own noise, a pixel of a hole's rim must stand to count as lying in a source's light. */
 const GLOW_SIGMA = 5;
+
+/**
+ * The widest saturated core the display still paints as a star, in detector
+ * pixels across: a dozen, a few widths of SPHEREx's point-spread function.
+ * A star of V 5 or 6 saturates a handful of pixels; Arcturus (V −0.05)
+ * saturates a disc four arcminutes across, forty pixels, and the pipeline
+ * closes most of the sky round it.
+ */
+export const CORE_CAP_PX = 12;
+
+/** CORE_CAP_PX as an area in grid samples, for a grid cut `samplesPerPixel` samples to a detector pixel. */
+export const coreCap = (samplesPerPixel) => Math.round(Math.PI * (CORE_CAP_PX / 2) ** 2 * samplesPerPixel ** 2);
+
+/**
+ * The saturated regions of a frame too large to be a star's core: each
+ * eight-connected run of OVERFLOW samples (QUALITY.OVERFLOW, bit 1) of more
+ * than `cap` samples, with the samples it walls in. Each comes back with its
+ * samples, its centre and its reach (the farthest sample from the centre),
+ * for the display to draw it as what it is: pixels nobody measured.
+ */
+export function saturatedPatches(quality, width, height, cap) {
+  if (!quality || !(cap < Infinity)) return [];
+  const n = width * height;
+  const label = new Int32Array(n);
+  const queue = new Int32Array(n);
+  const patches = [];
+  for (let s = 0; s < n; s++) {
+    if (label[s] || !(quality[s] & 1)) continue;
+    const id = patches.length + 1;
+    let tail = 0;
+    label[s] = id;
+    queue[tail++] = s;
+    for (let head = 0; head < tail; head++) {
+      const k = queue[head];
+      const x = k % width;
+      const y = (k - x) / width;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx;
+          const yy = y + dy;
+          if (xx < 0 || yy < 0 || xx >= width || yy >= height) continue;
+          const j = yy * width + xx;
+          if (!label[j] && quality[j] & 1) { label[j] = id; queue[tail++] = j; }
+        }
+      }
+    }
+    patches.push(tail > cap ? Array.from(queue.subarray(0, tail)) : null);
+  }
+  const big = patches.map((p, i) => (p ? i + 1 : 0)).filter(Boolean);
+  if (!big.length) return [];
+  const keep = new Set(big);
+  for (let k = 0; k < n; k++) if (label[k] && !keep.has(label[k])) label[k] = 0;
+  addWalledIn(label, patches, width, height);
+  return big.map((id) => describePatch(patches[id - 1], width));
+}
+
+/**
+ * The samples a large patch walls in — sky that cannot be reached from the
+ * frame's edge without crossing it — are given to the patch they touch.
+ */
+function addWalledIn(label, patches, width, height) {
+  const n = label.length;
+  const open = new Uint8Array(n);
+  const queue = new Int32Array(n);
+  let tail = 0;
+  const seed = (k) => { if (!open[k] && !label[k]) { open[k] = 1; queue[tail++] = k; } };
+  for (let x = 0; x < width; x++) { seed(x); seed((height - 1) * width + x); }
+  for (let y = 0; y < height; y++) { seed(y * width); seed(y * width + width - 1); }
+  for (let head = 0; head < tail; head++) {
+    const k = queue[head];
+    const x = k % width;
+    if (x > 0) seed(k - 1);
+    if (x < width - 1) seed(k + 1);
+    if (k >= width) seed(k - width);
+    if (k + width < n) seed(k + width);
+  }
+  for (let k = 0; k < n; k++) {
+    if (open[k] || label[k]) continue;
+    // An enclosed pocket: flood it, and hand it to a patch on its rim.
+    let head = 0;
+    tail = 0;
+    let owner = 0;
+    open[k] = 1;
+    queue[tail++] = k;
+    while (head < tail) {
+      const c = queue[head++];
+      const x = c % width;
+      for (const j of [x > 0 ? c - 1 : -1, x < width - 1 ? c + 1 : -1, c - width, c + width]) {
+        if (j < 0 || j >= n) continue;
+        if (label[j]) owner ||= label[j];
+        else if (!open[j]) { open[j] = 1; queue[tail++] = j; }
+      }
+    }
+    if (!owner) continue;
+    for (let i = 0; i < tail; i++) { label[queue[i]] = owner; patches[owner - 1].push(queue[i]); }
+  }
+}
+
+function describePatch(cells, width) {
+  let sx = 0;
+  let sy = 0;
+  for (const k of cells) { sx += k % width; sy += Math.floor(k / width); }
+  const ci = sx / cells.length;
+  const cj = sy / cells.length;
+  let reach = 0;
+  for (const k of cells) reach = Math.max(reach, Math.hypot((k % width) - ci, Math.floor(k / width) - cj));
+  return { cells: Int32Array.from(cells), area: cells.length, ci, cj, reach };
+}
+
+/**
+ * For the eye only: every sample of a large saturated patch set to the sky's
+ * own level, a flat neutral tone that says "nothing measured here" where a
+ * white disc had said "a very bright star, this size".
+ */
+export function flattenPatches(data, patches) {
+  if (!patches?.length) return data;
+  const out = Float32Array.from(data);
+  const level = skyOf(data).level;
+  for (const p of patches) for (const k of p.cells) out[k] = level;
+  return out;
+}
 
 /**
  * The sky's level and spread, from a sparse sample of the frame: the median
@@ -319,7 +445,7 @@ function fillFromRim(out, width, height, cells) {
  * Anything the top of the stretch walls in completely, so that it cannot be
  * reached from the frame's edge without crossing it, is part of the core.
  */
-function fillWalled(cur, width, height, ceiling) {
+function fillWalled(cur, width, height, ceiling, cap = Infinity) {
   const n = cur.length;
   const open = new Uint8Array(n);
   const queue = new Int32Array(n);
@@ -337,11 +463,25 @@ function fillWalled(cur, width, height, ceiling) {
     if (k >= width) seed(k - width);
     if (k + width < n) seed(k + width);
   }
+  // What is walled in is a core only up to the cap: a larger pocket is a
+  // patch the pipeline closed (or one shown flat, see flattenPatches).
   let walled = null;
-  for (let k = 0; k < n; k++) {
-    if (open[k] || cur[k] >= ceiling) continue;
+  for (let s = 0; s < n; s++) {
+    if (open[s] || cur[s] >= ceiling) continue;
+    let head = 0;
+    tail = 0;
+    open[s] = 1;
+    queue[tail++] = s;
+    while (head < tail) {
+      const k = queue[head++];
+      const x = k % width;
+      for (const j of [x > 0 ? k - 1 : -1, x < width - 1 ? k + 1 : -1, k - width, k + width]) {
+        if (j >= 0 && j < n && !open[j] && !(cur[j] >= ceiling)) { open[j] = 1; queue[tail++] = j; }
+      }
+    }
+    if (tail > cap) continue;
     walled ??= Float32Array.from(cur);
-    walled[k] = ceiling;
+    for (let i = 0; i < tail; i++) walled[queue[i]] = ceiling;
   }
   return walled ?? cur;
 }
@@ -370,11 +510,16 @@ export function whitenOverflow(data, quality, ceiling) {
  * Paint one frame into an ImageData.
  * `blank` is the colour used where the detector had no data (NaN) — the frame
  * edges after reprojection, and masked pixels.
+ *
+ * `cap` is the largest hole, in samples, that is filled as a star's core
+ * (coreCap); `patches` the saturated regions larger than that
+ * (saturatedPatches), painted flat at the sky's level instead of white.
  */
 export function paint(target, data, lut, {
   lo, hi, stretch = 'asinh', softening, blank = [0, 0, 0], blankAlpha = 0, quality = null,
+  cap = Infinity, patches = null,
 } = {}) {
-  data = fillCores(whitenOverflow(data, quality, hi), target.width, hi);
+  data = fillCores(flattenPatches(whitenOverflow(data, quality, hi), patches), target.width, hi, cap);
   const fn = STRETCHES[stretch] ?? STRETCHES.asinh;
   const span = hi - lo || 1e-6;
   const px = target.data;
