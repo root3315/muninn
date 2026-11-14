@@ -903,6 +903,7 @@ function cachePolicy(rel) {
   const path = rel.replace(/\\/g, '/');
   if (path.startsWith('data/')) return 'public, max-age=600, stale-while-revalidate=86400';
   if (path.startsWith('img/')) return 'public, max-age=86400';
+  if (path.startsWith('fonts/')) return 'public, max-age=31536000, immutable';
   return 'no-cache';
 }
 
