@@ -138,16 +138,7 @@ const stampWorkers = { idle: [], waiting: [], count: 0, broken: false, seq: 0 };
 function takeWorker(signal) {
   if (stampWorkers.idle.length) return Promise.resolve(stampWorkers.idle.pop());
   if (stampWorkers.broken) return Promise.resolve(null);
-  if (stampWorkers.count < FETCH_CONCURRENCY) {
-    try {
-      const w = new Worker(new URL('./stamp-worker.js', import.meta.url), { type: 'module' });
-      stampWorkers.count++;
-      return Promise.resolve(w);
-    } catch {
-      workersBroken();
-      return Promise.resolve(null);
-    }
-  }
+  if (stampWorkers.count < FETCH_CONCURRENCY) return Promise.resolve(spawnWorker());
   return new Promise((resolve, reject) => {
     const aborted = () => {
       stampWorkers.waiting = stampWorkers.waiting.filter((x) => x !== waiter);
@@ -158,6 +149,43 @@ function takeWorker(signal) {
     signal?.addEventListener('abort', aborted, { once: true });
     stampWorkers.waiting.push(waiter);
   });
+}
+
+/** A new worker, or null where workers cannot start. */
+function spawnWorker() {
+  let w;
+  try {
+    w = new Worker(new URL('./stamp-worker.js', import.meta.url), { type: 'module' });
+  } catch {
+    workersBroken();
+    return null;
+  }
+  stampWorkers.count++;
+  // One that fails to load while it waits for its first read is let go here,
+  // as readStamp lets go of one that fails during a read.
+  w.addEventListener('error', (e) => {
+    if (!stampWorkers.idle.includes(w)) return;
+    e.preventDefault?.();
+    stampWorkers.idle = stampWorkers.idle.filter((x) => x !== w);
+    w.terminate();
+    stampWorkers.count--;
+    workersBroken();
+  });
+  return w;
+}
+
+/**
+ * Every fetch slot's worker, started before the first read needs it. A
+ * worker loads its own copy of the code, a few round trips on a slow line
+ * and a second of a phone's time; done while the frame list is still on its
+ * way, that is off the time to the first picture.
+ */
+function warmWorkers() {
+  while (!stampWorkers.broken && stampWorkers.count < FETCH_CONCURRENCY) {
+    const w = spawnWorker();
+    if (!w) return;
+    releaseWorker(w);
+  }
 }
 
 /** A worker done with its read goes to the next read waiting, or back to the idle ones. */
@@ -3615,6 +3643,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.searched = false;
   setPlateState(t('epochs.searching'), { progress: 0 });
   drawAxis();
+  warmWorkers();
 
   let frames;
   let truncated = false;
@@ -5519,7 +5548,10 @@ async function boot() {
   const hash = readHash();
   // A link to a field: its frame list is asked for now, beside everything
   // the page still has to set up, rather than after it.
-  if (hash.position) searchAhead(hash.position);
+  if (hash.position) {
+    searchAhead(hash.position);
+    warmWorkers();
+  }
   let stored = null;
   try { stored = localStorage.getItem('muninn.lang'); } catch { /* private window */ }
   // The hash for a shared field, the query for a plain link (/?lang=en), then what this browser chose before.
