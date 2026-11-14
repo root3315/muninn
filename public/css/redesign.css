@@ -1596,3 +1596,11 @@ body { font-size: var(--text-base); line-height: 1.5; }
 @media (pointer: coarse) {
   .find__input, select.field--compact { font-size: 16px; }
 }
+/* A link inside the facts keeps its line, and reaches a finger's height
+   above and below it. */
+@media (pointer: coarse) {
+  .facts .facts__go { padding-block: 11px; margin-block: -11px; }
+}
+@media (pointer: coarse) {
+  .brand { min-block-size: 44px; }
+}
