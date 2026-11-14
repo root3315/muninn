@@ -735,6 +735,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
     },
     /** The controls, for the field to make pressable. */
     controls: controls.mesh,
+    /** The view's standing panels, which a card must keep off: the sign, Planet X's note, the controls. */
+    panels: [sign.mesh, xSign.mesh, controls.mesh],
     /** The depth one visit reaches, for Planet X's sign. */
     setDepth(ab) { state.depthAB = ab; drawSign(); },
     /**

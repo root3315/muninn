@@ -256,8 +256,17 @@ export function createMarkers({ fields, planets, look, lang }) {
      */
     keepClear(zones) {
       if (fieldOpen) return;
-      const inZone = (v, pad) => zones.some((z) => angleBetween([z.dir.x, z.dir.y, z.dir.z], v) < z.deg + pad);
-      for (const m of markers) m.label.mesh.visible = m.label.placed !== false && !inZone(m.v, LABEL_DEG / 4);
+      // Each zone a box as seen from the centre: yaw and pitch from its middle, within its half sizes.
+      const yp = (v) => [Math.atan2(-v[0], -v[2]) / D2R, Math.asin(Math.max(-1, Math.min(1, v[1] / Math.hypot(...v)))) / D2R];
+      const inZone = (v, pad) => {
+        const [y, p] = yp(v);
+        return zones.some((z) => {
+          const [zy, zp] = yp([z.dir.x, z.dir.y, z.dir.z]);
+          const dy = ((y - zy + 540) % 360) - 180;
+          return Math.abs(dy) < z.hw + pad && Math.abs(p - zp) < z.hh + pad;
+        });
+      };
+      for (const m of markers) m.label.mesh.visible = m.label.placed !== false && !inZone(m.v, 2);
       for (const c of captions) c.mesh.visible = !inZone(c.dir, 6);
     },
     dispose() {

@@ -34,7 +34,7 @@ const DRAG_PX = 6;
 /** How far a held ray may turn, in degrees, and still be a press rather than a drag. */
 const DRAG_DEG = 4.5;
 
-export function createPointers({ renderer, scene, camera, dom, look, onPress, onDrag, onRelease, onBack, onBring, onStep, onToggle, onTurn, bringMs = 800 }) {
+export function createPointers({ renderer, scene, camera, dom, look, onPress, onDrag, onRelease, onBack, onBring, onStep, onToggle, onTurn, onTeleport, bringMs = 800, skyRadius = 600 }) {
   const rays = new Map();
   const tmpQ = new THREE.Quaternion();
 
@@ -60,7 +60,8 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
     }`;
   const TINTS = [look.accent, look.counter];
   const RETICLE_DEG = 1.3;
-  const AIM_DEFAULT_M = 6;
+  // Over the sky the ray runs out to the sky's sphere, and the reticle sits on it.
+  const AIM_DEFAULT_M = skyRadius * 0.97;
   const headPos = new THREE.Vector3();
   const headQuat = new THREE.Quaternion();
   const vA = new THREE.Vector3();
@@ -98,12 +99,14 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
     scene.add(reticle);
     const entry = {
       c, hand, line, reticle, source: null, pressed: [], stickArmed: true, id: `xr${i}`, hold: null, handed: i ? 1 : -1,
+      steady: oneEuro(),
       ray: { id: `xr${i}`, origin: new THREE.Vector3(), dir: new THREE.Vector3(0, 0, -1), entry: null }, aimed: false,
     };
     entry.ray.entry = entry;
     c.addEventListener('connected', (e) => {
       entry.source = e.data;
       entry.aimed = false;
+      entry.steady = oneEuro();
       entry.handed = e.data.handedness === 'left' ? -1 : 1;
       // A gaze ray comes from between the eyes; a line from there is in the way.
       line.visible = e.data.targetRayMode !== 'gaze';
@@ -137,9 +140,32 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
   }
 
   /**
-   * Where a pointer is aimed. A controller's own ray. A hand's is steadied:
-   * from an estimate of the shoulder through the wrist, which shakes far less
-   * than the fingers, eased a little from frame to frame.
+   * A one-euro filter on a direction (Casiez, Roussel & Vogel 2012): heavy
+   * smoothing while the hand is still, almost none while it moves, so the
+   * reticle neither trembles nor lags.
+   */
+  function oneEuro({ minCutoff = 1.0, beta = 6.0, dCutoff = 1.0 } = {}) {
+    const alpha = (cutoff, dt) => 1 / (1 + 1 / (2 * Math.PI * cutoff * dt));
+    let prev = null;
+    let dPrev = new THREE.Vector3();
+    let t0 = 0;
+    return (v, now) => {
+      if (!prev) { prev = v.clone(); t0 = now; return prev; }
+      const dt = Math.max(1e-3, (now - t0) / 1000);
+      t0 = now;
+      const d = v.clone().sub(prev).divideScalar(dt);
+      dPrev = dPrev.lerp(d, alpha(dCutoff, dt));
+      const cutoff = minCutoff + beta * dPrev.length();
+      prev.lerp(v, alpha(cutoff, dt)).normalize();
+      return prev;
+    };
+  }
+
+  /**
+   * Where a pointer is aimed. A controller's own target ray, exactly as the
+   * headset gives it. A hand's: from an estimate of the shoulder through the
+   * wrist, which shakes far less than the fingers, through a light one-euro
+   * filter.
    */
   function aim(entry) {
     if (!entry.source) return false;
@@ -151,8 +177,7 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
       vB.y = -0.22;
       vB.add(headPos);
       const dir = vA.clone().sub(vB).normalize();
-      if (entry.aimed) entry.ray.dir.lerp(dir, 0.35).normalize();
-      else entry.ray.dir.copy(dir);
+      entry.ray.dir.copy(entry.steady(dir, performance.now()));
       entry.ray.origin.copy(vA);
     } else {
       entry.ray.origin.setFromMatrixPosition(entry.c.matrixWorld);
@@ -192,6 +217,10 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
     }
     if (b === 'up' && entry.heldSince != null) { entry.heldSince = null; onBack?.(); }
     if (edge(4) === 'down') onToggle?.();
+    // The stick pressed in: an arc to the floor while held, a step there on letting go.
+    const stick = edge(3);
+    entry.aiming = Boolean(pad.buttons[3]?.pressed);
+    if (stick === 'up') onTeleport?.(entry.id);
     const x = pad.axes[2] ?? 0;
     const y = pad.axes[3] ?? 0;
     const dead = (v) => (Math.abs(v) < 0.15 ? 0 : v);
@@ -297,13 +326,18 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
     flat.fov = Math.max(15, Math.min(100, flat.fov * Math.exp(e.deltaY * 0.001)));
     applyLook();
   }, { passive: false });
-  // On a flat screen, W A S D walk, Q and E turn, R and F fly; G held is a grip on what the mouse points at.
-  window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+  // On a flat screen, W A S D walk, Q and E turn, R and F fly; G held is a grip on what the mouse points at,
+  // T held aims a step to the floor where the mouse points.
+  window.addEventListener('keyup', (e) => {
+    const k = e.key.toLowerCase();
+    if (k === 't' && keys.has('t')) onTeleport?.('mouse');
+    keys.delete(k);
+  });
   window.addEventListener('blur', () => keys.clear());
   window.addEventListener('keydown', (e) => {
     if (!renderer.xr.isPresenting && !e.target?.closest?.('input')) {
       const k = e.key.toLowerCase();
-      if ('wasdrfg'.includes(k) && k.length === 1) keys.add(k);
+      if ('wasdrfgt'.includes(k) && k.length === 1) keys.add(k);
       if (k === 'q') onTurn?.(1);
       if (k === 'e') onTurn?.(-1);
     }
@@ -359,12 +393,18 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
       line.material.uniforms.k.value = pickable ? 0.9 : 0.4;
       // The reticle: on whatever the ray landed on, the same size to the eye, turned to the head.
       reticle.visible = line.visible;
-      reticle.position.copy(ray.origin).addScaledVector(ray.dir, d * 0.995);
+      reticle.position.copy(ray.origin).addScaledVector(ray.dir, d);
       reticle.quaternion.copy(headQuat);
       const toEye = reticle.position.distanceTo(headPos);
       reticle.scale.setScalar(2 * Math.tan((RETICLE_DEG / 2) * Math.PI / 180) * Math.max(0.2, toEye));
       reticle.material.uniforms.glow.value = pickable ? 1 : 0;
       reticle.material.uniforms.held.value = ray.entry.hold?.kind === 'select' ? 1 : 0;
+    },
+    /** Where a pointer's reticle is now, or null: for a word beside it. */
+    reticleAt(id) {
+      const ray = rays.get(id);
+      if (ray?.entry) return ray.entry.reticle.visible ? ray.entry.reticle.position : null;
+      return ray ? ray.origin.clone().addScaledVector(ray.dir, AIM_DEFAULT_M) : null;
     },
     /** A short buzz in the hand that holds this ray: `strength` 0–1 for `ms`. */
     pulse(id, strength, ms) {
@@ -383,6 +423,11 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
       const ky = (keys.has('s') ? 1 : 0) - (keys.has('w') ? 1 : 0);
       const kf = (keys.has('f') ? 1 : 0) - (keys.has('r') ? 1 : 0);
       return { walk: [kx, ky], fly: kf };
+    },
+    /** The pointers aiming a step to the floor now: their ids. */
+    aiming() {
+      if (!renderer.xr.isPresenting) return keys.has('t') && flat.mouse ? ['mouse'] : [];
+      return controllers.filter((e) => e.aiming).map((e) => e.id);
     },
     /** The hands squeezing their grips: [{ id, pos (world) }]. */
     grips() {

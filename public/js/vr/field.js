@@ -42,6 +42,8 @@ import { createDepthView } from './depthview.js';
 import { createSpectrumPanel } from './spectrumpanel.js';
 import { createMarksPanel } from './markspanel.js';
 import { createWindows } from './windows.js';
+import { createPagesPanel } from './pagespanel.js';
+import { encodeHash } from '../hash.js';
 import {
   skybotVerdict, seenAt, identifyMark, tagOf, planLink, measureLink, linkArc,
 } from '../marks.js';
@@ -69,6 +71,12 @@ const MARKS_UNDO_MS = 5000;
 const breathe = () => new Promise((r) => { setTimeout(r, 0); });
 /** The field sizes offered in the headset, from the site's own (hash.js FOV_CHOICES). */
 const FOV_SIZES = [0.15, 0.3, 0.6];
+/** The guide's five steps, by their strings' names. */
+const GUIDE = ['Point', 'Field', 'Mark', 'Depth', 'Move'];
+/** The site's "How to read this" cards that hold in the headset, in its order. */
+const READ = ['sky', 'blink', 'modes', 'north', 'mark', 'verdicts', 'ring', 'spec', 'wise', 'depth', 'hunt', 'seasons'];
+/** Remembered once the guide has been seen, so it opens by itself only the first time. */
+const GUIDE_SEEN = 'muninn.vrGuide';
 
 /* The grid as the site cuts it: ~2.5 samples per 6.15″ detector pixel. */
 const gridHeightFor = (fovDeg) => Math.min(768, Math.max(360, Math.round(((fovDeg * 3600) / 6.15) * 2.5)));
@@ -180,7 +188,9 @@ export function openFieldVR(target, env) {
       depthView?.setPlate(liveTex);
       return;
     }
-    const key = `${v.canvasVersion ?? 0}|${sky.knownObjects.get(v.frame.obsId)?.length ?? -1}|${sky.render.palette}`;
+    // What is drawn over the picture is part of it: the marks, their words, the arc.
+    const over = sky.marks.map((m) => `${m.ra},${m.dec},${m.tag ?? ''},${m.analysis?.kind ?? ''}`).join(';');
+    const key = `${v.canvasVersion ?? 0}|${sky.knownObjects.get(v.frame.obsId)?.length ?? -1}|${sky.render.palette}|${over}|${sky.link ? sky.link.mark?.ra ?? 1 : 0}`;
     let kept = visitTex.get(v.frame.obsId);
     if (!kept || kept.key !== key) {
       const c = kept?.canvas ?? document.createElement('canvas');
@@ -247,6 +257,33 @@ export function openFieldVR(target, env) {
   screens.add(spectrum.mesh);
   interactive.add(spectrum.mesh);
   disposers.push(spectrum);
+
+  // The guide and "How to read this", in the card's place while open.
+  const pages = createPagesPanel({
+    look, widthM: SCREENS.card.w, heightM: SCREENS.card.h, pxPerM: SCREENS.card.pxPerM, dist: SCREENS.card.dist,
+    onClose: () => { card.mesh.visible = true; },
+  });
+  screens.add(pages.mesh);
+  interactive.add(pages.mesh);
+  disposers.push(pages);
+  function showPages(title, list) {
+    pages.mesh.position.copy(card.mesh.position);
+    pages.mesh.quaternion.copy(card.mesh.quaternion);
+    pages.mesh.scale.copy(card.mesh.scale);
+    card.mesh.visible = false;
+    pages.show(title, list);
+  }
+
+  /** The same field on the site: its place, size, band, mode, visit and marks, in the site's own link. */
+  function siteUrl() {
+    const url = new URL('./', location.href);
+    const tg = target.target;
+    url.hash = encodeHash({
+      ra, dec, fov, band, lang, name: label, mode: st.mode, visit: sky.index, marks: sky.marks,
+      pm: Number.isFinite(tg?.pmRA) && Number.isFinite(tg?.pmDE) ? [tg.pmRA, tg.pmDE] : null,
+    });
+    return url.href;
+  }
 
   // Every screen can be taken by the grip and put elsewhere (windows.js).
   const windows = createWindows({ group: screens, onMoved: () => drawCard() });
@@ -328,6 +365,9 @@ export function openFieldVR(target, env) {
     else if (id === 'wise') showWise();
     else if (id === 'layout') { windows.reset(); drawCard(); }
     else if (id === 'planets' && st.host) env.onLeave?.(systemUrl(st.host, label, lang));
+    else if (id === 'site') env.onLeave?.(siteUrl());
+    else if (id === 'guide') showPages(tv('vr.guide'), GUIDE.map((k) => ({ heading: tv(`vr.guide${k}H`), text: tv(`vr.guide${k}P`) })));
+    else if (id === 'read') showPages(t('about.title'), READ.map((k) => ({ heading: t(`about.${k}H`), text: t(`about.${k}P`) })));
     // Another band or another size is another field: opened again, the site's way.
     else if (id === 'band' && data !== band) env.onReopen?.({ ...target, band: data });
     else if (id === 'fov' && Number(data) !== fov) env.onReopen?.({ ...target, fov: Number(data) });
@@ -752,11 +792,21 @@ export function openFieldVR(target, env) {
         const days = Math.round(st.all.at(-1).mjd - st.all[0].mjd);
         y = wrapText(ctx, tv('vr.visits', { n: st.all.length, d: days }), x, y, w, T.body * 1.3, 2);
       }
-      if (st.host) {
-        // The system in ExoVision, as the site's card offers it: the headset is left first.
-        const words = `${t('card.planets', { n: st.host[2] })} →`;
-        const pw = Math.min(w, chipWidth(ctx, font, words, bh, minW));
-        button(ctx, hits, look, { x, y: y + 10, w: pw, h: bh, label: words, id: 'planets', font, hover: hov('card', 'planets') });
+      // The way on: the guide, the site's "How to read this", the same field on
+      // the site, and a host's planets in ExoVision; the headset is left first.
+      const ways = [
+        ['guide', tv('vr.guide')],
+        ['read', t('about.title')],
+        ['site', `${tv('vr.onSite')} →`],
+        ...(st.host ? [['planets', `${t('card.planets', { n: st.host[2] })} →`]] : []),
+      ];
+      let bx = x;
+      let by = y + 14;
+      for (const [id, words] of ways) {
+        const bw = Math.min(w, chipWidth(ctx, font, words, bh, minW));
+        if (bx > x && bx + bw > x + w) { bx = x; by += bh + 12; }
+        button(ctx, hits, look, { x: bx, y: by, w: bw, h: bh, label: words, id, font, hover: hov('card', id) });
+        bx += bw + 12;
       }
       ctx.font = `500 ${T.body}px ${FONTS.body}`;
       ctx.fillStyle = look.accent;
@@ -936,6 +986,13 @@ export function openFieldVR(target, env) {
 
   function drawAll() { drawBar(); drawCard(); drawSide(); drawNotice(); }
   drawAll();
+  // The first field ever opened in the headset starts with the guide.
+  try {
+    if (!localStorage.getItem(GUIDE_SEEN)) {
+      localStorage.setItem(GUIDE_SEEN, '1');
+      act('guide');
+    }
+  } catch { /* storage refused: no guide by itself */ }
 
   /* ---- reading the field -------------------------------------------- */
   async function load() {
@@ -1162,6 +1219,8 @@ export function openFieldVR(target, env) {
     },
     /** The node the field in depth hangs from, for grabbing and scaling it. */
     get depthNode() { return depthHolder; },
+    /** The picture on the field's screen now, for the sky to show at the field's place. */
+    get picture() { return main.mesh.material.map; },
     /** The depth scene was scaled by hand: the controls say what a metre is now. */
     depthScaled(s) { depthView.setScale(s); },
     /** What in the field's depth a world ray points at: { card, at, distance } or null. */
@@ -1203,8 +1262,22 @@ export function openFieldVR(target, env) {
     markAt: (u, v) => markAt({ x: u, y: v }),
     /** The screens as windows, for the hands to take (windows.js). */
     windows,
+    /** Every panel standing round the viewer now, for a card to keep off. */
+    panels: () => [...windows.list, pages.mesh, ...depthView.panels].filter((m) => m.visible),
     get marks() { return sky.marks; },
     markAct: (id, i) => markAct(id, i),
+    /** For the checks: how bright the field’s screen is around a texture point (0–255, a 121 × 121 mean). */
+    shade(u, v) {
+      showOnMain();
+      const img = main.mesh.material.map.image;
+      const ctx = img.getContext('2d');
+      const x = Math.round(u * img.width);
+      const y = Math.round((1 - v) * img.height);
+      const d = ctx.getImageData(x - 60, y - 60, 121, 121).data;
+      let s = 0;
+      for (let k = 0; k < d.length; k += 4) s += Math.max(d[k], d[k + 1], d[k + 2]);
+      return s / (d.length / 4);
+    },
     depthPlace: (kind, i) => depthView.placeOf(kind, i),
     get stats() {
       return { status: st.status, read: sky.visits.length, planned: st.entries.length, mode: st.mode, depth: st.depth?.single ?? null, hunt: st.hunt ? (st.hunt.list?.length ?? 0) : null, baked: Boolean(baked) };
