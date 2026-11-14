@@ -1235,12 +1235,17 @@ function renderDepth() {
     $('depth-band').textContent = t('depth.singleShort', { band: d.band });
     $('depth-said').textContent = t('depth.said');
 
+    // One sentence in view: how far short of Planet X one visit falls, and
+    // what stacking them all would reach. The reasoning folds under "More".
     const s = shortfall(d.single);
-    const reach = s && s.magnitudes > 0
-      ? t('depth.reach', { gap: fmt(s.magnitudes, 1), factor: Math.round(s.fluxFactor) })
-      : '';
-    const stack = d.n > 1 ? t('depth.stackNote', { n: d.n, band: d.band, mag: fmt(d.stacked, 1) }) : '';
-    $('depth-reach').textContent = [reach, stack].filter(Boolean).join(' ');
+    const short = s && s.magnitudes > 0;
+    const stacked = d.n > 1 ? { n: d.n, mag: fmt(d.stacked, 1) } : null;
+    $('depth-reach').textContent = short
+      ? t(stacked ? 'depth.short' : 'depth.shortOne', { gap: fmt(s.magnitudes, 1), ...stacked })
+      : stacked ? t('depth.shortStack', stacked) : '';
+    const reach = short ? t('depth.reach', { gap: fmt(s.magnitudes, 1), factor: Math.round(s.fluxFactor) }) : '';
+    const stack = stacked ? t('depth.stackNote', { n: d.n, band: d.band, mag: fmt(d.stacked, 1) }) : '';
+    $('depth-detail').textContent = [reach, stack].filter(Boolean).join(' ');
     drawDepthScale($('depth-scale'), d.single);
     renderCovered();
   }

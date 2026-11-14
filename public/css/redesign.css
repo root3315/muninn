@@ -1452,9 +1452,13 @@ body { font-size: var(--text-base); line-height: 1.5; }
 
 /* The spectrum's cost in one line, how it is counted folded under it. */
 .spectrum__cost { margin: 0; font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-neutral); }
-.spectrum__how summary { cursor: pointer; font-size: var(--text-xs); color: var(--color-muted); list-style-position: inside; }
-.spectrum__how summary:hover { color: var(--color-ink); }
-.spectrum__how[open] summary { margin-block-end: var(--space-2xs); }
+.spectrum__how summary, .depth__more summary { cursor: pointer; font-size: var(--text-xs); color: var(--color-muted); list-style-position: inside; }
+.spectrum__how summary:hover, .depth__more summary:hover { color: var(--color-ink); }
+.spectrum__how[open] summary, .depth__more[open] summary { margin-block-end: var(--space-2xs); }
+/* The depth panel says one thing; its reasoning folds under "More". */
+.depth__reach { margin: 0; font-size: var(--text-sm); color: var(--color-ink); line-height: 1.5; }
+.depth__more > .note { margin: 0 0 var(--space-2xs); }
+@media (pointer: coarse) { .depth__more summary { padding-block: 13px; } }
 /* Under A and B: the light each saw at the field's centre. Amber when the two
    saw different wavelengths, so a residual is not read as change alone. */
 .compare__lambda { flex: 1 1 100%; margin: 0; font-size: var(--text-xs); color: var(--color-neutral); line-height: 1.45; }
