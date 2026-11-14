@@ -39,7 +39,7 @@ import { drawGaiaSky, psfFor } from './gaiasky.js';
 import { fieldArchives, CADC_SEARCH } from './archives.js';
 import {
   SIMBAD_PAGE, VIZIER_PAGE,
-  searchFrames, NoRelayError, UpstreamError, groupVisits, findHeldVisit, nearestHost, bandsPresent, bandRange, parseCoordinates,
+  searchFrames, searchAhead, NoRelayError, UpstreamError, groupVisits, findHeldVisit, nearestHost, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, identifySource, arcsecBetween, fieldObjects, toS3, surveySources,
 } from './catalog.js';
 import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP, propagate, epochOfMjd } from './overlay.js';
@@ -5517,6 +5517,9 @@ function relabel() {
 
 async function boot() {
   const hash = readHash();
+  // A link to a field: its frame list is asked for now, beside everything
+  // the page still has to set up, rather than after it.
+  if (hash.position) searchAhead(hash.position);
   let stored = null;
   try { stored = localStorage.getItem('muninn.lang'); } catch { /* private window */ }
   // The hash for a shared field, the query for a plain link (/?lang=en), then what this browser chose before.
