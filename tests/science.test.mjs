@@ -101,6 +101,25 @@ test('sectors: a steady star scores zero, a one-visit transient stands out', () 
   assert.deepEqual(sectorBounds(20), { x0: 0.8, x1: 1, y0: 0.75, y1: 1 });
 });
 
+test('sectors: each visit is scored against its own band', () => {
+  const W = 50; const H = 40;
+  const visits = [];
+  // Three visits in D1, three in D5; a red star is much brighter in D5 and
+  // steady within each band, so nothing stands out.
+  for (const [band, star] of [['D1', 10], ['D1', 10], ['D1', 10], ['D5', 90], ['D5', 90], ['D5', 90]]) {
+    const data = new Float32Array(W * H).fill(1);
+    for (let k = 0; k < data.length; k++) data[k] += ((k * 7919 + star * 104729) % 1000) / 1e5;
+    data[5 * W + 5] = star;
+    visits.push({ frame: { band }, stamp: { data, width: W, height: H } });
+  }
+  const scored = scoreSectors(visits, { sigmas: visits.map(() => 0.01) });
+  assert.equal(standouts(scored, { limit: Infinity }).length, 0);
+  // Two visits of a band are too few to be usual against.
+  const short = scoreSectors(visits.slice(0, 5), { sigmas: visits.slice(0, 5).map(() => 0.01) });
+  assert.equal(short.cells[0][3], null);
+  assert.equal(short.cells[0][4], null);
+});
+
 test('a cut read off cached sorted pixels equals a fresh one', () => {
   const data = Float32Array.from({ length: 5000 }, (_, k) => Math.sin(k) * 3 + (k % 101 === 0 ? 50 : 0));
   const sorted = sortedFinite(data);
