@@ -321,6 +321,7 @@ export function openFieldVR(target, env) {
     onAction: (id, data) => {
       if (id === 'back') env.onBack?.();
       else if (id === 'fly') env.onFly?.(data);
+      else if (id === 'home') env.onHome?.();
       else if (id === 'screens') env.onBring?.();
       else if (id === 'flip') flip();
       // The view as it was opened: where it stood, at its own size.
@@ -464,6 +465,7 @@ export function openFieldVR(target, env) {
     timeline?.setAB(comparing ? slotOf(sky.visits[sky.a]) : -1, comparing && !sky.useRef ? slotOf(sky.visits[sky.b]) : -1);
     if (v !== lastShown || force) {
       lastShown = v;
+      if (v) depthView.setEpoch(v.frame.mjd);
       drawSide();
       if (!st.playing) updateDepthBodies();
     }
@@ -1292,6 +1294,10 @@ export function openFieldVR(target, env) {
     clockTo: (years, play, dir) => depthView.clockTo(years, play, dir),
     get clockPanel() { return depthView.clockPanel; },
     scrub: (x, dt) => depthView.scrub(x, dt),
+    setMoved: (on) => depthView.setMoved(on),
+    clearFocus: () => depthView.clearFocus(),
+    get focusPhase() { return depthView.focusPhase; },
+    pressDepthControl: (id, data) => depthView.press(id, data),
     depthFilter: (kind, on) => depthView.filter(kind, on),
     get stats() {
       return { status: st.status, read: sky.visits.length, planned: st.entries.length, mode: st.mode, depth: st.depth?.single ?? null, hunt: st.hunt ? (st.hunt.list?.length ?? 0) : null, baked: Boolean(baked) };
