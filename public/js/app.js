@@ -4500,13 +4500,27 @@ async function buildGate() {
   // On a wide screen the sky opens with its proof beside it: the field this
   // tool was tested on, two real visits blinking. A phone has no room for both.
   const proven = state.presets.find((p) => p.key === 'atala');
-  if (proven && !$('gate').hidden && !cardHit && matchMedia('(min-width: 60rem)').matches) {
-    showCard({
+  if (proven && !$('gate').hidden && !cardHit && ROOM_FOR_PROOF.matches) {
+    const hit = {
       kind: 'field', key: proven.key, ra: proven.ra, dec: proven.dec, fov: proven.fov,
       band: proven.band ?? 'all', label: t(`preset.${proven.key}`),
-    });
+    };
+    showCard(hit);
+    provenCard = hit;
   }
 }
+
+/**
+ * Room for the proof beside the sky: a wide, tall screen with a mouse. A
+ * phone, even one asking for the desktop site, keeps its title, search and
+ * fields clear; the card it would have covered them with is one tap away.
+ */
+const ROOM_FOR_PROOF = matchMedia('(min-width: 60rem) and (min-height: 36rem) and (hover: hover)');
+/** The card the sky opened by itself, which leaves again if the room goes. */
+let provenCard = null;
+ROOM_FOR_PROOF.addEventListener('change', (e) => {
+  if (!e.matches && provenCard && cardHit === provenCard) hideCard();
+});
 
 /** The ready fields are markers on the sky now; nothing else lists them. */
 /**
