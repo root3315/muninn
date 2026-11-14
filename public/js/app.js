@@ -92,6 +92,10 @@ const state = {
   allVisits: [],
   /** A visit index from a link, held until that visit has landed. */
   wantVisit: null,
+  /** A preset's own night, shown first as it lands; the blink starts from it. */
+  leadVisit: null,
+  /** Whether this field's blink has started by itself already. */
+  autoPlayed: false,
   readingSince: 0, huntAgain: false,
   /** Visits being read in the background, and how many the field is meant to reach. */
   filling: false, visitGoal: 0,
@@ -2981,6 +2985,10 @@ function fieldTarget({ ra, dec, label, target, pm }) {
   if (target !== undefined) return target;
   const preset = presetAt(ra, dec);
   if (preset?.target) return { ...preset.target, key: preset.key, label: t(`preset.${preset.key}`) };
+  // A preset field without a catalogue position is about something that
+  // moves, like (152) Atala: a ring at its place on one date would sit on
+  // empty sky in every other visit. SkyBoT rings it where it was each time.
+  if (preset) return null;
   const kept = state.target;
   if (kept?.field && kept.label === label && Math.abs(kept.field.ra - ra) < 1e-6 && Math.abs(kept.field.dec - dec) < 1e-6) {
     return kept;
@@ -3035,7 +3043,37 @@ function addVisitInPlace(frame, stamp) {
     if (sky.mode === 'blink') selectMode('single');
     sky.setIndex(sky.visits.findIndex((v) => v.frame === frame));
     syncScrub();
+  } else if (state.leadVisit != null && frame === state.allVisits[state.leadVisit] && !state.playing) {
+    // A preset's own night goes on screen as it lands; the blink starts from it.
+    sky.setIndex(sky.visits.findIndex((v) => v.frame === frame));
+    syncScrub();
   }
+}
+
+/** How long a preset's own night is waited for before another visit is shown. */
+const LEAD_PATIENCE_MS = 6000;
+
+/** Whether the plate should still wait for the preset's own night rather than show `frame`. */
+function leadPending(frame) {
+  if (state.leadVisit == null) return false;
+  const lead = state.allVisits[state.leadVisit];
+  return frame !== lead && !sky.visits.some((v) => v.frame === lead)
+    && performance.now() - state.readingSince < LEAD_PATIENCE_MS;
+}
+
+/**
+ * The blink starts as soon as there are two visits to flip between, once
+ * per field: waiting for the whole first batch kept a still frame on screen
+ * for ten or twenty seconds on a slow line. A link that holds a visit, a
+ * mode chosen meanwhile, or a wish for less motion keep it still.
+ */
+function autoBlink({ final = false } = {}) {
+  if (state.autoPlayed || state.wantVisit != null || state.playing || sky.visits.length < 2) return;
+  if (sky.mode !== 'blink' || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  // The preset's own night is the first frame seen: wait for it.
+  if (!final && state.leadVisit != null && !sky.visits.some((v) => v.frame === state.allVisits[state.leadVisit])) return;
+  state.autoPlayed = true;
+  startPlayback();
 }
 
 /**
@@ -3062,7 +3100,7 @@ async function readOne(entry, grid, signal, { onHeader } = {}) {
     // A held visit is waited for: the plate stays on its loading note rather
     // than showing another night first and then jumping (it is uncovered at
     // the end of the batch regardless, if that visit cannot be read).
-    const waiting = state.wantVisit != null && state.allVisits[state.wantVisit] !== entry.frame;
+    const waiting = (state.wantVisit != null && state.allVisits[state.wantVisit] !== entry.frame) || leadPending(entry.frame);
     addVisitInPlace(entry.frame, stamp);
     if (!waiting && (sky.visits.length === 1 || state.wantVisit == null || sky.current?.frame === entry.frame)) {
       setPlateState('', { hidden: true });
@@ -3071,6 +3109,7 @@ async function readOne(entry, grid, signal, { onHeader } = {}) {
     // first batch held it back half a minute on a slow line, and people had
     // moved on before it came.
     if (sky.visits.length >= 2 && $('plate-state').hidden) maybeStartTour();
+    if (!state.filling) autoBlink();
     syncScrub();
     if (state.filling) {
       scheduleFillRefresh();
@@ -3117,7 +3156,7 @@ async function readVisits(entries, grid, signal) {
   // rows was a second sooner still to the first picture but a second or two
   // later to the tenth. The one a link holds goes first, as that is the one
   // the page will show.
-  const lead = entries.find((e) => e.frame === state.allVisits[state.wantVisit]) ?? entries[0];
+  const lead = entries.find((e) => e.frame === state.allVisits[state.wantVisit ?? state.leadVisit]) ?? entries[0];
   let leadIn;
   const leadStarted = new Promise((resolve) => { leadIn = resolve; });
   const first = step(lead, { onHeader: leadIn }).finally(leadIn);
@@ -3344,6 +3383,8 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.visits = [];
   state.allVisits = [];
   state.wantVisit = visit;
+  state.leadVisit = null;
+  state.autoPlayed = false;
   // A and B the person chose stay chosen when the last visits land.
   state.abChosen = false;
   state.truncated = false;
@@ -3443,6 +3484,16 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   // A visit a link holds is read with the first ten, wherever it falls.
   const wanted = state.allVisits[visit];
   if (wanted && !chosen.includes(wanted)) chosen.push(wanted);
+  // Without one, a preset leads with the visit its card shows.
+  if (!wanted) {
+    const lead = await presetLead(ra, dec, state.allVisits);
+    if (ctrl.signal.aborted) return;
+    const first = state.allVisits[lead];
+    if (first) {
+      state.leadVisit = lead;
+      if (!chosen.includes(first)) chosen.push(first);
+    }
+  }
   chosen.sort((p, q) => p.mjd - q.mjd);
   state.visits = chosen.map((frame) => ({ frame, status: 'pending' }));
   drawAxis();
@@ -3471,6 +3522,14 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   // is checked again when it runs out, in case nothing lands after that.
   state.readingSince = performance.now();
   setTimeout(() => { if (gen === fieldSeq) maybeHuntEarly(); }, HUNT_PATIENCE_MS + 50);
+  // A preset's night that is slow to come is not waited for past its patience.
+  if (state.leadVisit != null) {
+    setTimeout(() => {
+      if (gen !== fieldSeq || !sky.visits.length || state.wantVisit != null) return;
+      setPlateState('', { hidden: true });
+      autoBlink({ final: true });
+    }, LEAD_PATIENCE_MS + 50);
+  }
 
   const bytes = await readVisits(state.visits, grid, ctrl.signal);
 
@@ -3516,8 +3575,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   measureDepth({ final: true });
   if (sky.marks.length) retrackMarks();
 
-  const stillness = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (holding < 0 && sky.visits.length > 1 && !state.playing && !stillness && sky.mode === 'blink') startPlayback();
+  if (holding < 0) autoBlink({ final: true });
   // The rest of the field's visits, in the background (see fillVisits).
   fillVisits(fillCap());
   maybeStartTour();
@@ -3916,6 +3974,23 @@ function nameOnSky(hit) {
 
 /** One stored frame per ready field: which exposure each picture is. */
 let cardThumbs = null;
+/** The stored card frames, fields and sky, asked for once. */
+const loadThumbs = () => (cardThumbs ? Promise.resolve(cardThumbs) : Promise.all(['data/thumbs.json', 'data/sky/thumbs.json'].map((url) => (
+  fetch(url, { signal: deadline(null, CATALOG_DEADLINE_MS) }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}))
+))).then(([fields, deep]) => { cardThumbs ??= { fields, deep }; return cardThumbs; }));
+
+/**
+ * The visit a preset field leads with: the date its card shows, so (152)
+ * Atala opens on 25 Dec 2025, the night it sits in the middle, and not on
+ * whichever visit's bytes came first.
+ */
+async function presetLead(ra, dec, visits) {
+  const preset = presetAt(ra, dec);
+  if (!preset) return -1;
+  const thumb = (await loadThumbs()).fields?.[preset.key];
+  const mjd = thumb?.iso ? Date.parse(`${thumb.iso}Z`) / 86400000 + 40587 : NaN;
+  return Number.isFinite(mjd) ? findHeldVisit(visits, { mjd, band: thumb.band }) : -1;
+}
 /** The frame lists of ready fields, asked for once each. */
 const cardFields = new Map();
 /** What the card is showing, so only its own answers are written into it. */
@@ -4073,9 +4148,7 @@ async function showCard(hit, { focus = false } = {}) {
   showPlanets(hit);
 
   // The frame: only where one is stored. No picture stands in for a missing one.
-  cardThumbs ??= await Promise.all(['data/thumbs.json', 'data/sky/thumbs.json'].map((url) => (
-    fetch(url, { signal: deadline(null, CATALOG_DEADLINE_MS) }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}))
-  ))).then(([fields, deep]) => ({ fields, deep }));
+  await loadThumbs();
   if (cardHit !== hit) return;
   // A named star is stored under its place on the sky, as the bake wrote it.
   const skyKey = hit.kind === 'deep' ? hit.key
