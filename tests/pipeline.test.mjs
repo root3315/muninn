@@ -73,3 +73,27 @@ test('a saturated core is filled for display, and the blank beyond the frame is 
   assert.ok(Number.isNaN(out[5]) && Number.isNaN(out[23]), 'the edge stays blank');
   assert.ok(Number.isNaN(data[7]), 'the data themselves are untouched');
 });
+
+test('a full-size frame has its FLAGS header read beside the image header, with the same result', async () => {
+  const asked = [];
+  const read = async (frame, grid) => withFetch(
+    (url, init) => { asked.push(init.headers.Range); return serve(frame.file)(url, init); },
+    () => loadStamp(`mem://${Math.random()}.fits`, grid),
+  );
+  // An unusual layout: the FLAGS header lies outside the window read ahead
+  // and is read on its own, as before.
+  const odd = syntheticFrame({ n: 2040, imageHeaderBlocks: 3 });
+  const g = new TangentGrid(odd.ra, odd.dec, 0.05, 60, 60);
+  const reference = await read(odd, g);
+  assert.equal(asked.length, 5, 'header, read ahead, FLAGS header, rows, FLAGS rows');
+  // The usual layout: a 2040 × 2040 image whose data starts at 25 920 or
+  // 28 800 bytes, so the FLAGS header is in the window read ahead.
+  for (const blocks of [8, 9]) {
+    asked.length = 0;
+    const stamp = await read(syntheticFrame({ n: 2040, imageHeaderBlocks: blocks }), g);
+    assert.equal(asked.length, 4, 'no separate read of the FLAGS header');
+    assert.equal(stamp.meta.flaggedPixels, reference.meta.flaggedPixels);
+    assert.deepEqual(stamp.data, reference.data);
+    assert.deepEqual(stamp.quality, reference.quality);
+  }
+});

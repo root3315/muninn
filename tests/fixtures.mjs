@@ -10,6 +10,7 @@ const BLOCK = 2880;
 export function header(cards) {
   const lines = cards.map(([key, value]) => {
     if (key === 'END') return 'END'.padEnd(80);
+    if (key === '') return ' '.repeat(80);
     let v;
     if (typeof value === 'string') v = `'${value.padEnd(8)}'`.padEnd(20);
     else if (typeof value === 'boolean') v = (value ? 'T' : 'F').padStart(20);
@@ -43,7 +44,7 @@ export const DETECTOR_DEG = 6.15 / 3600;
  *   · a cosmic-ray hit, one pixel at 50, at (44, 20), flagged TRANSIENT;
  *   · the source's own pixels flagged OUTLIER, which must not be masked.
  */
-export function syntheticFrame({ ra = 150, dec = 10, n = 64, noise = 0.02 } = {}) {
+export function syntheticFrame({ ra = 150, dec = 10, n = 64, noise = 0.02, imageHeaderBlocks = 1 } = {}) {
   const rand = gaussian(12345);
   const img = new Float32Array(n * n);
   const flags = new Int32Array(n * n);
@@ -70,11 +71,14 @@ export function syntheticFrame({ ra = 150, dec = 10, n = 64, noise = 0.02 } = {}
     return buf;
   };
 
+  const imageCards = [['XTENSION', 'IMAGE'], ['BITPIX', -32], ['NAXIS', 2], ['NAXIS1', n], ['NAXIS2', n],
+    ['PCOUNT', 0], ['GCOUNT', 1], ['EXTNAME', 'IMAGE'], ['BUNIT', 'MJy/sr'], ...wcs, ['MJD-OBS', 61000]];
+  // Blank cards stretch the header, to put the image data where a real
+  // file's starts (SPHEREx's IMAGE headers run to eight or nine blocks).
+  const blanks = Math.max(0, imageHeaderBlocks * 36 - imageCards.length - 1);
   const parts = [
     header([['SIMPLE', true], ['BITPIX', 8], ['NAXIS', 0], ['EXTEND', true], ['END']]),
-    header([['XTENSION', 'IMAGE'], ['BITPIX', -32], ['NAXIS', 2], ['NAXIS1', n], ['NAXIS2', n],
-      ['PCOUNT', 0], ['GCOUNT', 1], ['EXTNAME', 'IMAGE'], ['BUNIT', 'MJy/sr'], ...wcs,
-      ['MJD-OBS', 61000], ['END']]),
+    header([...imageCards, ...Array.from({ length: blanks }, () => ['', '']), ['END']]),
     pad(bigEndian(img, (v, o, x) => v.setFloat32(o, x, false))),
     header([['XTENSION', 'IMAGE'], ['BITPIX', 32], ['NAXIS', 2], ['NAXIS1', n], ['NAXIS2', n],
       ['PCOUNT', 0], ['GCOUNT', 1], ['EXTNAME', 'FLAGS'], ...wcs, ['END']]),
