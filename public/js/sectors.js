@@ -11,8 +11,14 @@
  *
  *     score = (peak in this visit − median peak across visits) / noise
  *
- * A star that is always there scores zero — it is in the median. Something that
- * appeared, brightened, or moved into the sector scores high.
+ * A star that is always there scores zero — it is in the median. A visit
+ * scores high when the sector's dominant peak changed: something brighter than
+ * all else in the sector appeared, or the brightest source brightened. This is
+ * an attention map, not a complete detector of moving sources: a faint newcomer
+ * beside a brighter steady star leaves the sector's peak where it was. Small
+ * tiles instead of whole sectors were tried on real fields and lit dozens of
+ * times more cells (unflagged single-pixel hits, stars brighter in one band
+ * than another), so the sector peak stays.
  *
  * The noise is the larger of two things: the spread of that sector's own peaks,
  * so a busy sector has to work harder to be called surprising than an empty one

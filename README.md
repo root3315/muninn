@@ -334,8 +334,15 @@ in every visit by one question — how unusual is this visit, for this sector?
 
     score = (peak in this visit − median peak across visits) / noise
 
-A star that is always there scores zero, because it is in the median. Something
-that appeared, brightened or moved in scores high. The noise is the larger of
+A star that is always there scores zero, because it is in the median. A visit
+scores high when the sector's dominant peak changed: something brighter than
+everything else in the sector appeared, or the brightest source brightened.
+It is an attention map, not a complete detector of moving sources. A faint
+newcomer in a sector that a brighter steady star always tops does not change
+the sector's peak and is not flagged; marks and the blink are how such a source
+is found. Scoring each sector on small tiles instead was tried on real fields
+and lit dozens of times more cells, from unflagged single-pixel hits and from
+stars that are brighter in one band than another, so it was not adopted. The noise is the larger of
 the sector's own spread of peaks and the frame's pixel noise: without that
 second floor a flat sector divides by almost nothing and reports scores in the
 thousands, which is a bug that looks like a discovery.
