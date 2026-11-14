@@ -426,7 +426,7 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .survey__retry:hover { background: var(--color-paper-4); }
 .survey__retry:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
 .survey__retry:disabled { color: var(--color-rule-strong); cursor: not-allowed; }
-@media (pointer: coarse) { .survey__retry { min-block-size: 40px; } }
+@media (pointer: coarse) { .survey__retry { min-block-size: 44px; } }
 .plate__state-line { font-family: var(--font-body); font-weight: 500; font-size: var(--text-md); line-height: 1.3; color: var(--color-ink); }
 .plate__log-band { opacity: 1; }
 .plate__log-row { border-radius: var(--radius-xs); }
@@ -1001,12 +1001,13 @@ body { font-size: var(--text-base); line-height: 1.5; }
 }
 
 @media (pointer: coarse) {
-  .segment, .segments--tiny .segment { min-block-size: 40px; }
-  .lambda__chip { min-block-size: 40px; }
-  .gate__jump-go { min-block-size: 40px; display: inline-flex; align-items: center; }
-  .link, .find__go, .again, .mark__kill, .field--compact { min-block-size: 40px; }
-  .link--lang, .theme-key { block-size: 40px; min-inline-size: 40px; }
-  .find__go, .mark__kill { min-inline-size: 40px; }
+  .segment, .segments--tiny .segment { min-block-size: 44px; }
+  .lambda__chip { min-block-size: 44px; }
+  .gate__jump-go { min-block-size: 44px; display: inline-flex; align-items: center; }
+  .link, .find__go, .again, .mark__kill, .field--compact, .marks-clear, .spectrum__chip, .btn { min-block-size: 44px; }
+  .link--lang, .theme-key { block-size: 44px; min-inline-size: 44px; }
+  .find__go, .mark__kill, .gate__go, .gate-card__close { min-inline-size: 44px; }
+  .gate__go, .gate-card__close { min-block-size: 44px; }
   .key { min-inline-size: 44px; min-block-size: 44px; }
 }
 
@@ -1243,16 +1244,128 @@ body { font-size: var(--text-base); line-height: 1.5; }
   .spectrum__progress, .spectrum__chip { transition: none; }
 }
 
-/* A phone: the run's modes take a line of their own and may shrink, so
-   "Один заход" and "Стек" are not cut off past the screen's edge. */
+/* ===================================================== small screens
+
+   Stacked, the picture comes first and its controls stay with it: play, the
+   modes and the two dates sit under the plate (app.js places them there),
+   the run follows, and what was found comes after the run. */
+@media (max-width: 68rem), (max-height: 34rem) {
+  .verdict { order: 4; }
+  .shell {
+    padding-inline: max(var(--space-xs), env(safe-area-inset-left, 0px)) max(var(--space-xs), env(safe-area-inset-right, 0px));
+    padding-block-end: calc(var(--space-xs) + env(safe-area-inset-bottom, 0px));
+  }
+  .run, .run__head, .run__scroll { min-inline-size: 0; max-inline-size: 100%; }
+
+  /* The label in two short lines: the night and its hour, then the band, the
+     visit and the flags; where it is, under them. */
+  .caption { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-3xs) var(--space-sm); padding-block: 0 var(--space-2xs); }
+  .caption > .when { flex: 1 1 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-sm); }
+  .caption .when__time, .caption .when__band { padding-block-start: 0; }
+  .caption > :is(.survey, .under__pos) { flex: 1 1 100%; }
+
+  .mount {
+    grid-template-rows: auto var(--plate-h) auto auto auto;
+    grid-template-areas: "cap cap cap" "prev cell next" "deck deck deck" "compare compare compare" "bands bands bands";
+  }
+  .mount > .deck {
+    grid-area: deck; margin: 0; padding: 0; border: 0;
+    flex-wrap: wrap; justify-content: center; gap: var(--space-xs) var(--space-md);
+  }
+  .mount > .deck .segments { flex: 0 1 auto; inline-size: auto; flex-wrap: wrap; justify-content: center; }
+  .mount > .compare { grid-area: compare; min-inline-size: 0; margin: 0; }
+  .mount > .compare .row { min-inline-size: 0; flex-wrap: nowrap; }
+  .mount > .compare select { flex: 1 1 0; min-inline-size: 0; max-inline-size: none; }
+  .run__head > .key--fit { margin-inline-start: auto; }
+  /* The filter wheel under the plate, in two rows of four. */
+  .bands { align-self: stretch; }
+  .bands .lambda { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3xs); }
+  .bands .lambda__chip { min-inline-size: 0; }
+}
+
+/* A phone held upright: the plate the full width, and under it one row of
+   transport (a step back, play, a step on), the five modes as one track, and
+   the filter wheel as two rows of chips. */
 @media (max-width: 40rem) {
-  .run__head .deck { flex-wrap: wrap; }
-  .deck .segments { flex: 1 1 100%; min-inline-size: 0; }
-  .run__scroll { min-inline-size: 0; }
-  /* The visit pickers are as wide as their longest date, and that width
-     held the whole run past the screen. */
-  .run, .run__head, .run__head .compare { min-inline-size: 0; max-inline-size: 100%; }
-  .run__head .compare select { min-inline-size: 0; inline-size: 100%; }
+  .mount {
+    --pad: var(--space-sm);
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    grid-template-rows: auto var(--plate-h) auto auto auto auto;
+    grid-template-areas: "cap cap cap" "cell cell cell" "prev keys next" "modes modes modes" "compare compare compare" "bands bands bands";
+    row-gap: var(--space-xs); column-gap: var(--space-xs);
+  }
+  /* The panel's own edge frames the board: one margin, not two. */
+  .stage { padding: var(--space-2xs) 0; }
+  .mount > .deck { display: contents; }
+  .mount > .deck .keys { grid-area: keys; align-self: center; }
+  .mount .key { inline-size: 48px; block-size: 48px; }
+  .step { min-block-size: 48px; min-inline-size: 48px; justify-content: center; }
+  .mount > .deck .segments {
+    grid-area: modes; display: flex; flex-wrap: nowrap; gap: 2px;
+    inline-size: 100%; padding: 2px;
+    background: var(--color-paper-2); border-radius: var(--radius-round);
+  }
+  .mount > .deck .segment {
+    flex: 1 1 0; min-inline-size: min-content; min-block-size: 44px;
+    padding-inline: var(--space-2xs);
+    font-size: var(--text-xs); line-height: 1.15; text-align: center; white-space: normal;
+  }
+  .mount > .compare { flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: var(--space-2xs); padding: var(--space-xs) var(--space-sm); }
+  .mount > .compare .row { flex: 0 0 auto; display: flex; align-items: center; gap: var(--space-xs); }
+  .mount > .compare select { flex: 1 1 auto; inline-size: auto; }
+
+  .bands .lambda { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2px; }
+  .bands .lambda__chip { min-inline-size: 0; min-block-size: 44px; padding-inline: var(--space-2xs); justify-items: center; }
+  .bands .lambda__chip:first-child { grid-column: 1 / -1; }
+  .bands .lambda__um { display: none; }
+
+  .run { padding: var(--space-sm) var(--space-sm) var(--space-xs); }
+  .run__head { gap: var(--space-3xs) var(--space-sm); }
+  .side > * { padding-inline: var(--space-md); }
+  .credit { overflow-wrap: anywhere; }
+  .sheet { max-inline-size: calc(100vw - 2 * var(--space-xs)); }
+  .sheet__body { padding: var(--space-lg) var(--space-md); }
+}
+
+/* A phone on its side: the plate takes the height, on the right, and the
+   label, the steps, play, the modes and the bands share the column beside
+   it, so the picture and everything that moves it are on screen at once. */
+@media (max-height: 34rem) and (min-width: 40.0625rem) {
+  .mount {
+    --pad: var(--space-sm);
+    --plate-w: min(calc(100svh - 2 * var(--pad) - 2 * var(--space-xs)), calc(58cqw * var(--aspect)));
+    --plate-h: calc(var(--plate-w) / var(--aspect));
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--plate-w);
+    grid-template-rows: auto auto auto auto minmax(0, 1fr);
+    grid-template-areas: "cap cap cell" "prev next cell" "deck deck cell" "compare compare cell" "bands bands cell";
+    align-items: start; row-gap: var(--space-xs); column-gap: var(--space-sm);
+  }
+  .step {
+    display: flex; align-items: center; gap: var(--space-xs);
+    inline-size: auto; block-size: auto; min-block-size: 44px; padding-inline: var(--space-2xs) var(--space-sm);
+  }
+  .step--next { flex-direction: row-reverse; padding-inline: var(--space-sm) var(--space-2xs); }
+  .step__d { display: block; min-block-size: 0; }
+  .mount > .deck { justify-content: flex-start; flex-wrap: nowrap; gap: var(--space-xs); }
+  .mount > .deck .segments { flex: 1 1 auto; flex-wrap: nowrap; justify-content: flex-start; gap: 2px; }
+  .mount > .deck .segment { min-inline-size: 44px; padding-inline: var(--space-xs); font-size: var(--text-xs); }
+  .bands { align-self: start; }
+  .bands .lambda { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3xs); }
+  .bands .lambda__chip { min-inline-size: 0; }
+  .bands .lambda__um { display: none; }
+}
+
+/* A touch screen: every place to press is a finger wide. */
+@media (pointer: coarse) {
+  .marks-clear, .spectrum__chip, .find, .mast__group .link { min-block-size: 44px; }
+  .link, .gate__jump-go { min-inline-size: 44px; justify-content: center; }
+}
+
+/* A short phone: the poster gives up its second line of small print (the
+   same words open under "How to read this"), so the name stays clear of the
+   links above it. */
+@media (max-width: 48rem) and (max-height: 37.5rem) {
+  .gate__src { display: none; }
 }
 
 /* A mark folds to its verdict and one line; unfolded, its evidence sits in

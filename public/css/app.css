@@ -1304,7 +1304,7 @@ select.field--compact { background-position: right 9px center, right 5px center;
 @media (pointer: coarse) {
   .btn, .key { min-block-size: 44px; }
   .key { min-inline-size: 44px; }
-  .pill, .segment { min-block-size: 40px; }
+  .pill, .segment { min-block-size: 44px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

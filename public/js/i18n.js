@@ -319,6 +319,7 @@ const STRINGS = {
     'readout.canvasIdle': 'No sky loaded yet',
 
     'mark.help': 'Click the picture to measure that spot in every visit.',
+    'mark.helpTouch': 'Tap the picture to measure that spot in every visit.',
     'mark.centre': 'Mark the centre',
     'mark.callNone': 'Nothing here',
     'mark.callTransient': 'Seen once',
@@ -908,6 +909,7 @@ const STRINGS = {
     'readout.canvasIdle': 'Небо ещё не загружено',
 
     'mark.help': 'Щёлкните по снимку: точка будет измерена в каждом заходе.',
+    'mark.helpTouch': 'Коснитесь снимка: точка будет измерена в каждом заходе.',
     'mark.centre': 'Отметить центр',
     'mark.callNone': 'Здесь ничего',
     'mark.callTransient': 'Было один раз',

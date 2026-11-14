@@ -814,9 +814,25 @@ a { color: inherit; }
 }
 
 @media (pointer: coarse) {
-  .bar__lang, .bar__link { min-block-size: 40px; }
-  .reads button { min-block-size: 40px; align-items: center; }
-  .foot__scale button { block-size: 40px; }
+  .bar__lang, .bar__link { min-block-size: 44px; }
+  .bar__lang, .bar__link { min-inline-size: 44px; justify-content: center; }
+  .reads button { min-block-size: 44px; align-items: center; }
+  .foot__scale button { block-size: 44px; }
+  .foot__key { inline-size: 44px; block-size: 44px; flex: none; }
+}
+/* A narrow phone: the bar's three keys close up, and below 336 px the name
+   gives its place to them (the tool's own link goes to the same page). */
+@media screen and (max-width: 24rem) {
+  .bar { gap: 0.25rem; }
+  .bar__acts { gap: 0.25rem; }
+  .bar__link { padding-inline: 0.5rem; }
+}
+@media screen and (max-width: 21rem) {
+  .bar__brand { display: none; }
+}
+/* A phone on its side keeps its notch clear of the words. */
+.bar, .foot {
+  padding-inline: max(var(--edge), env(safe-area-inset-left, 0px)) max(var(--edge), env(safe-area-inset-right, 0px));
 }
 
 @media (prefers-reduced-motion: reduce) {
