@@ -4793,19 +4793,25 @@ function placeTools() {
  * findings column had none. The two dates the wipe and the difference compare
  * stand where the steps were: under the strip they took a row of height from
  * the plate, and the picture shrank the moment a mode was chosen. Stacked,
- * each goes back where it is read in order: the figures under the finding,
- * the dates under the modes.
+ * the figures go back under the finding, and play, the modes and the two
+ * dates come up under the plate: at the foot of the run they sat a screen
+ * below the picture they drive, and the two were never in view together.
  */
 const DESK = matchMedia('(min-width: 68.0625rem) and (min-height: 34.0625rem)');
 
 function placeLabel() {
   const facts = $('stat-line');
   const compare = $('compare');
+  const deck = document.querySelector('.deck');
   if (DESK.matches) {
     $('field-pos').before(facts, compare);
+    $('matrix-found').after(deck);
+    $('play').after($('run-fit'));
   } else {
     $('field-cue').before(facts);
-    document.querySelector('.run__head').append(compare);
+    document.querySelector('.bands').before(deck, compare);
+    // The key that lets the run scroll belongs to the run, not to the picture.
+    $('matrix-found').after($('run-fit'));
   }
 }
 
@@ -5431,9 +5437,11 @@ function relabel() {
   $('play').setAttribute('aria-label', t(state.playing ? 'play.pause' : 'play.play'));
   $('tools-toggle').textContent = t($('tools').hidden ? 'tools.toggle' : 'tools.hide');
   $('bare').textContent = t(state.bare ? 'view.chrome' : 'view.bare');
-  // A touch screen has no pointer to move over anything.
-  $('cursor-hint').textContent = t(matchMedia('(pointer: coarse)').matches
-    ? 'readout.hintTouch' : 'readout.hint');
+  // A touch screen has no pointer to move over anything, and nothing to click.
+  const touch = matchMedia('(pointer: coarse)').matches;
+  $('cursor-hint').textContent = t(touch ? 'readout.hintTouch' : 'readout.hint');
+  $('mark-help').dataset.i18n = touch ? 'mark.helpTouch' : 'mark.help';
+  $('mark-help').textContent = t($('mark-help').dataset.i18n);
   renderPresets();
   renderArchives();
   // Where the sky in the entry screen comes from, with the other credits.
