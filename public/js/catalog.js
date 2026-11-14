@@ -392,7 +392,8 @@ export async function jplBodies({ ra, dec, radiusDeg, iso }, { signal, magLimit 
  * pause, rather than a wall of refusals and visits left unchecked.
  */
 const JPL_AT_ONCE = 2;
-const JPL_RETRIES = 2;
+/** JPL answers in 20–70 s, so a busy relay frees a slot in seconds, not at once. */
+const JPL_RETRY_MS = [5000, 10000, 20000];
 let jplRunning = 0;
 const jplQueue = [];
 
@@ -405,8 +406,11 @@ async function jplTurn(ask, signal) {
         return await ask();
       } catch (err) {
         const busy = /HTTP 503|busy/i.test(String(err?.message));
-        if (!busy || attempt >= JPL_RETRIES || signal?.aborted) throw err;
-        await new Promise((wait) => setTimeout(wait, 1200 * (attempt + 1)));
+        if (!busy || attempt >= JPL_RETRY_MS.length || signal?.aborted) throw err;
+        await new Promise((wait, stop) => {
+          const timer = setTimeout(wait, JPL_RETRY_MS[attempt]);
+          signal?.addEventListener('abort', () => { clearTimeout(timer); stop(signal.reason); }, { once: true });
+        });
       }
     }
   } finally {
