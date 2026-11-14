@@ -75,6 +75,7 @@ function wipe(plate, active = () => true) {
   };
   plate.addEventListener('pointerdown', (e) => {
     if (!active()) return;
+    e.preventDefault();
     plate.setPointerCapture(e.pointerId);
     plate.classList.add('is-dragging');
     at(e);
@@ -159,6 +160,8 @@ function initSky(fig) {
   };
   ruler.addEventListener('pointerdown', (e) => {
     touched(fig);
+    // A drag along the ruler must not select the text around the sheet.
+    e.preventDefault();
     const det = e.target.closest?.('.art-sky__det');
     if (det) { set((Number(det.dataset.d) - 1) * PER + 9); return; }
     const r = svg.getBoundingClientRect();
@@ -215,12 +218,27 @@ function initNorth(fig) {
 
 /* ----------------------------------------------------- 04 · five modes */
 
+/** The card's mode values, and the field's words for each. */
+const MODE_WORD = { blink: 'blink', wipe: 'wipe', diff: 'diff', single: 'single', stack: 'stack' };
+
 function initModes(fig) {
-  for (const radio of fig.querySelectorAll('input[name="art-mode"]')) {
-    radio.addEventListener('change', () => { if (radio.checked) fig.dataset.mode = radio.value; });
+  const what = fig.querySelector('.art-modes__what');
+  const relabel = () => {
+    const key = MODE_WORD[fig.dataset.mode];
+    what.textContent = `${t(`mode.${key}`)} · ${t(`mode.${key}When`)}`;
+  };
+  const choose = (mode) => {
+    fig.dataset.mode = mode;
+    const radio = fig.querySelector(`input[value="${mode}"]`);
+    if (radio) radio.checked = true;
+    relabel();
+  };
+  for (const radio of fig.querySelectorAll('input[name^="art-mode"]')) {
+    radio.addEventListener('change', () => { if (radio.checked) choose(radio.value); });
   }
   wipe(fig.querySelector('.art-wipe'), () => fig.dataset.mode === 'wipe');
-  return {};
+  relabel();
+  return { relabel, choose };
 }
 
 /* ------------------------------------------------------- 05 · the run */
@@ -256,17 +274,58 @@ function initRun(fig) {
 
 /* ------------------------------------------------------ 06 · a mark */
 
+/**
+ * The stars of the mark frame, in per cent of it. The first is the one the
+ * talk marked, and its card is the real one; the others get a card that says
+ * it is an illustration, with a word their look would plausibly earn.
+ */
+const STARS = [
+  { x: 50.5, y: 49.5, v: 'Fixed', real: true },
+  { x: 80.6, y: 17.4, v: 'Saturated' },
+  { x: 94.7, y: 10.6, v: 'Fixed' },
+  { x: 91.0, y: 34.4, v: 'Fixed' },
+  { x: 57.7, y: 63.1, v: 'Fixed' },
+  { x: 12.1, y: 74.7, v: 'Fixed' },
+];
+
 function initMark(fig) {
-  const star = fig.querySelector('.art-mark__star');
+  const plate = fig.querySelector('.art-mark__plate');
   const img = fig.querySelector('.art-mark__card-img');
-  const mark = (on) => {
-    fig.classList.toggle('is-marked', on);
-    star.setAttribute('aria-pressed', String(on));
+  const label = fig.querySelector('.art-mark__label');
+  const word = fig.querySelector('.art-mark__note-v');
+  const buttons = STARS.map((star) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'art-mark__star';
+    b.style.setProperty('--sx', `${star.x}%`);
+    b.style.setProperty('--sy', `${star.y}%`);
+    b.setAttribute('aria-pressed', 'false');
+    plate.append(b);
+    return b;
+  });
+  let at = -1;
+  const relabel = () => {
+    img.src = img.dataset.srcLang.replace('{lang}', getLanguage());
+    for (const b of buttons) b.setAttribute('aria-label', t('about.markTap'));
+    if (at < 0) return;
+    label.textContent = `1 ${t(`mark.call${STARS[at].v}`)}`;
+    word.textContent = t(`mark.call${STARS[at].v}`);
   };
-  star.addEventListener('click', () => { touched(fig); mark(!fig.classList.contains('is-marked')); });
-  const relabel = () => { img.src = img.dataset.srcLang.replace('{lang}', getLanguage()); };
+  const mark = (i) => {
+    at = i;
+    fig.classList.toggle('is-marked', i >= 0);
+    pressOne(buttons, buttons[i]);
+    if (i < 0) return;
+    const star = STARS[i];
+    fig.classList.toggle('is-real', Boolean(star.real));
+    fig.style.setProperty('--sx', `${star.x}%`);
+    fig.style.setProperty('--sy', `${star.y}%`);
+    fig.dataset.side = star.x > 40 ? 'left' : 'right';
+    relabel();
+  };
+  buttons.forEach((b, i) => b.addEventListener('click', () => { touched(fig); mark(at === i ? -1 : i); }));
   relabel();
-  return { relabel, seen: () => later(fig, 1600, () => mark(true)) };
+  return { relabel, seen: () => later(fig, 1600, () => mark(0)) };
 }
 
 /* -------------------------------------------- 07 · words, 08 · rings */
@@ -329,15 +388,81 @@ function initSpectrum(fig) {
 
 /* ------------------------------------------- 11 · Gaia and WISE, 13 · depth */
 
+// Where the talk's overlay drew each source on this frame, in its pixels.
+// A Gaia circle carries its DR3 id and G where it matches, within 4 px, a
+// star of the field's own Gaia list (data/vr/barnard.json, carried to the
+// visit by proper motion); the fainter ones are not in that list. The one
+// diamond named is Barnard's Star where WISE saw it in 2010, 15 years of its
+// motion south of its Gaia circle.
+const BARNARD = '4472832130942575872';
+const GAIA = [[471, 187], [544, 200, '4472836327118455552', 13.45], [284, 206], [299, 232, '4472837495349546240', 13.47],
+  [483, 253, '4472836047939582592', 13.60], [674, 276, '4472836189681423488', 13.71], [359, 276], [421, 306], [402, 312],
+  [672, 313], [694, 318, '4472835807421415680', 12.03], [210, 319], [369, 320], [314, 328], [640, 330],
+  [448, 340, BARNARD, 8.19], [268, 362], [592, 396], [285, 409], [558, 412], [706, 416],
+  [240, 442, '4472832788065380224', 14.18], [507, 473, '4472832513187484544', 14.49], [469, 492],
+  [567, 503, '4472832508888391168', 13.03]];
+const WISE = [[210, 319], [695, 362], [285, 434], [471, 187], [592, 396], [268, 361], [408, 290], [477, 275], [313, 327],
+  [671, 313], [402, 312], [705, 416], [239, 442], [285, 409], [507, 473], [560, 411], [567, 503], [421, 306], [544, 199],
+  [296, 232], [483, 253], [708, 338], [673, 277], [431, 360, BARNARD]];
+const NS = 'http://www.w3.org/2000/svg';
+
 function initOverlay(fig) {
+  const plate = fig.querySelector('.art-ov__plate');
+  const tip = fig.querySelector('.art-ov__tip');
+  const draw = (layer, points, shape) => {
+    const svg = fig.querySelector(`.art-ov__${layer}`);
+    for (const [x, y, id, mag] of points) {
+      const g = document.createElementNS(NS, 'g');
+      g.setAttribute('class', 'art-ov__src');
+      g.dataset.layer = layer;
+      if (id) g.dataset.id = id;
+      if (mag) g.dataset.mag = String(mag);
+      g.innerHTML = shape(x, y) + `<circle class="art-ov__hit" cx="${x}" cy="${y}" r="13"/>`;
+      svg.append(g);
+    }
+  };
+  draw('gaia', GAIA, (x, y) => `<circle cx="${x}" cy="${y}" r="7"/>`);
+  draw('wise', WISE, (x, y) => `<path d="M${x} ${y - 8}l8 8-8 8-8-8z"/>`);
+
+  let shown = null;
+  const hide = () => { tip.hidden = true; shown?.classList.remove('is-on'); shown = null; };
+  const show = (src) => {
+    shown?.classList.remove('is-on');
+    shown = src;
+    src.classList.add('is-on');
+    const { layer, id, mag } = src.dataset;
+    const named = id === BARNARD ? 'Barnard' : '';
+    tip.textContent = layer === 'gaia' && id
+      ? t(`about.gaiaKnown${named}`, { id, g: fmt(Number(mag), 2) })
+      : t(`about.${layer}${named || 'Tip'}`);
+    tip.dataset.layer = layer;
+    tip.hidden = false;
+    const p = plate.getBoundingClientRect();
+    const r = src.getBoundingClientRect();
+    const x = r.left + r.width / 2 - p.left;
+    tip.style.setProperty('--tx', `${Math.round(Math.min(Math.max(x, 70), p.width - 70))}px`);
+    tip.style.setProperty('--ty', `${Math.round(r.top - p.top)}px`);
+    tip.dataset.below = String(r.top - p.top < 44);
+    if (tip.dataset.below === 'true') tip.style.setProperty('--ty', `${Math.round(r.bottom - p.top)}px`);
+  };
+  plate.addEventListener('pointerover', (e) => {
+    const src = e.target.closest?.('.art-ov__src');
+    if (src && e.pointerType === 'mouse') show(src);
+  });
+  plate.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') hide(); });
+  plate.addEventListener('click', (e) => {
+    const src = e.target.closest?.('.art-ov__src');
+    if (src && src !== shown) show(src); else hide();
+  });
   for (const chip of fig.querySelectorAll('.art__chip')) {
     chip.addEventListener('click', () => {
       const on = chip.getAttribute('aria-pressed') !== 'true';
       chip.setAttribute('aria-pressed', String(on));
       fig.dataset[chip.dataset.layer] = on ? 'on' : 'off';
+      if (!on && shown?.dataset.layer === chip.dataset.layer) hide();
     });
   }
-  return {};
+  return { relabel: () => { if (shown) show(shown); } };
 }
 
 function initWise(fig) {
@@ -410,7 +535,7 @@ const INIT = {
  * @param {HTMLElement} into
  * @returns {{ relabel: () => void } | null}
  */
-export function mountDemo(id, into) {
+export function mountDemo(id, into, { mode } = {}) {
   into.replaceChildren();
   const source = $(id)?.querySelector('.read__art');
   if (!source) return null;
@@ -420,6 +545,7 @@ export function mountDemo(id, into) {
   for (const img of fig.querySelectorAll('img[loading="lazy"]')) img.loading = 'eager';
   into.append(fig);
   const card = INIT[id]?.(fig) ?? {};
+  if (mode) card.choose?.(mode);
   card.seen?.();
   return { relabel: () => { applyTranslations(fig); card.relabel?.(); } };
 }
