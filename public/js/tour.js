@@ -209,7 +209,15 @@ function place() {
   else if (x >= cw + 2 * GAP) { cx = x - cw - GAP; cy = clampY(y); }
   else if (vh - (y + h) >= ch + 2 * GAP) { cx = clampX(x); cy = y + h + GAP; }
   else if (y >= ch + 2 * GAP) { cx = clampX(x); cy = y - ch - GAP; }
-  else { cx = clampX(x + w - cw - GAP); cy = clampY(y + h - ch - GAP); }
+  else {
+    // No side has the room (a phone on its side): the corner of the screen
+    // where the card covers least of the part.
+    const covers = ([px, py]) => Math.max(0, Math.min(px + cw, x + w) - Math.max(px, x))
+      * Math.max(0, Math.min(py + ch, y + h) - Math.max(py, y));
+    const corners = [[vw - cw - GAP, GAP], [vw - cw - GAP, vh - ch - GAP], [GAP, GAP], [GAP, vh - ch - GAP]]
+      .map(([px, py]) => [clampX(px), clampY(py)]);
+    [cx, cy] = corners.reduce((best, c) => (covers(c) < covers(best) ? c : best));
+  }
   ui.card.style.transform = `translate(${Math.round(cx)}px, ${Math.round(cy)}px)`;
 }
 
