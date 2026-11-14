@@ -558,7 +558,7 @@ li { list-style: none; }
 /* The wavebands, as one chip each. SPHEREx takes six of them and the choice
    between them is a headline control, not a preference in a settings panel. */
 .lambda { display: flex; flex-wrap: wrap; gap: var(--space-2xs); }
-/* A filter wheel, not a row of pills: each position names its band and the
+/* A column of band chips, not a row of pills: each position names its band and the
    wavelengths it passes, and the one in the beam is marked by a rule at its
    edge and a tint, the way a selected line is marked in a log. */
 .lambda__chip {
@@ -642,7 +642,7 @@ li { list-style: none; }
 
   position: relative;
   display: grid;
-  /* The label, a step back, the plate, a step on, the filter wheel — one row,
+  /* The label, a step back, the plate, a step on, the band chips — one row,
      as tall as the plate and no taller. */
   grid-template-columns: var(--cap) var(--step) var(--plate-w) var(--step) var(--bandw);
   grid-template-rows: var(--plate-h);
