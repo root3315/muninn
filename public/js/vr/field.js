@@ -1279,6 +1279,7 @@ export function openFieldVR(target, env) {
       return s / (d.length / 4);
     },
     depthPlace: (kind, i) => depthView.placeOf(kind, i),
+    clockTo: (years, play) => depthView.clockTo(years, play),
     get stats() {
       return { status: st.status, read: sky.visits.length, planned: st.entries.length, mode: st.mode, depth: st.depth?.single ?? null, hunt: st.hunt ? (st.hunt.list?.length ?? 0) : null, baked: Boolean(baked) };
     },
