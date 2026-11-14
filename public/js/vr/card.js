@@ -18,8 +18,8 @@ import { minTextPx } from './layout.js';
 import { tv } from './strings.js';
 import { fmt } from '../i18n.js';
 
-const W_M = 0.95;
-const H_M = 1.2;
+const W_M = 1.2;
+const H_M = 1.4;
 const PX_PER_M = 640;
 const DIST = 2.0;
 /** The gap between a card and the thing it is about, metres at DIST: about 3°. */
