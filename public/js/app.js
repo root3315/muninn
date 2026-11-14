@@ -3050,15 +3050,31 @@ function addVisitInPlace(frame, stamp) {
   }
 }
 
-/** How long a preset's own night is waited for before another visit is shown. */
-const LEAD_PATIENCE_MS = 6000;
+/**
+ * How long a preset's own night is waited for once another visit is in hand:
+ * counted from that landing, not from the start, so a slow line or a slow
+ * phone that takes ten seconds over every frame still opens on the right one.
+ */
+const LEAD_PATIENCE_MS = 8000;
 
 /** Whether the plate should still wait for the preset's own night rather than show `frame`. */
 function leadPending(frame) {
   if (state.leadVisit == null) return false;
   const lead = state.allVisits[state.leadVisit];
   return frame !== lead && !sky.visits.some((v) => v.frame === lead)
-    && performance.now() - state.readingSince < LEAD_PATIENCE_MS;
+    && !(performance.now() - (state.firstLandedAt ?? Infinity) >= LEAD_PATIENCE_MS);
+}
+
+/** From the first landing, the preset's night is given its patience, then the plate shows what it has. */
+function waitForLead() {
+  state.firstLandedAt = performance.now();
+  if (state.leadVisit == null) return;
+  const gen = fieldSeq;
+  setTimeout(() => {
+    if (gen !== fieldSeq || !sky.visits.length || state.wantVisit != null) return;
+    setPlateState('', { hidden: true });
+    autoBlink();
+  }, LEAD_PATIENCE_MS + 50);
 }
 
 /**
@@ -3070,8 +3086,8 @@ function leadPending(frame) {
 function autoBlink({ final = false } = {}) {
   if (state.autoPlayed || state.wantVisit != null || state.playing || sky.visits.length < 2) return;
   if (sky.mode !== 'blink' || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  // The preset's own night is the first frame seen: wait for it.
-  if (!final && state.leadVisit != null && !sky.visits.some((v) => v.frame === state.allVisits[state.leadVisit])) return;
+  // The preset's own night is the first frame seen: waited for, within its patience.
+  if (!final && leadPending(null)) return;
   state.autoPlayed = true;
   startPlayback();
 }
@@ -3102,6 +3118,7 @@ async function readOne(entry, grid, signal, { onHeader } = {}) {
     // the end of the batch regardless, if that visit cannot be read).
     const waiting = (state.wantVisit != null && state.allVisits[state.wantVisit] !== entry.frame) || leadPending(entry.frame);
     addVisitInPlace(entry.frame, stamp);
+    if (sky.visits.length === 1) waitForLead();
     if (!waiting && (sky.visits.length === 1 || state.wantVisit == null || sky.current?.frame === entry.frame)) {
       setPlateState('', { hidden: true });
     }
@@ -3385,6 +3402,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.wantVisit = visit;
   state.leadVisit = null;
   state.autoPlayed = false;
+  state.firstLandedAt = null;
   // A and B the person chose stay chosen when the last visits land.
   state.abChosen = false;
   state.truncated = false;
@@ -3522,14 +3540,6 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   // is checked again when it runs out, in case nothing lands after that.
   state.readingSince = performance.now();
   setTimeout(() => { if (gen === fieldSeq) maybeHuntEarly(); }, HUNT_PATIENCE_MS + 50);
-  // A preset's night that is slow to come is not waited for past its patience.
-  if (state.leadVisit != null) {
-    setTimeout(() => {
-      if (gen !== fieldSeq || !sky.visits.length || state.wantVisit != null) return;
-      setPlateState('', { hidden: true });
-      autoBlink({ final: true });
-    }, LEAD_PATIENCE_MS + 50);
-  }
 
   const bytes = await readVisits(state.visits, grid, ctrl.signal);
 
