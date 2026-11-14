@@ -52,7 +52,12 @@ const STEPS = [
   { key: 'run', find: () => $('run-scroll'), read: 'read-run' },
   { key: 'marks', find: () => $('marks')?.closest('.part'), read: 'read-mark' },
   { key: 'spectrum', find: () => document.querySelector('#marks .spectrum'), read: 'read-spectrum' },
-  { key: 'seasons', find: linkButton, read: 'read-seasons' },
+  // Offered only on a mark that is not a known body; with marks but none of
+  // those, the step says so over the marks instead of quietly dropping out.
+  {
+    key: 'seasons', find: () => linkButton() ?? (document.querySelector('#marks li') ? $('marks').closest('.part') : null),
+    read: 'read-seasons', words: (el) => (el?.matches('button') ? 'seasons' : 'seasonsGhost'),
+  },
   { key: 'depth', find: () => $('depth'), read: 'read-depth' },
   { key: 'hunt', find: () => $('hunt'), read: 'read-hunt' },
   { key: 'view', find: () => $('tools-toggle'), read: 'read-overlay' },
