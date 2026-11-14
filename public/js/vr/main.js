@@ -1106,6 +1106,11 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     }
     for (const id of [...hovered.keys()]) if (!seen.has(id)) { setHover(id, null); hovered.delete(id); }
     showSnapName(snapped);
+    // A ray on the stars' clock: the stick aside scrubs it instead of walking or turning.
+    const clockPanel = field?.clockPanel ?? null;
+    const onClock = Boolean(clockPanel) && [...hovered.values()].some((x) => x?.object === clockPanel);
+    pointers.takeSticks(onClock);
+    if (onClock) field.scrub(pointers.scrub(), dt);
     markers.setHover(markerHover);
     if (starHover !== starHeld) {
       if (starHover >= 0 && rays.length && rays[0].id !== 'mouse') pointers.pulse(rays[0].id, ...HAPTIC.hover);
