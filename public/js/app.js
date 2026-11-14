@@ -2618,10 +2618,13 @@ function renderMarks() {
     if (!STILL.has(m.analysis?.kind)) whoNodes.push(id);
     if (m.who) whoNodes.push(...whoLines(m.who, m.analysis?.kind));
 
+    // A saturated core has no brightness to read: its curve would be a few
+    // stray points that look broken, so the section says so in a line instead.
+    const saturated = m.analysis?.kind === 'saturated';
     const lightNodes = [];
-    const curve = m.analysis?.seen ? markCurve(m.analysis) : null;
+    const curve = m.analysis?.seen && !saturated ? markCurve(m.analysis) : null;
     if (curve) lightNodes.push(curve);
-    const brightness = brightnessWords(m.analysis);
+    const brightness = saturated ? t('mark.saturatedLight') : brightnessWords(m.analysis);
     if (brightness) {
       const b = document.createElement('p');
       b.className = 'mark__detail';
