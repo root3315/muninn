@@ -457,6 +457,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       onFlipped: (flipped) => { view = flipped ? 'depth' : 'field'; },
       onReopen: (next) => openTarget({ ...marker, target: next }),
       onFly: flyTo,
+      onHome: flyHome,
       onLeave: leaveTo,
     });
     dimTo(LAYOUT.dive.skyDim);
@@ -630,7 +631,10 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   }
 
   /** Move the viewer by `v` (world metres). */
+  /** How far the viewer has walked or flown from where the frame was taken, in the world. */
+  const walked = new THREE.Vector3();
   function moveBy(v) {
+    walked.add(v);
     if (renderer.xr.isPresenting) {
       // The viewer at offset⁻¹·pose: moving it by v is offset·T(−v).
       offset.multiply(new THREE.Matrix4().makeTranslation(-v.x, -v.y, -v.z));
@@ -737,6 +741,13 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     // Stopped short, so the thing is in front, not inside the head.
     if (d < FLY_STOP_M * 1.5) return;
     flight = { t0: performance.now(), total: v.multiplyScalar((d - FLY_STOP_M) / d), done: new THREE.Vector3() };
+  }
+
+  /** Back to where the frame was taken from: the walk and the flights undone, in the same eased glide. */
+  function flyHome() {
+    card.hide();
+    if (walked.lengthSq() < 1e-4) return;
+    flight = { t0: performance.now(), total: walked.clone().negate(), done: new THREE.Vector3() };
   }
 
   function locomote(dt) {
@@ -867,6 +878,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       await renderer.xr.setSession(s);
       baseSpace = renderer.xr.getReferenceSpace();
       offset.identity();
+      walked.set(0, 0, 0);
       // The headset recentred: the screens come round to where the head now points.
       renderer.xr.getReferenceSpace()?.addEventListener?.('reset', () => bring());
       cpu.length = 0;
@@ -1048,6 +1060,8 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
         home.stage = 1;
         field.resetView();
         offset.identity();
+        walked.set(0, 0, 0);
+        field.clearFocus();
         applyOffset();
         if (!renderer.xr.isPresenting) camera.position.set(0, EYE_HEIGHT, 0);
       } else if (home.stage === 1) {
@@ -1106,6 +1120,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     }
     for (const id of [...hovered.keys()]) if (!seen.has(id)) { setHover(id, null); hovered.delete(id); }
     showSnapName(snapped);
+    field?.setMoved(walked.lengthSq() > 0.04);
     // A ray on the stars' clock: the stick aside scrubs it instead of walking or turning.
     const clockPanel = field?.clockPanel ?? null;
     const onClock = Boolean(clockPanel) && [...hovered.values()].some((x) => x?.object === clockPanel);
