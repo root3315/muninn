@@ -110,3 +110,10 @@ test('a position is told from a name, and checked', () => {
 
   assert.equal(suggest('400 95', index()).coords, null);
 });
+
+test("a preset's date is written in the reader's language", () => {
+  const sayAtala = (lang, key) => (key === 'preset.atala' ? '(152) Atala' : key);
+  const atala = (lang) => suggest('atala', buildIndex({ presets, lang, say: sayAtala })).rows.find((r) => r.label === '(152) Atala');
+  assert.equal(atala('en').alt, '25 Dec 2025');
+  assert.equal(atala('ru').alt, '25 дек 2025');
+});
