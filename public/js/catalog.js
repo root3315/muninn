@@ -251,7 +251,32 @@ export function groupVisits(frames, { ra, dec, band = 'all', minGapHours = 6 } =
   return visits;
 }
 
-export const bandsPresent = (frames) => [...new Set(frames.map((f) => f.band))].sort();
+/** Exposures closer than this (in days, ~9 s) are one moment: all six detectors shoot together. */
+const SAME_MOMENT_DAYS = 1e-4;
+
+/**
+ * Where a visit held before a reload sits in a new visit list. The same file
+ * first; otherwise the nearest moment, and of the frames taken at that moment
+ * the one from the same band, so a size change in "all bands" does not swap
+ * the detector. Returns -1 for an empty list or nothing held.
+ */
+export function findHeldVisit(visits, held) {
+  if (!held || !visits.length) return -1;
+  if (held.url) {
+    const same = visits.findIndex((v) => v.url === held.url);
+    if (same >= 0) return same;
+  }
+  if (!Number.isFinite(held.mjd)) return -1;
+  const gap = (v) => Math.abs(v.mjd - held.mjd);
+  const nearest = Math.min(...visits.map(gap));
+  const atMoment = visits
+    .map((v, i) => ({ v, i }))
+    .filter(({ v }) => gap(v) - nearest <= SAME_MOMENT_DAYS);
+  const sameBand = atMoment.find(({ v }) => v.band === held.band);
+  return (sameBand ?? atMoment[0]).i;
+}
+
+export const bandsPresent =(frames) => [...new Set(frames.map((f) => f.band))].sort();
 
 export const bandRange = (frames, band) => {
   const set = frames.filter((f) => f.band === band);
