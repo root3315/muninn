@@ -132,25 +132,57 @@ const FLAGS_HEADER_PROBE = 5 * 2880 * 4;
 const FLAGS_POINTER_BYTES = 2048 * 8;
 
 /**
+ * Where the FLAGS header of a Level-2 file starts when its image is the
+ * usual 2040 × 2040 plane of 32-bit floats: straight after the image's
+ * data, which begins at one of the two offsets HEADER_PROBE is sized for.
+ * One read that covers both cases is asked for beside the file's first
+ * read, so the flags' header and row pointers are in hand together with the
+ * image header, a round trip sooner than reading them after it. A file laid
+ * out any other way finds its FLAGS header outside this window and reads it
+ * as before.
+ */
+const USUAL_IMAGE_BYTES = padded(2040 * 2040 * 4);
+const FLAGS_AHEAD_FROM = 25920 + USUAL_IMAGE_BYTES;
+const FLAGS_AHEAD_TO = 28800 + USUAL_IMAGE_BYTES + FLAGS_HEADER_PROBE + FLAGS_POINTER_BYTES;
+
+/**
  * Read the FLAGS plane for the same detector rows as the image.
  * Returns the raw rows and the bytes they cost, or null when the file has no
  * FLAGS extension right after the image (then nothing is masked and nothing
  * is claimed). It touches no pixels, so it runs beside the image read rather
  * than after it: two of a frame's four round trips at the same time.
  */
-async function readFlags(url, img, rowFrom, rowTo, nx, signal) {
+async function readFlags(url, img, rowFrom, rowTo, nx, signal, ahead = null) {
   const at = img.dataStart + padded(img.dataBytes ?? dataLength(img.cards));
-  let head = await fetchRange(url, at, at + FLAGS_HEADER_PROBE + FLAGS_POINTER_BYTES - 1, signal);
+  const want = FLAGS_HEADER_PROBE + FLAGS_POINTER_BYTES;
+  // The bytes read ahead count as read whether or not they were used.
+  let spent = 0;
+  let head = null;
+  // A read ahead that failed is only a round trip not saved.
+  const early = ahead && await ahead.catch((err) => {
+    if (err?.name === 'AbortError') throw err;
+    return null;
+  });
+  if (early) {
+    spent = early.byteLength;
+    const from = at - FLAGS_AHEAD_FROM;
+    if (from >= 0 && from + want <= early.byteLength) head = early.slice(from, from + want);
+  }
+  if (!head) {
+    head = await fetchRange(url, at, at + want - 1, signal);
+    spent += head.byteLength;
+  }
   let hdr = readHeader(head, 0);
   if (!hdr) {
     head = await fetchRange(url, at, at + 4 * FLAGS_HEADER_PROBE - 1, signal);
+    spent += head.byteLength;
     hdr = readHeader(head, 0);
   }
   if (!hdr || String(hdr.cards.get('EXTNAME') ?? '').trim() !== 'FLAGS') return null;
   const dataAt = at + hdr.headerBytes;
   if (hdr.cards.get('ZIMAGE') === true) {
     const tiles = await readRiceRows(url, hdr.cards, dataAt, rowFrom, rowTo, nx, signal, { buf: head, at });
-    return tiles && { values: tiles.values, bytes: head.byteLength + tiles.bytes };
+    return tiles && { values: tiles.values, bytes: spent + tiles.bytes };
   }
   if (hdr.cards.get('BITPIX') !== 32 || hdr.cards.get('NAXIS1') !== nx) return null;
 
@@ -158,7 +190,7 @@ async function readFlags(url, img, rowFrom, rowTo, nx, signal) {
   const view = new DataView(raw);
   const values = new Int32Array(raw.byteLength / 4);
   for (let k = 0; k < values.length; k++) values[k] = view.getInt32(k * 4, false);
-  return { values, bytes: head.byteLength + raw.byteLength };
+  return { values, bytes: spent + raw.byteLength };
 }
 
 /**
@@ -244,6 +276,10 @@ function sourceBounds(wcs, grid) {
  * Returns null when the frame does not actually overlap the requested field.
  */
 export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = true } = {}) {
+  // The flags' header, read beside the image header when that is still to
+  // be read (see FLAGS_AHEAD_FROM).
+  const flagsAhead = headers.has(url) ? null : fetchRange(url, FLAGS_AHEAD_FROM, FLAGS_AHEAD_TO - 1, signal);
+  flagsAhead?.catch(() => {});
   const hdu = await readImageHDU(url, signal);
   const cards = hdu.cards;
   const wcs = new WCS(cards);
@@ -266,7 +302,7 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = 
   // The same rows of the FLAGS plane, asked for at the same moment. A frame
   // whose flags cannot be read is still shown, and says so through
   // `flagged: null`; only a cancelled read stops the frame.
-  const flagsRead = readFlags(url, hdu, rowFrom, rowTo, nx, signal).catch((err) => {
+  const flagsRead = readFlags(url, hdu, rowFrom, rowTo, nx, signal, flagsAhead).catch((err) => {
     if (err?.name === 'AbortError') throw err;
     return null;
   });
