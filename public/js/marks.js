@@ -621,3 +621,33 @@ export function linkWords(link) {
   line(t('link.how'), 'quiet');
   return out;
 }
+
+/**
+ * A mark dropped on a SkyBoT ring where SPHEREx measured nothing is not
+ * "nothing here" next to "in the catalogue" — read together those sound like
+ * a contradiction. It is one finding: the orbit puts a body here and it is
+ * too faint to show in a single visit. Its verdict, detail and catalogue
+ * line, or null for any other mark.
+ */
+export function predictedWords(m) {
+  if (m.catalog?.state !== 'match' || (m.analysis?.kind ?? 'none') !== 'none') return null;
+  const o = m.catalog.object;
+  return {
+    call: t('mark.callPredicted'),
+    detail: Number.isFinite(o?.mag)
+      ? t('mark.predicted', { name: m.catalog.name, mag: fmt(o.mag, 1), total: m.analysis?.total ?? 0 })
+      : t('mark.predictedNoMag', { name: m.catalog.name, total: m.analysis?.total ?? 0 }),
+    id: t('mark.predictedWhy'),
+  };
+}
+
+/** The peak brightness of a mark in each visit it was measured in, by observation id. */
+export function peaksOf(analysis) {
+  return new Map((analysis?.track ?? []).map((d) => [d.obsId, Math.max(d.flux ?? 0, 0)]));
+}
+
+/** The brightness range of a mark seen more than once, in words, or null. */
+export function brightnessWords(a) {
+  if (!a?.brightness || !(a.seen > 1)) return null;
+  return t('mark.brightness', { bright: fmt(a.brightness.brightest, 1), faint: fmt(a.brightness.faintest, 1), band: a.brightness.band });
+}

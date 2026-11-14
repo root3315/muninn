@@ -36,7 +36,7 @@ import { SkyView, shortName } from './sky.js';
 import {
   measureLink, planLink, markCall, skybotVerdict as skybotVerdictOf, skybotLine as skybotLineOf, skybotTone, seenAt,
   matchArcsec, identifyMark as identifyMarkOf, tagOf, STILL, whoWords, verdict, sharpWords,
-  saturatedMotion as saturatedMotionOf, linkArc, linkWords, pct,
+  saturatedMotion as saturatedMotionOf, linkArc, linkWords, pct, predictedWords, peaksOf, brightnessWords,
 } from './marks.js';
 import { loadWise, WISE_BANDS } from './wise.js';
 import { drawGaiaSky, psfFor } from './gaiasky.js';
@@ -2272,7 +2272,7 @@ function markCurve(analysis) {
   const W = 208;
   const H = 46;
   const base = H - 13;
-  const peakOf = new Map(analysis.track.map((d) => [d.obsId, Math.max(d.flux ?? 0, 0)]));
+  const peakOf = peaksOf(analysis);
   const max = Math.max(...peakOf.values(), 1e-6);
 
   const mjds = visits.map((v) => v.frame.mjd);
@@ -2378,14 +2378,12 @@ function renderMarks() {
     // "nothing here" next to "in the catalogue" — read together those sound
     // like a contradiction. It is one finding: the orbit puts a body here and
     // it is too faint to show in a single visit.
-    if (m.catalog?.state === 'match' && (m.analysis?.kind ?? 'none') === 'none') {
-      const o = m.catalog.object;
-      call.textContent = t('mark.callPredicted');
+    const predicted = predictedWords(m);
+    if (predicted) {
+      call.textContent = predicted.call;
       call.dataset.kind = 'predicted';
-      detail.textContent = Number.isFinite(o?.mag)
-        ? t('mark.predicted', { name: m.catalog.name, mag: fmt(o.mag, 1), total: m.analysis?.total ?? 0 })
-        : t('mark.predictedNoMag', { name: m.catalog.name, total: m.analysis?.total ?? 0 });
-      id.textContent = t('mark.predictedWhy');
+      detail.textContent = predicted.detail;
+      id.textContent = predicted.id;
       id.dataset.known = 'true';
     }
 
@@ -2435,14 +2433,11 @@ function renderMarks() {
     const lightNodes = [];
     const curve = m.analysis?.seen ? markCurve(m.analysis) : null;
     if (curve) lightNodes.push(curve);
-    if (m.analysis?.brightness && m.analysis.seen > 1) {
+    const brightness = brightnessWords(m.analysis);
+    if (brightness) {
       const b = document.createElement('p');
       b.className = 'mark__detail';
-      b.textContent = t('mark.brightness', {
-        bright: fmt(m.analysis.brightness.brightest, 1),
-        faint: fmt(m.analysis.brightness.faintest, 1),
-        band: m.analysis.brightness.band,
-      });
+      b.textContent = brightness;
       lightNodes.push(b);
     }
     // The verdict's own sentence reads as its subtitle: a heading "Verdict"

@@ -22,13 +22,13 @@
 import * as THREE from '../vendor/three.module.js';
 import { t, fmt } from '../i18n.js';
 import { seasonChunks, chunkAt, forStack } from '../stack.js';
-import { searchFrames, groupVisits, bandsPresent, toS3, skybotCone, knownBodies, surveySources, nearestHost, formatRA, formatDec } from '../catalog.js';
+import { searchFrames, groupVisits, bandsPresent, toS3, skybotCone, knownBodies, surveySources, nearestHost } from '../catalog.js';
 import { spread, VISITS_PER_BATCH } from '../visits.js';
 import { TangentGrid, deltaRA } from '../wcs.js';
 import { SkyView } from '../sky.js';
 import { scoreSectors } from '../sectors.js';
 import { searchField } from '../huntcore.js';
-import { rankCandidates, distanceCeilingAU } from '../hunt.js';
+import { rankCandidates } from '../hunt.js';
 import { stackDepth } from '../depth.js';
 import { magLimit, searchRadius, epochOfMjd, properMotion } from '../overlay.js';
 import { loadWise } from '../wise.js';
@@ -39,6 +39,11 @@ import { eclipticLatitude, PLANET_X_V, PLANET_X_MAX_BETA } from './depth3d.js';
 import { createTimeline } from './timeline.js';
 import { createDepthView } from './depthview.js';
 import { createSpectrumPanel } from './spectrumpanel.js';
+import { createMarksPanel } from './markspanel.js';
+import { createWindows } from './windows.js';
+import {
+  skybotVerdict, seenAt, identifyMark, tagOf, planLink, measureLink, linkArc,
+} from '../marks.js';
 import { geometricDistances, galaxiesWithRedshift, bakedAnswers } from './distances.js';
 import { tv } from './strings.js';
 
@@ -55,6 +60,12 @@ const SKYBOT_AT_ONCE = 2;
 /** SkyBoT's position and SPHEREx's agree within two detector pixels for the same body. */
 const SAME_BODY_ARCSEC = 12.3;
 const SEASON_DAYS = 45;
+/** As many marks as the site keeps in its link. */
+const MAX_MARKS = 40;
+/** How long cleared marks can be taken back. */
+const MARKS_UNDO_MS = 5000;
+/** A breath between visits of a long measurement, so the headset keeps its frame rate. */
+const breathe = () => new Promise((r) => { setTimeout(r, 0); });
 /** The field sizes offered in the headset, from the site's own (hash.js FOV_CHOICES). */
 const FOV_SIZES = [0.15, 0.3, 0.6];
 
@@ -195,9 +206,10 @@ export function openFieldVR(target, env) {
   }
 
   // A notice over the field while it has nothing to show.
+  // It rides on the field, a little in front, wherever the field is moved.
   const notice = createPanel({ widthM: 1.1, heightM: 0.24, pxPerM: 700, name: 'notice', opaque: true });
-  placePanel(notice, pose({ ...SCREENS.main, dist: SCREENS.main.dist - 0.03 }));
-  screens.add(notice.mesh);
+  notice.mesh.position.set(0, 0, 0.03);
+  main.mesh.add(notice.mesh);
 
   const bar = createPanel({ widthM: SCREENS.bar.w, heightM: SCREENS.bar.h, pxPerM: SCREENS.bar.pxPerM, name: 'bar', opaque: true });
   placePanel(bar, pose(SCREENS.bar));
@@ -224,12 +236,27 @@ export function openFieldVR(target, env) {
   }
   disposers.push(main, notice, bar, card, side);
 
-  // A mark's spectrum, over the field: shown when a mark is made.
+  // The marks, as on the site: numbered, the newest open, every word from marks.js.
+  const marksPanel = createMarksPanel({
+    look, widthM: SCREENS.marks.w, heightM: SCREENS.marks.h, pxPerM: SCREENS.marks.pxPerM, dist: SCREENS.marks.dist,
+    onAct: (id, i) => { env.haptic?.('select'); markAct(id, i); },
+  });
+  placePanel({ mesh: marksPanel.mesh }, pose(SCREENS.marks));
+  marksPanel.mesh.visible = false;
+  screens.add(marksPanel.mesh);
+  interactive.add(marksPanel.mesh);
+  disposers.push(marksPanel);
+
+  // A mark's spectrum, beside the findings: shown when a mark's "Spectrum" is pressed.
   const spectrum = createSpectrumPanel({ look });
   placePanel({ mesh: spectrum.mesh }, pose(SCREENS.spectrum));
   screens.add(spectrum.mesh);
   interactive.add(spectrum.mesh);
   disposers.push(spectrum);
+
+  // Every screen can be taken by the grip and put elsewhere (windows.js).
+  const windows = createWindows({ group: screens, onMoved: () => drawCard() });
+  for (const m of [main.mesh, bar.mesh, card.mesh, side.mesh, marksPanel.mesh, spectrum.mesh]) windows.add(m);
 
   /* ---- the visits on the Earth's orbit ------------------------------ */
   const slots = () => st.entries.map((e) => ({
@@ -304,6 +331,7 @@ export function openFieldVR(target, env) {
     else if (id === 'flip') flip();
     else if (id === 'bring') env.onBring?.();
     else if (id === 'wise') showWise();
+    else if (id === 'layout') { windows.reset(); drawCard(); }
     // Another band or another size is another field: opened again, the site's way.
     else if (id === 'band' && data !== band) env.onReopen?.({ ...target, band: data });
     else if (id === 'fov' && Number(data) !== fov) env.onReopen?.({ ...target, fov: Number(data) });
@@ -412,43 +440,184 @@ export function openFieldVR(target, env) {
   }
 
   /**
-   * A mark where the field was pressed: the same measurement the site makes
-   * (sky.js trackMark across every visit read), said on a card beside it.
+   * A mark where the field was pressed, kept and measured as the site keeps
+   * it (sky.js trackMark across every visit read), and asked about as the
+   * site asks (marks.js): SkyBoT, then the star catalogues.
    */
-  function markAt(uv, hit) {
+  function markAt(uv) {
     const [gi, gj] = sky.toGrid(uv.x * sky.cssW, (1 - uv.y) * sky.cssH);
     const at = grid.indexToWorld(gi, gj);
     if (!at) return;
-    const [mra, mdec] = at;
-    const a = sky.trackMark(mra, mdec);
     const v = sky.current;
-    sky.marks.push({ ra: mra, dec: mdec, obsId: v?.frame.obsId ?? null, track: a.track, analysis: a, known: null });
-    while (sky.marks.length > 5) sky.marks.shift();
-    sky.draw();
-    spectrum.show({ ra: mra, dec: mdec, visits: sky.visits.slice(), sky, signal });
-    const lines = [];
-    if (a.kind === 'saturated') lines.push({ text: tv('vr.markSat'), tone: 'counter' });
-    else if (!a.seen) lines.push({ text: tv('vr.markNone'), tone: 'neutral' });
-    else {
-      lines.push({ text: tv('vr.markSeen', { seen: a.seen, total: a.total }), tone: 'muted' });
-      if (a.kind === 'moving') {
-        const au = distanceCeilingAU(a.ratePerHour);
-        const rate = fmt(a.ratePerHour, a.ratePerHour < 1 ? 3 : 2);
-        lines.push({ text: au != null && au <= 2000 ? tv('vr.markMoving', { rate, au: fmt(au, 0) }) : tv('vr.markMovingVague', { rate }), tone: 'counter' });
-      } else if (a.kind === 'fixed') {
-        lines.push({ text: tv('vr.markFixed', { n: a.total }), tone: 'ink' });
-      }
-    }
-    const bodies = v ? sky.knownObjects.get(v.frame.obsId) ?? [] : [];
-    const cos = Math.cos(mdec * D2R);
-    const near = bodies.find((b) => Math.hypot(deltaRA(b.ra, mra) * cos, b.dec - mdec) * 3600 < SAME_BODY_ARCSEC);
-    if (near) lines.push({ text: tv('vr.markKnown', { name: near.num ? `(${near.num}) ${near.name}` : near.name }), tone: 'counter' });
+    const m = { ra: at[0], dec: at[1], obsId: v?.frame.obsId ?? null, track: [], analysis: null, known: null };
+    sky.marks.push(m);
+    while (sky.marks.length > MAX_MARKS) sky.marks.shift();
+    // The newest mark opens; the ones before it fold to a line.
+    for (const k of sky.marks) k.open = k === m;
+    dropUndo();
+    marksPanel.reveal();
+    retrackMarks();
     // A detection in the visit on the screen is felt in the hand.
-    if (v && a.track.some((p) => p.obsId === v.frame.obsId && (p.saturated || p.snr >= 5))) env.haptic?.('select');
-    // Beside the field, to its left, so the picture it is about stays in view.
-    main.mesh.updateMatrixWorld();
-    const beside = main.mesh.localToWorld(new THREE.Vector3(-SCREENS.main.w / 2 - 0.5, -0.1, 0));
-    env.showCard?.({ title: tv('vr.markTitle', { ra: formatRA(mra), dec: formatDec(mdec) }), lines }, beside);
+    if (v && m.track.some((p) => p.obsId === v.frame.obsId && (p.saturated || p.snr >= 5))) env.haptic?.('select');
+  }
+
+  /** Every mark measured again over the visits now read, and asked about again. */
+  function retrackMarks() {
+    for (const m of sky.marks) {
+      const a = sky.trackMark(m.ra, m.dec);
+      m.analysis = a;
+      m.track = a.track;
+    }
+    nameMarks();
+    sky.draw();
+    drawMarks();
+  }
+
+  /** SkyBoT's answers so far against every mark, and the catalogues asked who the still ones are. */
+  function nameMarks() {
+    for (const m of sky.marks) {
+      m.catalog = skybotVerdict(seenAt(m.analysis, { ra: m.ra, dec: m.dec, obsId: m.obsId }), {
+        knownObjects: sky.knownObjects, failed: st.bodiesFailed, on: true,
+      });
+      m.known = m.catalog.state === 'match' && !m.catalog.unmatched?.length ? m.catalog.name : null;
+      askWho(m);
+      m.tag = tagOf(m);
+    }
+  }
+
+  function askWho(m) {
+    identifyMark(m, {
+      loading: st.status === 'reading',
+      fieldSignal: signal,
+      visits: sky.visits,
+      live: () => !st.closed && sky.marks.includes(m),
+      onChange: () => { sky.draw(); drawMarks(); },
+    });
+  }
+
+  /** The marks just cleared, kept a few seconds so the press can be taken back. */
+  let undo = null;
+  function dropUndo() {
+    if (!undo) return;
+    clearTimeout(undo.timer);
+    undo = null;
+  }
+
+  function drawMarks() {
+    if (st.closed) return;
+    const was = marksPanel.mesh.visible;
+    marksPanel.mesh.visible = sky.marks.length > 0 || Boolean(undo);
+    if (!was && marksPanel.mesh.visible) windows.settle(marksPanel.mesh, st.head);
+    if (marksPanel.mesh.visible) marksPanel.render({ marks: sky.marks, visits: sky.visits, undo: Boolean(undo), target: sky.target ?? null });
+  }
+
+  function markAct(id, i) {
+    const m = sky.marks[i];
+    if (id === 'fold' && m) m.open = m.open === false;
+    else if (id === 'remove' && m) {
+      sky.marks.splice(i, 1);
+      m.whoStop?.abort();
+      if (sky.link?.mark === m) sky.link = null;
+      sky.draw();
+    } else if (id === 'clear') {
+      undo = { marks: sky.marks.splice(0), link: sky.link, timer: setTimeout(() => { undo = null; drawMarks(); }, MARKS_UNDO_MS) };
+      sky.link = null;
+      sky.draw();
+    } else if (id === 'undo' && undo) {
+      sky.marks.push(...undo.marks);
+      sky.link = undo.link;
+      dropUndo();
+      sky.draw();
+    } else if (id === 'link' && m) { linkMark(m); return; }
+    else if (id === 'arc' && m?.link) { m.link.shown = !m.link.shown; showLink(m.link.shown ? m : null); }
+    else if (id === 'jump' && m?.link?.loadedB) {
+      const k = sky.visits.indexOf(m.link.loadedB);
+      if (k >= 0) {
+        m.link.shown = true;
+        showLink(m);
+        act('mode', 'single');
+        sky.setIndex(k);
+        afterVisitChange();
+      }
+    } else if (id === 'spectrum' && m) {
+      spectrum.show({ ra: m.ra, dec: m.dec, visits: sky.visits.slice(), sky, signal });
+      windows.settle(spectrum.mesh, st.head);
+    }
+    else if (id === 'retry' && m) {
+      m.whoStop?.abort();
+      m.who = null;
+      askWho(m);
+    }
+    drawMarks();
+  }
+
+  /** One mark's arc on the field (marks.js linkArc), or none. */
+  function showLink(m) {
+    const arc = linkArc(m);
+    if (arc) for (const other of sky.marks) if (other !== m && other.link) other.link.shown = false;
+    sky.link = arc;
+    sky.draw();
+  }
+
+  /**
+   * Follow a mark into the next season at every trial distance from 30 to
+   * 2000 AU, as the site does (marks.js planLink, measureLink): every visit
+   * of both seasons up to a stack's worth is read, season A's too, since a
+   * detection on the arc counts only where season A shows nothing.
+   */
+  async function linkMark(m) {
+    if (m.link?.state === 'reading') return;
+    const ref = sky.visits.find((v) => v.frame.obsId === m.obsId)?.frame ?? sky.current?.frame;
+    if (!ref) return;
+    const plan = planLink(seasonChunks(groupVisits(st.frames, { ra, dec, band: ref.band })), ref, sky.visits);
+    if (!plan) {
+      m.link = { state: 'single', band: ref.band };
+      if (sky.link?.mark === m) showLink(null);
+      drawMarks();
+      return;
+    }
+    const link = { state: 'reading', band: ref.band, n: 0, total: plan.framesA.length + plan.framesB.length, shown: true };
+    m.link = link;
+    drawMarks();
+    try {
+      const [visitsA, visitsB] = await Promise.all([plan.framesA, plan.framesB].map((list) => linkStamps(list, () => {
+        link.n += 1;
+        if (m.link === link) drawMarks();
+      })));
+      if (st.closed || m.link !== link) return;
+      if (!visitsA.length || !visitsB.length) throw new Error(tv('link.unread'));
+      Object.assign(link, await measureLink(sky, m, visitsA, visitsB, { breathe }));
+      if (st.closed || m.link !== link) return;
+      link.state = 'done';
+      link.loadedB = plan.loadedB ?? null;
+    } catch (err) {
+      if (st.closed || m.link !== link) return;
+      link.state = 'failed';
+      link.why = err.message;
+    }
+    if (link.state === 'done') showLink(m);
+    else if (sky.link?.mark === m) showLink(null);
+    drawMarks();
+  }
+
+  /** Pixels for a list of frames: read already, kept from an earlier read, or read now. */
+  async function linkStamps(frames, onEach) {
+    const out = [];
+    await inPool(frames.slice(), 2, async (frame) => {
+      let item = sky.visits.find((v) => v.frame.url === frame.url) ?? sky.extra.get(frame.url);
+      if (!item && !signal.aborted) {
+        try {
+          const stamp = await readStamp(toS3(frame.url), grid, { signal });
+          if (stamp && !signal.aborted) {
+            sky.addExtra(frame, stamp);
+            item = sky.extra.get(frame.url);
+          }
+        } catch { /* one visit fewer */ }
+      }
+      if (item) out.push(item);
+      onEach();
+    });
+    return out.sort((x, y) => x.frame.mjd - y.frame.mjd);
   }
 
   /** The AllWISE picture of the field, fifteen years older, as B of the wipe. */
@@ -559,11 +728,18 @@ export function openFieldVR(target, env) {
       button(ctx, hits, look, { x, y: 26, w: backW, h: bh, label: tv('vr.backSky'), id: 'back', font, hover: hov('card', 'back') });
       const bringW = Math.min(w - backW - 16, chipWidth(ctx, font, tv('vr.bring'), bh, minW));
       button(ctx, hits, look, { x: x + backW + 16, y: 26, w: bringW, h: bh, label: tv('vr.bring'), id: 'bring', font, hover: hov('card', 'bring') });
+      // Once a screen has been moved, the way to put them all back.
+      let top = 26 + bh;
+      if (windows.moved) {
+        const resetW = Math.min(w, chipWidth(ctx, font, tv('vr.resetLayout'), bh, minW));
+        button(ctx, hits, look, { x, y: top + 14, w: resetW, h: bh, label: tv('vr.resetLayout'), id: 'layout', font, hover: hov('card', 'layout') });
+        top += 14 + bh;
+      }
       // What the controller's buttons do, under the buttons that do the same by hand.
       ctx.font = `400 ${SMALL}px ${FONTS.mono}`;
       ctx.fillStyle = look.neutral;
       // Its own row, clear of the buttons above and the name below.
-      let y = 26 + bh + 40 + SMALL;
+      let y = top + 40 + SMALL;
       y = wrapText(ctx, tv('vr.returnHint'), x, y, w, SMALL * 1.3, 2) - SMALL * 1.3 + 30 + T.heading;
       ctx.font = `600 ${T.heading}px ${FONTS.display}`;
       ctx.fillStyle = look.ink;
@@ -651,7 +827,7 @@ export function openFieldVR(target, env) {
         const beta = eclipticLatitude(ra, dec);
         const say = Math.abs(beta) > PLANET_X_MAX_BETA
           ? tv('vr.cannotX', { beta: `${beta >= 0 ? '+' : '−'}${fmt(Math.abs(beta), 0)}` })
-          : tv('vr.shortX', { nominal: fmt(PLANET_X_V.nominal, 1), faint: fmt(PLANET_X_V.faint, 1), a: fmt(PLANET_X_V.nominal - d.single, 1), b: fmt(PLANET_X_V.faint - d.single, 1) });
+          : tv('vr.shortX', { bright: fmt(PLANET_X_V.bright, 1), faint: fmt(PLANET_X_V.faint, 1), nominal: fmt(PLANET_X_V.nominal, 1), a: fmt(PLANET_X_V.bright - d.single, 1), b: fmt(PLANET_X_V.faint - d.single, 1) });
         y = wrapText(ctx, say, x, y, w, lh, 3);
         if (reading) y = framesRead(ctx, x, y + 6, w, lh);
       } else if (reading) {
@@ -802,6 +978,7 @@ export function openFieldVR(target, env) {
         sky.addVisit(entry.frame, stamp);
         if (sky.visits.length === 2 && st.mode === 'blink') play(true);
         if (sky.visits.length === 3) { measure(); hunt(); }
+        if (sky.marks.length && sky.visits.length >= 3) retrackMarks();
       } catch {
         if (!signal.aborted) entry.status = 'failed';
       } finally {
@@ -816,6 +993,7 @@ export function openFieldVR(target, env) {
     measure();
     drawAll();
     refreshTimeline();
+    if (sky.marks.length) retrackMarks();
     await hunt();
     updateDepthBodies(true);
   }
@@ -883,6 +1061,7 @@ export function openFieldVR(target, env) {
       if (signal.aborted) return;
       if (objects) sky.setKnownObjects(frame.obsId, objects);
       else st.bodiesFailed.add(frame.obsId);
+      if (sky.marks.length) { nameMarks(); sky.draw(); drawMarks(); }
       if (sky.current?.frame === frame) drawSide();
       if (!st.depthVisit || sky.current?.frame === frame) updateDepthBodies();
     });
@@ -951,6 +1130,8 @@ export function openFieldVR(target, env) {
     /** Once a frame: the dive, the blink on the frame clock, textures only when something changed. */
     update(dt, { head, gazeYaw }) {
       const now = performance.now();
+      // The asking dot pulses: a redraw a few times a second, not every frame.
+      if (marksPanel.animated && now - (st.marksBeat ?? 0) > 120) { st.marksBeat = now; drawMarks(); }
       if (st.anim) {
         const k = Math.min(1, (now - st.anim.t0) / st.anim.ms);
         const e = 1 - (1 - k) ** 3;
@@ -1020,6 +1201,12 @@ export function openFieldVR(target, env) {
     mainYaw() { return st.yaw + (st.flipped ? Math.PI : 0); },
     /** Hold the blink while the headset is not being looked through. */
     pause(on) { st.paused = on; },
+    /** For the checks: press the field at a texture point, list the marks, press a mark's button. */
+    markAt: (u, v) => markAt({ x: u, y: v }),
+    /** The screens as windows, for the hands to take (windows.js). */
+    windows,
+    get marks() { return sky.marks; },
+    markAct: (id, i) => markAct(id, i),
     get stats() {
       return { status: st.status, read: sky.visits.length, planned: st.entries.length, mode: st.mode, depth: st.depth?.single ?? null, hunt: st.hunt ? (st.hunt.list?.length ?? 0) : null, baked: Boolean(baked) };
     },

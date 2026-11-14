@@ -13,18 +13,16 @@
  *   createSpectrumPanel({ look }) -> { mesh, show({ ra, dec, visits, sky, signal }), hide(), dispose() }
  */
 
-import { createPanel, FONTS, wrapText, button, roundRect, chipWidth } from './panel.js';
+import { createPanel, FONTS, wrapText, wrapLines, button, roundRect, chipWidth } from './panel.js';
 import { loadWavelength } from '../stamp.js';
 import { toS3, formatRA, formatDec } from '../catalog.js';
-import { visitPoint, fluxAxis } from '../spectrum.js';
+import { visitPoint, fluxAxis, placeInBand } from '../spectrum.js';
 import { fmt } from '../i18n.js';
-import { minTextPx } from './layout.js';
+import { minTextPx, SCREENS } from './layout.js';
 import { tv } from './strings.js';
 
-const W_M = 1.1;
-const H_M = 0.62;
+const { w: W_M, h: H_M, dist: DIST } = SCREENS.spectrum;
 const PX_PER_M = 760;
-const DIST = 2.05;
 /** SPHEREx's range, µm, and its six bands' hues (redesign.css --hue-d1 … d6). */
 const RANGE = [0.7, 5.1];
 const HUES = { D1: 285, D2: 235, D3: 160, D4: 100, D5: 60, D6: 25 };
@@ -47,24 +45,32 @@ export function createSpectrumPanel({ look }) {
       ctx.strokeStyle = look.ruleStrong;
       ctx.stroke();
       const x0 = 30;
-      ctx.fillStyle = look.ink;
-      ctx.font = `600 ${Math.round(px * 1.1)}px ${FONTS.display}`;
-      ctx.fillText(tv('vr.spectrumTitle'), x0, 26 + px);
-      ctx.font = `400 ${Math.round(px * 0.9)}px ${FONTS.mono}`;
-      ctx.fillStyle = look.neutral;
-      ctx.fillText(`${formatRA(state.ra)}  ${formatDec(state.dec)}`, x0, 26 + px * 2.2);
-      // The close button, top right.
+      // The close button, top right; the title wraps short of it.
       const font = `500 ${px}px ${FONTS.body}`;
       const bh = Math.round(px * 1.7);
       const bw = chipWidth(ctx, font, tv('vr.close'), bh, 70);
       button(ctx, hits, look, { x: W - bw - 24, y: 20, w: bw, h: bh, label: tv('vr.close'), id: 'close', font, hover: hover === 'close' });
+      const titleFont = `600 ${Math.round(px * 1.1)}px ${FONTS.display}`;
+      const title = wrapLines(titleFont, tv('vr.spectrumTitle'), W - bw - 24 - x0 - 24, 2);
+      ctx.fillStyle = look.ink;
+      ctx.font = titleFont;
+      let y = 26 + px;
+      for (const l of title) { ctx.fillText(l, x0, y); y += Math.round(px * 1.3); }
+      ctx.font = `400 ${Math.round(px * 0.9)}px ${FONTS.mono}`;
+      ctx.fillStyle = look.neutral;
+      ctx.fillText(`${formatRA(state.ra)}  ${formatDec(state.dec)}`, x0, y);
 
       const pts = state.points.filter((p) => p.um && p.pt && p.pt.kind !== 'saturated');
-      const box = { x: 110, y: 26 + px * 3, w: W - 150, h: H - (26 + px * 3) - 70 };
+      // The legend under the chart, wrapped; the chart takes the room between.
+      const legendFont = `400 ${Math.round(px * 0.85)}px ${FONTS.body}`;
+      const legend = wrapLines(legendFont, tv('vr.spectrumLegend', { n: pts.length, total: state.total }), W - x0 * 2, 2);
+      const legendH = legend.length * Math.round(px * 1.15);
+      const top = y + px;
+      const box = { x: 110, y: top, w: W - 150, h: H - top - legendH - px * 2.6 - 20 };
       if (!pts.length) {
         ctx.font = `400 ${px}px ${FONTS.body}`;
         ctx.fillStyle = look.muted;
-        wrapText(ctx, state.done < state.total ? tv('vr.spectrumWait', { done: state.done, total: state.total }) : tv('vr.spectrumNone'), box.x, box.y + px * 2, box.w, px * 1.3, 4);
+        wrapText(ctx, state.done < state.total ? tv('vr.spectrumWait', { done: state.done, total: state.total }) : tv('vr.spectrumNone'), x0, box.y + px, W - x0 * 2, px * 1.3, 4);
         return;
       }
       const axis = fluxAxis(pts.map((p) => p.pt));
@@ -81,7 +87,8 @@ export function createSpectrumPanel({ look }) {
       for (const um of [1, 2, 3, 4, 5]) {
         ctx.fillText(String(um), X(um), box.y + box.h + px * 1.05);
       }
-      ctx.fillText('µm', box.x + box.w - 20, box.y + box.h + px * 2.1);
+      ctx.textAlign = 'right';
+      ctx.fillText('µm', box.x + box.w, box.y + box.h + px * 2.1);
       ctx.textAlign = 'right';
       for (const v of axis.ticks) {
         const y = Y(v);
@@ -127,9 +134,9 @@ export function createSpectrumPanel({ look }) {
           ctx.stroke();
         }
       }
-      ctx.font = `400 ${Math.round(px * 0.85)}px ${FONTS.body}`;
+      ctx.font = legendFont;
       ctx.fillStyle = look.muted;
-      ctx.fillText(tv('vr.spectrumLegend', { n: pts.length, total: state.total }), box.x, H - 22);
+      legend.forEach((l, k) => ctx.fillText(l, x0, H - 22 - (legend.length - 1 - k) * Math.round(px * 1.15)));
     });
   }
 
@@ -155,7 +162,7 @@ export function createSpectrumPanel({ look }) {
       panel.mesh.visible = true;
       for (const v of visits) {
         const m = sky.covers(v, ra, dec) ? sky.measure(v, ra, dec, { orLimit: true }) : null;
-        state.points.push({ band: v.frame.band, pt: visitPoint(m), um: null, url: v.frame.url });
+        state.points.push({ band: v.frame.band, pt: visitPoint(m), um: null, frame: v.frame });
       }
       draw();
       // Two at a time: each is a small read of a file's header and its wavelength table.
@@ -164,7 +171,9 @@ export function createSpectrumPanel({ look }) {
         while (job === mine && next < state.points.length) {
           const p = state.points[next++];
           try {
-            p.um = await loadWavelength(toS3(p.url), ra, dec, { signal });
+            // Where in its band the visit saw the source, as the site places it (spectrum.js).
+            const wave = await loadWavelength(toS3(p.frame.url), ra, dec, { signal });
+            p.um = wave ? placeInBand(p.frame, wave).um : null;
           } catch { p.um = null; }
           if (job !== mine) return;
           state.done += 1;

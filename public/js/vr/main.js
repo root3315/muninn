@@ -387,7 +387,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     for (const own of [chevron.mesh, card.mesh]) {
       if (!own.visible) continue;
       const c = raycaster.intersectObject(own, false)[0];
-      if (c) return { kind: 'mesh', object: own, uv: c.uv, distance: c.distance, hit: c };
+      if (c && own.userData.solid?.(c.uv) !== false) return { kind: 'mesh', object: own, uv: c.uv, distance: c.distance, hit: c };
     }
     if (field) {
       const hits = raycaster.intersectObjects([...field.interactive], false).filter((h) => h.object.visible);
@@ -510,6 +510,8 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   }
 
   function locomote(dt) {
+    // A window in hand takes the sticks: they push it away and bring it near.
+    if (held.size) return;
     const { walk, fly } = pointers.sticks();
     const { dir: d } = headPose();
     const flat = new THREE.Vector3(d.x, 0, d.z).normalize();
@@ -526,12 +528,58 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     if (speed > 0.01) moveBy(v.multiplyScalar(dt));
   }
 
+  /* ---- the screens as windows: a grip on one takes it (windows.js) ---- */
+  /** Which window each squeezing hand holds. */
+  const held = new Map();
+  /** Hands that squeezed on nothing: they hold the depth view instead. */
+  const free = new Set();
+  let twoHand = null;
+  function handleWindows(rays, dt, head) {
+    const win = field?.windows ?? null;
+    const grips = pointers.grips();
+    const ids = new Set(grips.map((x) => x.id));
+    for (const id of [...held.keys()]) {
+      if (ids.has(id) && win) continue;
+      win?.drop(id, head);
+      held.delete(id);
+    }
+    for (const id of [...free]) if (!ids.has(id)) free.delete(id);
+    if (!win) return;
+    for (const g of grips) {
+      if (held.has(g.id) || free.has(g.id)) continue;
+      const ray = rays.find((r) => r.id === g.id);
+      const hit = ray ? hitOf(ray) : null;
+      const mesh = hit?.kind === 'mesh' && hit.hit ? win.windowOf(hit.object) : null;
+      if (!mesh) { free.add(g.id); continue; }
+      win.grab(g.id, mesh, ray, hit.hit.point);
+      held.set(g.id, mesh);
+      if (g.id !== 'mouse') pointers.pulse(g.id, ...HAPTIC.select);
+    }
+    // Both hands on one window: its size follows their spread.
+    const pair = [...held.entries()];
+    const same = pair.length === 2 && pair[0][1] === pair[1][1] ? pair[0][1] : null;
+    if (same) {
+      const [a, b] = pair.map(([id]) => grips.find((x) => x.id === id).pos);
+      const span = a.distanceTo(b);
+      if (!twoHand || twoHand.mesh !== same) twoHand = { mesh: same, span: Math.max(0.05, span) };
+      win.scale(same, span / twoHand.span, head);
+      return;
+    }
+    twoHand = null;
+    const { walk, fly } = pointers.sticks();
+    const push = -(Math.abs(fly) > Math.abs(walk[1]) ? fly : walk[1]);
+    for (const [id] of held) {
+      const ray = rays.find((r) => r.id === id);
+      if (ray) win.carry(id, ray, push, dt, head);
+    }
+  }
+
   /* ---- grabbing the field in depth: one hand moves it, two scale it ---- */
   let grab = null;
   function grabDepth() {
     const node = field?.depthNode;
     if (!node) { grab = null; return; }
-    const g = pointers.grips();
+    const g = pointers.grips().filter((x) => !held.has(x.id));
     const key = g.map((x) => x.id).join('+');
     if (!g.length) { grab = null; return; }
     if (!grab || grab.key !== key) {
@@ -752,10 +800,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     const dark = Math.max(field?.veil ?? 0, home?.veil ?? 0);
     veil.visible = dark > 0.001;
     veil.material.opacity = dark;
-    if (field) {
-      const y = field.mainYaw();
-      markers.setDim(0.45, toSky(field.depthAxis()), LAYOUT.depth.clearDeg, 0.12, toSky(new THREE.Vector3(-Math.sin(y), 0, -Math.cos(y))));
-    }
+    if (field) markers.setDim(0.45, toSky(field.depthAxis()), LAYOUT.depth.clearDeg, 0.12);
     markers.tick(now, { growMs: LAYOUT.dive.ms, grow: LAYOUT.dive.markerGrow });
 
     locomote(dt);
@@ -774,6 +819,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     }
 
     const rays = pointers.update(h, headQuat);
+    handleWindows(rays, dt, h);
     const seen = new Set();
     let markerHover = null;
     let starHover = -1;
