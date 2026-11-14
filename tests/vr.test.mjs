@@ -95,10 +95,11 @@ test('the screens stand where they are meant to, facing the eye, with type big e
       assert.ok(minTextPx(s.pxPerM, dist) === type.body, name);
     }
   }
-  // The side screens at ±37–40°, the buttons just under the field.
-  assert.ok(Math.abs(SCREENS.card.yawDeg) >= 37 && Math.abs(SCREENS.card.yawDeg) <= 40);
+  // The side screens at ±35°, the buttons just under the field.
+  assert.ok(Math.abs(SCREENS.card.yawDeg) >= 34 && Math.abs(SCREENS.card.yawDeg) <= 40);
   const barPitch = Math.atan2(SCREENS.bar.dy, SCREENS.bar.dist) * 180 / Math.PI;
-  assert.ok(barPitch <= -16 && barPitch >= -18);
+  // Its centre; the first row, which is all that shows unless "More" is open, is about a degree higher.
+  assert.ok(barPitch <= -16 && barPitch >= -20);
   assert.ok(MIN_TEXT_DEG >= 1.5);
 });
 
@@ -185,4 +186,37 @@ test('the ring is the orbit of the Earth: the longitude of the Sun, two seasons 
 test('the VR strings exist in both languages', async () => {
   const { VR_KEYS } = await import('../public/js/vr/strings.js');
   assert.deepEqual([...VR_KEYS.en].sort(), [...VR_KEYS.ru].sort());
+});
+
+test('on the arc the seasons stand either side of the front, a return a year later a row below', async () => {
+  const { arcLayout } = await import('../public/js/vr/orbit.js');
+  const mjd = (iso) => Date.parse(`${iso}T00:00:00Z`) / 86400000 + 40587;
+  const days = ['2025-07-06', '2025-07-09', '2025-07-19', '2026-01-01', '2026-01-04', '2026-07-03', '2026-07-10'].map(mjd);
+  const r = arcLayout(days, { minSepDeg: 8, gapDeg: 9, arcDeg: 130 });
+  // Compact, in front: the two places a fixed gap apart, whatever the months between them.
+  const span = Math.max(...r.angles) - Math.min(...r.angles);
+  assert.ok(span <= 2 * 8 + 8 + (9 + 8) + 1e-9, `span ${span}`);
+  // Time runs left to right (positive yaw is left): July before January.
+  assert.ok(r.angles[0] > r.angles[3]);
+  assert.deepEqual(r.tiers, [0, 0, 0, 0, 0, 1, 1]);
+  // In order inside a season, and the frames 8° apart.
+  assert.ok(close(r.angles[0] - r.angles[1], 8, 1e-9));
+  // The gap is labelled by its days, and the baseline keeps its true length between the two places.
+  assert.ok(r.gaps[0].days > 150);
+  assert.ok(r.baseline.chordAU > 1.9 && r.baseline.a !== r.baseline.b);
+});
+
+test('the target is matched to Gaia by its id, or only nearby with its own motion', async () => {
+  const { matchTarget, eclipticLatitude } = await import('../public/js/vr/depth3d.js');
+  const rows = [
+    { id: '4472832130942575872', ra: 269.44850253, dec: 4.73942005, pmRA: -801.551, pmDE: 10362.394 },
+    { id: '1', ra: 133.81, dec: -7.247, pmRA: -3, pmDE: 2 },
+  ];
+  assert.equal(matchTarget({ ref: 'Gaia DR3 4472832130942575872', ra: 269.45, dec: 4.74 }, rows, 2026).id, '4472832130942575872');
+  // WISE 0855 is not in Gaia: a neighbour 30″ away with no motion to speak of is not it.
+  const wise = { ra: 133.81890825, dec: -7.247048, epoch: 2000, pmRA: -8123.7, pmDE: 673.2, ref: 'Kirkpatrick et al. 2021, ApJS 253, 7' };
+  assert.equal(matchTarget(wise, rows, 2026), null);
+  // Planet X's predicted orbits keep within about 21° of the ecliptic: Barnard's Star is at +28°.
+  assert.ok(Math.abs(eclipticLatitude(269.4463, 4.768) - 28.2) < 0.3);
+  assert.ok(Math.abs(eclipticLatitude(270, 66.56) - 90) < 0.1);
 });

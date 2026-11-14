@@ -20,6 +20,11 @@
  *   onDrag(ray)           the dragging ray, every frame it is held
  *   onRelease(ray, moved) the press ended; `moved` false is a choice
  *   onBack, onStep(±1), onToggle   the controller's other buttons and the keys
+ *   onTurn(±1)            a snap turn: the right stick pushed aside
+ *
+ * The sticks: the left one walks where the head looks, the right one turns
+ * by steps aside and flies along the line of sight up and down (`sticks()`).
+ * The grips: `grips()` says which hands are squeezing, and where they are.
  */
 
 import * as THREE from '../vendor/three.module.js';
@@ -29,7 +34,7 @@ const DRAG_PX = 6;
 /** How far a held ray may turn, in degrees, and still be a press rather than a drag. */
 const DRAG_DEG = 4.5;
 
-export function createPointers({ renderer, scene, camera, dom, look, onPress, onDrag, onRelease, onBack, onBring, onStep, onToggle, bringMs = 800 }) {
+export function createPointers({ renderer, scene, camera, dom, look, onPress, onDrag, onRelease, onBack, onBring, onStep, onToggle, onTurn, bringMs = 800 }) {
   const rays = new Map();
   const tmpQ = new THREE.Quaternion();
 
@@ -40,6 +45,9 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
   const reticleMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(look.ink), transparent: true, opacity: 0.95, depthTest: false, side: THREE.DoubleSide });
 
   const controllers = [];
+  const walk = [0, 0];
+  let fly = 0;
+  const keys = new Set();
   for (let i = 0; i < 2; i++) {
     const c = renderer.xr.getController(i);
     // Faint over nothing, bright over something that can be chosen.
@@ -118,8 +126,17 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
     if (b === 'up' && entry.heldSince != null) { entry.heldSince = null; onBack?.(); }
     if (edge(4) === 'down') onToggle?.();
     const x = pad.axes[2] ?? 0;
-    if (Math.abs(x) > 0.7 && entry.stickArmed) { entry.stickArmed = false; onStep?.(x > 0 ? 1 : -1); }
-    if (Math.abs(x) < 0.3) entry.stickArmed = true;
+    const y = pad.axes[3] ?? 0;
+    const dead = (v) => (Math.abs(v) < 0.15 ? 0 : v);
+    if (entry.source.handedness === 'left') {
+      walk[0] = dead(x);
+      walk[1] = dead(y);
+    } else {
+      // Aside: a snap turn, once per push. Up and down: along the line of sight.
+      if (Math.abs(x) > 0.7 && entry.stickArmed) { entry.stickArmed = false; onTurn?.(x > 0 ? -1 : 1); }
+      if (Math.abs(x) < 0.3) entry.stickArmed = true;
+      fly = Math.abs(x) < 0.5 ? dead(y) : 0;
+    }
   }
 
   /* ------------------------------------------------------- flat screen */
@@ -213,6 +230,17 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
     flat.fov = Math.max(15, Math.min(100, flat.fov * Math.exp(e.deltaY * 0.001)));
     applyLook();
   }, { passive: false });
+  // On a flat screen, W A S D walk, Q and E turn, R and F fly.
+  window.addEventListener('keyup', (e) => keys.delete(e.key.toLowerCase()));
+  window.addEventListener('blur', () => keys.clear());
+  window.addEventListener('keydown', (e) => {
+    if (!renderer.xr.isPresenting && !e.target?.closest?.('input')) {
+      const k = e.key.toLowerCase();
+      if ('wasdrf'.includes(k) && k.length === 1) keys.add(k);
+      if (k === 'q') onTurn?.(1);
+      if (k === 'e') onTurn?.(-1);
+    }
+  });
   window.addEventListener('keydown', (e) => {
     if (renderer.xr.isPresenting) return;
     if (e.target?.closest?.('button, a, input')) return;
@@ -269,6 +297,23 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
         if (act?.pulse) act.pulse(strength, ms);
         else pad?.vibrationActuator?.playEffect?.('dual-rumble', { duration: ms, strongMagnitude: strength, weakMagnitude: strength });
       } catch { /* a controller without a motor */ }
+    },
+    /** The sticks this frame: `walk` [x, y] (left stick or W A S D), `fly` (right stick up/down, or R F). */
+    sticks() {
+      if (renderer.xr.isPresenting) return { walk: walk.slice(), fly };
+      const kx = (keys.has('d') ? 1 : 0) - (keys.has('a') ? 1 : 0);
+      const ky = (keys.has('s') ? 1 : 0) - (keys.has('w') ? 1 : 0);
+      const kf = (keys.has('f') ? 1 : 0) - (keys.has('r') ? 1 : 0);
+      return { walk: [kx, ky], fly: kf };
+    },
+    /** The hands squeezing their grips: [{ id, pos (world) }]. */
+    grips() {
+      const out = [];
+      for (const e of controllers) {
+        if (!e.source?.gamepad?.buttons?.[1]?.pressed && !(e.hold?.kind === 'squeeze')) continue;
+        out.push({ id: e.id, pos: new THREE.Vector3().setFromMatrixPosition(e.c.matrixWorld) });
+      }
+      return out;
     },
     /** The input sources the session has, for the diagnostics. */
     sources() {

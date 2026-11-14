@@ -195,9 +195,11 @@ export function createSky(stars, { bandWidth = 1024 } = {}) {
 
   return {
     group,
-    /** Dim the whole sky (1 is full), so screens in front of it read. */
-    setDim(k) {
-      bandMat.uniforms.dim.value = k;
+    /** The stars' unit vectors in the sky's own frame, for pointing at one. */
+    positions: points ? points.geometry.attributes.position.array : null,
+    /** Dim the whole sky (1 is full), so screens in front of it read; `band` dims the Milky Way further. */
+    setDim(k, band = 1) {
+      bandMat.uniforms.dim.value = k * band;
       if (starMat) starMat.uniforms.dim.value = Math.min(1, k * 1.15);
       eclMat.opacity = 0.35 * k;
     },
