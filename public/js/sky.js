@@ -1111,7 +1111,14 @@ export class SkyView {
 
   bindPointer() {
     const c = this.canvas;
+    // In the wipe a drag moves the divider and a press that does not move
+    // marks the sky, as in every other mode. A press on the divider itself
+    // takes hold of it at once.
     let dragging = false;
+    let pressAt = null;
+    let dragged = false;
+    const DRAG_PX = 5;
+    const GRAB_PX = 20;
     const local = (e) => {
       const r = c.getBoundingClientRect();
       return [e.clientX - r.left, e.clientY - r.top];
@@ -1123,7 +1130,12 @@ export class SkyView {
     c.addEventListener('pointermove', (e) => {
       if (!this.grid) return;
       const [x, y] = local(e);
+      if (pressAt && !dragging && this.mode === 'wipe' && Math.hypot(x - pressAt[0], y - pressAt[1]) > DRAG_PX) {
+        dragging = true;
+        c.setPointerCapture(e.pointerId);
+      }
       if (dragging && this.mode === 'wipe') {
+        dragged = true;
         this.wipe = Math.max(0, Math.min(1, x / this.cssW));
         this.draw();
         return;
@@ -1140,18 +1152,26 @@ export class SkyView {
 
     c.addEventListener('pointerdown', (e) => {
       if (this.mode !== 'wipe') return;
-      dragging = true;
-      c.setPointerCapture(e.pointerId);
-      const [x] = local(e);
-      this.wipe = Math.max(0, Math.min(1, x / this.cssW));
-      this.draw();
+      const [x, y] = local(e);
+      pressAt = [x, y];
+      dragged = false;
+      if (Math.abs(x - this.wipe * this.cssW) <= GRAB_PX) {
+        dragging = true;
+        c.setPointerCapture(e.pointerId);
+      }
     });
-    c.addEventListener('pointerup', (e) => {
-      if (dragging) { dragging = false; c.releasePointerCapture(e.pointerId); }
-    });
+    const release = (e) => {
+      if (dragging && c.hasPointerCapture(e.pointerId)) c.releasePointerCapture(e.pointerId);
+      dragging = false;
+      pressAt = null;
+    };
+    c.addEventListener('pointerup', release);
+    c.addEventListener('pointercancel', release);
 
     c.addEventListener('click', (e) => {
-      if (!this.grid || this.mode === 'wipe') return;
+      if (!this.grid) return;
+      // The end of a drag of the divider is not a mark.
+      if (this.mode === 'wipe' && dragged) { dragged = false; return; }
       const [x, y] = local(e);
       const [i, j] = this.toGrid(x, y);
       if (!inside(i, j)) return;

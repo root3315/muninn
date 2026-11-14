@@ -240,7 +240,7 @@ const STRINGS = {
     'frame.flagged': '{n} px masked by pipeline flags',
     'frame.noFlags': 'flags not read: nothing masked',
     'mode.blinkHint': 'Cycles every visit. A source that moves will jump.',
-    'mode.wipeHint': 'Drag the divider. A and B meet in the middle.',
+    'mode.wipeHint': 'Drag the divider; a press without dragging marks the sky. A and B meet in the middle.',
     'mode.diffHint': 'A minus B. Violet is brighter in A, amber brighter in B.',
     'mode.singleHint': 'One visit, held still. ▶ starts the blink.',
 
@@ -831,7 +831,7 @@ const STRINGS = {
     'frame.flagged': 'замаскировано по флагам: {n} пикс.',
     'frame.noFlags': 'флаги не прочитаны: маски нет',
     'mode.blinkHint': 'Перебирает все заходы. Движущийся источник прыгает.',
-    'mode.wipeHint': 'Тяните разделитель. A и B встречаются посередине.',
+    'mode.wipeHint': 'Тяните разделитель; нажатие без перетаскивания ставит метку. A и B встречаются посередине.',
     'mode.diffHint': 'A минус B. Фиолетовое ярче в A, янтарное — в B.',
     'mode.singleHint': 'Один заход стоит на месте. ▶ запустит мигание.',
 
