@@ -10,22 +10,19 @@
 
 import { t } from './i18n.js';
 
-const SEEN_KEY = 'muninn.readSeen';
 const CUED = ['gate-about', 'about-open'];
 
 const $ = (id) => document.getElementById(id);
 
 let watcher = null;
-// A private window that refuses storage still loses the cue once opened.
+// Lit on every page load until the sheet is opened in that load: a reload,
+// Ctrl+Shift+R included, lights it again.
 let sessionSeen = false;
 
-function seen() {
-  try { return localStorage.getItem(SEEN_KEY) === '1'; } catch { return false; }
-}
 
 /** Put the cue on the buttons, or take it off, in the current language. */
 export function relabelCue() {
-  const on = !seen() && !sessionSeen;
+  const on = !sessionSeen;
   for (const id of CUED) {
     const button = $(id);
     if (!button) continue;
@@ -36,7 +33,6 @@ export function relabelCue() {
 
 function markSeen() {
   sessionSeen = true;
-  try { localStorage.setItem(SEEN_KEY, '1'); } catch { /* private window */ }
   relabelCue();
 }
 
