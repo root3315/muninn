@@ -696,7 +696,8 @@ async function askMastGaia(field, key) {
 
 async function askIrsaTap(archive, field, key) {
   const query = new URLSearchParams({ REQUEST: 'doQuery', LANG: 'ADQL', FORMAT: 'csv', QUERY: coneQuery(archive, field) });
-  const res = await withTimeout(`${IRSA_TAP}?${query}`, TAP_TIMEOUT_MS);
+  // IRSA's gateway says 502 in bursts: asked once more after a short wait.
+  const res = await retryOnGateway(() => withTimeout(`${IRSA_TAP}?${query}`, TAP_TIMEOUT_MS));
   const text = await res.text();
   // A refusal comes back as a VOTable whatever format was asked for.
   if (!res.ok || text.trimStart().startsWith('<')) {

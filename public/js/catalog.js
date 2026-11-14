@@ -543,9 +543,52 @@ async function irsaRows(kind, { ra, dec, radiusDeg, limit = null, top }, signal)
 }
 
 /**
+ * The same catalogues at the CfA's VizieR mirror, read through its cone
+ * search: for each shared column name, the mirror's own. CatWISE2020 has no
+ * plain W1/W2 there, so its motion-fit magnitudes stand in for them.
+ */
+const CFA_CONES = {
+  gaia: {
+    source: 'I/355/gaiadr3', mag: 'Gmag',
+    columns: Object.fromEntries(['Source', 'RA_ICRS', 'DE_ICRS', 'Gmag', 'pmRA', 'pmDE', 'Plx', 'e_Plx', 'VarFlag', 'PQSO', 'PGal', 'PSS'].map((n) => [n, n])),
+  },
+  wise: {
+    source: 'II/328/allwise', mag: 'W1mag',
+    columns: Object.fromEntries(['AllWISE', 'RAJ2000', 'DEJ2000', 'W1mag', 'W2mag'].map((n) => [n, n])),
+  },
+  twomass: {
+    source: 'II/246/out', mag: 'Jmag',
+    columns: Object.fromEntries(['2MASS', 'RAJ2000', 'DEJ2000', 'Jmag', 'Hmag', 'Kmag'].map((n) => [n, n])),
+  },
+  catwise: {
+    source: 'II/365/catwise', mag: 'W1mproPM',
+    columns: {
+      source_name: 'Name', ra_pm: 'RAPMdeg', dec_pm: 'DEPMdeg', pmra: 'pmRA', pmdec: 'pmDE',
+      sigpmra: 'e_pmRA', sigpmdec: 'e_pmDE', w1mpro: 'W1mproPM', w2mpro: 'W2mproPM',
+    },
+  },
+};
+
+/** One catalogue's rows in a circle from the CfA's VizieR, under the shared column names. */
+async function cfaRows(kind, { ra, dec, radiusDeg, top }, signal) {
+  const { source, mag, columns } = CFA_CONES[kind];
+  const q = new URLSearchParams({
+    '-source': source, '-c': `${ra.toFixed(6)} ${dec >= 0 ? '+' : ''}${dec.toFixed(6)}`,
+    '-c.rs': (radiusDeg * 3600).toFixed(2), '-out': Object.values(columns).join(','),
+    '-sort': mag, '-out.max': String(top),
+  });
+  const res = await fetch(`${VIZIER_CFA}?${q}`, { signal: deadline(signal, CATALOG_DEADLINE_MS) });
+  if (!res.ok) throw new Error(`VizieR ${res.status}`);
+  const { status, message, rows } = parseVOTable(await res.text());
+  if (status === 'ERROR') throw new Error(message);
+  const named = rows.map((row) => Object.fromEntries(Object.entries(columns).map(([name, col]) => [name, row[col] ?? ''])));
+  return { rows: named, via: 'VizieR' };
+}
+
+/**
  * One catalogue's rows in a circle, under the shared column names, from
  * whichever archive answers first: IRSA through the relay, or VizieR straight
- * from the browser. Usually VizieR is quicker and IRSA is there for the days
+ * from the browser, at CDS or at the CfA mirror. Usually VizieR is quicker and IRSA is there for the days
  * CDS is down; on a static host, with no relay, VizieR is the only route.
  * `via` says which answered.
  */
@@ -555,6 +598,9 @@ export async function catalogueRows(kind, field, { signal } = {}) {
   if (vizier) {
     asks.push(tap(VIZIER_TAP, coneQuery(vizier, field), 'csv', signal).then((text) => ({ rows: parseCsv(text), via: 'VizieR' })));
   }
+  // The CfA's VizieR answers when Strasbourg does not; it is asked only
+  // without a magnitude cut, as a mark's own lookup is.
+  if (CFA_CONES[kind] && field.limit == null) asks.push(cfaRows(kind, field, signal));
   try {
     return await Promise.any(asks);
   } catch (err) {
@@ -798,7 +844,7 @@ export async function identifySource({ ra, dec, epoch = 2026 }, { signal, onUpda
     const stop = new AbortController();
     const run = { at, stop };
     runs[key] = run;
-    const runSignal = signal ? AbortSignal.any([signal, stop.signal]) : stop.signal;
+    const runSignal = deadline(signal ? AbortSignal.any([signal, stop.signal]) : stop.signal, IDENTIFY_DEADLINE_MS);
     run.done = settled(spec.ask(at.ra, at.dec, runSignal, at.arcsec)).then((answer) => {
       if (runs[key] !== run) return;
       answers[key] = answer;
@@ -816,8 +862,8 @@ export async function identifySource({ ra, dec, epoch = 2026 }, { signal, onUpda
 
   askAllFixed();
   await Promise.all([
-    moving('gaia', askGaia(ra, dec, signal, epoch)),
-    moving('catwise', askCatwise(ra, dec, signal, epoch)),
+    moving('gaia', askGaia(ra, dec, deadline(signal, IDENTIFY_DEADLINE_MS), epoch)),
+    moving('catwise', askCatwise(ra, dec, deadline(signal, IDENTIFY_DEADLINE_MS), epoch)),
   ]);
   // With both motions in, nothing is asked again: these are the last questions.
   await Promise.all(Object.values(runs).map((run) => run.done));
@@ -829,6 +875,14 @@ export async function identifySource({ ra, dec, epoch = 2026 }, { signal, onUpda
 }
 
 const IDENTIFY_KEYS = ['simbad', 'gaia', 'tmass', 'wise', 'catwise', 'vsx'];
+
+/**
+ * How long one catalogue has to answer about a mark, by every route at once.
+ * A few-arcsecond cone comes back in a second or two from a mirror that is
+ * up; waiting out a slow one (IRSA's TAP gives up after 75 s) kept the whole
+ * card saying "asking" for over a minute when CDS was down.
+ */
+const IDENTIFY_DEADLINE_MS = 25_000;
 
 /** The catalogues with positions at one fixed epoch: which epoch, and how wide to look. */
 const FIXED_EPOCH = {
