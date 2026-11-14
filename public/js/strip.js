@@ -430,19 +430,30 @@ export function drawStrip(canvas, {
   // overlapping dates is a grey smear, not a scale.
   const widest = skeleton ? 0 : Math.max(...slots.map((_, i) => ctx.measureText(label(i)).width));
   const every = Math.max(1, Math.ceil((widest + 6) / slot));
+  const shown = [];
   for (let i = 0; i < n && !skeleton; i++) {
     if (i % every && i !== liveSlot) continue;
     // The date of the frame on screen is always written; where only every
     // other date fits, the one beside it gives way rather than run into it.
     if (every > 1 && i !== liveSlot && Math.abs(i - liveSlot) < every) continue;
-    // From the MJD, which is UTC by definition; the ISO string carries no zone
-    // and would be read as local time.
-    ctx.fillStyle = i === liveSlot ? P.ink : (P.label ?? P.faint);
-    ctx.globalAlpha = slots[i].visit ? 1 : 0.55;
+    shown.push(i);
+  }
+  // The date on screen first, then the rest in order; one that would touch a
+  // date already written is left off (at the ends a date is pulled inside the
+  // run, and on a phone it ran into its neighbour).
+  if (shown.includes(liveSlot)) shown.sort((a, b) => (a === liveSlot ? -1 : b === liveSlot ? 1 : a - b));
+  const taken = [];
+  for (const i of shown) {
     // Kept inside the run at its ends, where a centred date ran off the edge.
     const text = label(i);
     const half = ctx.measureText(text).width / 2;
     const cx = Math.min(cssW - half - 1, Math.max(half + 1, atSlot(i) + thumbW / 2));
+    if (taken.some(([a, b]) => cx - half - 4 < b && a < cx + half + 4)) continue;
+    taken.push([cx - half, cx + half]);
+    // From the MJD, which is UTC by definition; the ISO string carries no zone
+    // and would be read as local time.
+    ctx.fillStyle = i === liveSlot ? P.ink : (P.label ?? P.faint);
+    ctx.globalAlpha = slots[i].visit ? 1 : 0.55;
     ctx.fillText(text, cx, dateY + 10);
   }
   ctx.globalAlpha = 1;
