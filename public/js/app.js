@@ -4159,7 +4159,7 @@ async function showPlanets(hit) {
   const [ra, dec, n, name] = host;
   const url = new URL('/system', EXOVISION_URL);
   url.search = new URLSearchParams({
-    ra: ra.toFixed(5), dec: dec.toFixed(5), from: 'muninn', name: hit.label ?? name,
+    ra: ra.toFixed(5), dec: dec.toFixed(5), from: 'muninn', name: hit.label ?? name, lang: getLanguage(),
   }).toString();
   link.href = url.href;
   link.textContent = t('card.planets', { n });
