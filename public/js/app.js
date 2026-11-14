@@ -4195,6 +4195,42 @@ async function showPlanets(hit) {
   link.textContent = t('card.planets', { n });
   link.title = t('card.planetsTitle');
   link.hidden = false;
+  link.onclick = (e) => {
+    // A press with a modifier, or another button, opens a tab as usual.
+    if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    jumpToSystem(url.href, link.getBoundingClientRect(), hit.label ?? name);
+  };
+}
+
+/**
+ * The way into ExoVision: from the card, the sky closes over in ExoVision's
+ * own night, the star brightens at its centre with its name under it, and the
+ * system's page opens in the same tab (it links back to the field).
+ */
+function jumpToSystem(href, from, name) {
+  if (REDUCED_MOTION.matches || document.querySelector('.exo-jump')) { location.assign(href); return; }
+  const veil = document.createElement('div');
+  veil.className = 'exo-jump';
+  veil.setAttribute('aria-hidden', 'true');
+  veil.style.setProperty('--x', `${Math.round(from.left + from.width / 2)}px`);
+  veil.style.setProperty('--y', `${Math.round(from.top + from.height / 2)}px`);
+  const star = document.createElement('span');
+  star.className = 'exo-jump__star';
+  const caption = document.createElement('p');
+  caption.className = 'exo-jump__caption';
+  const kind = document.createElement('span');
+  kind.textContent = t('card.jump');
+  const title = document.createElement('strong');
+  title.textContent = name;
+  const where = document.createElement('span');
+  where.textContent = 'ExoVision';
+  caption.append(kind, title, where);
+  veil.append(star, caption);
+  document.body.append(veil);
+  // Back from ExoVision restores this page from the cache: the veil goes.
+  window.addEventListener('pageshow', () => veil.remove(), { once: true });
+  setTimeout(() => location.assign(href), 900);
 }
 
 async function showCard(hit, { focus = false } = {}) {
