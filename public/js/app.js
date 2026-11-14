@@ -3528,7 +3528,10 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   setPlateState('', { hidden: true });
   sky.setAB(0, Math.max(0, sky.visits.length - 1));
   // A visit asked for by a link is held on screen, which is a single frame.
-  const holding = sky.visits.findIndex((v) => v.frame === state.allVisits[state.wantVisit]);
+  let holding = sky.visits.findIndex((v) => v.frame === state.allVisits[state.wantVisit]);
+  // The held frame itself may not have been read (a failed or uncovered
+  // file): the nearest visit that was is held instead of none.
+  if (holding < 0 && held) holding = findHeldVisit(sky.visits.map((v) => v.frame), held);
   state.wantVisit = null;
   if (holding >= 0) {
     stopPlayback();

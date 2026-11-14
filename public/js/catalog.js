@@ -276,7 +276,7 @@ export function findHeldVisit(visits, held) {
   return (sameBand ?? atMoment[0]).i;
 }
 
-export const bandsPresent =(frames) => [...new Set(frames.map((f) => f.band))].sort();
+export const bandsPresent = (frames) => [...new Set(frames.map((f) => f.band))].sort();
 
 export const bandRange = (frames, band) => {
   const set = frames.filter((f) => f.band === band);
