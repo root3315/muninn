@@ -476,6 +476,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
   /** What can be pointed at, by class: `{ pos: [x,y,z] in the corridor, card() }`. */
   let scaleNow = 1;
   let settleFrame = 0;
+  let settledAt = null;
+  let settledSig = '';
   const tmpA = new THREE.Vector3();
   const tmpB = new THREE.Vector3();
   /** Labels by priority, each hidden if it would cover one shown before it, by angle from the head. */
@@ -494,8 +496,11 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
         yaw: Math.atan2(p.x, -p.z), el: Math.asin(Math.max(-1, Math.min(1, p.y / d))),
         hw: Math.atan((l.widthM * s) / 2 / d) * 0.8, hh: Math.atan((l.heightM * s) / 2 / d),
       };
-      const hit = shownBoxes.some((o) => Math.abs(Math.atan2(Math.sin(o.yaw - box.yaw), Math.cos(o.yaw - box.yaw))) < o.hw + box.hw
-        && Math.abs(o.el - box.el) < o.hh + box.hh);
+      // Hysteresis once settled: a shown name holds until clearly covered, a hidden one returns only when clearly free.
+      const k = l.fixed || !l.settled ? 1 : l.mesh.visible ? 0.8 : 1.2;
+      l.settled = true;
+      const hit = shownBoxes.some((o) => Math.abs(Math.atan2(Math.sin(o.yaw - box.yaw), Math.cos(o.yaw - box.yaw))) < (o.hw + box.hw) * k
+        && Math.abs(o.el - box.el) < (o.hh + box.hh) * k);
       if (!l.fixed) {
         l.mesh.visible = !hit;
         if (l.lead) l.lead.visible = !hit;
@@ -517,6 +522,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
   const followers = [];
   /** The paths shown, by the thing they belong to. */
   const paths = new Map();
+  /** Where the line under the filters says why no bodies are shown. */
+  let bodyNoteY = 0;
   /** Where the clock's slider lies on the controls, once drawn. */
   let clockBox = null;
   const shown = { stars: true, bodies: true, galaxies: true, unknown: true };
@@ -525,7 +532,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
   function applyFilters() {
     const truth = morph.value < 0.05;
     for (const [name, layer] of Object.entries(layers)) {
-      const on = shown[classOf[name]] ?? true;
+      const kind = name.startsWith('path:') ? { gaia: 'stars', body: 'bodies', galaxy: 'galaxies' }[name.split(':')[1]] : classOf[name];
+      const on = shown[kind] ?? true;
       for (const o of layer.objects) { o.userData.on = on; o.visible = on && (!o.userData.truth || truth); }
       for (const l of layer.labels) { l.on = on; l.mesh.visible = on && truth; if (l.lead) { l.lead.userData.on = on; l.lead.visible = on && truth; } }
     }
@@ -568,10 +576,14 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
       row();
       const g = state.gaia;
       chip('filter', tv('vr.filterStars', { n: g?.known ?? 0, m: (g?.known ?? 0) + (g?.unknown ?? 0) }), shown.stars, 'stars');
-      chip('filter', tv('vr.filterBodies', { n: state.bodies.length }), shown.bodies, 'bodies');
+      bodyNoteY = y + bh + Math.round(px * 0.85);
+      if (state.bodies.length) chip('filter', tv('vr.filterBodies', { n: state.bodies.length }), shown.bodies, 'bodies');
+      else laid.push({ x, y, w: chipWidth(ctx, font, tv('vr.filterBodies', { n: 0 }), bh, 0.09 * 760), h: bh, label: tv('vr.filterBodies', { n: 0 }), id: 'none', font, tone: 'neutral', disabled: true }), (x += chipWidth(ctx, font, tv('vr.filterBodies', { n: 0 }), bh, 0.09 * 760) + 12);
       chip('filter', tv('vr.filterGalaxies', { n: state.galaxies?.length ?? 0, m: state.galaxyCount ?? 0 }), shown.galaxies, 'galaxies');
       chip('filter', tv('vr.filterUnknown', { n: (g?.unknown ?? 0) + state.candidates.length }), shown.unknown, 'unknown');
       row();
+      // Room for the line that says why there are no bodies.
+      if (!state.bodies.length) y += Math.round(px * 1.1);
       // Time: the stars along their own motion; the bodies along their season.
       if (state.gaia?.known) {
         chip('play', clock.playing ? '❚❚' : '▶', clock.playing);
@@ -617,7 +629,13 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
           b.note.forEach((l, k) => ctx.fillText(l, 18, b.y + Math.round(px * 0.8) + k * Math.round(px * 1.0)));
           continue;
         }
+        if (b.disabled) { button(ctx, [], look, b); continue; }
         button(ctx, hits, look, b);
+      }
+      if (!state.bodies.length) {
+        ctx.font = `400 ${Math.round(px * 0.8)}px ${FONTS.body}`;
+        ctx.fillStyle = look.neutral;
+        ctx.fillText(tv(state.bodiesFailed ? 'vr.bodiesFailed' : state.bodyAsked ? 'vr.bodiesNone' : 'vr.bodiesAsking'), 18, bodyNoteY);
       }
       ctx.font = `400 ${small}px ${FONTS.mono}`;
       ctx.fillStyle = look.neutral;
@@ -689,12 +707,13 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
     const big = Math.round(px * 1.35);
     ctx.font = `600 ${big}px ${FONTS.display}`;
     ctx.fillStyle = clock.years ? look.accent : look.ink;
-    const name = year > 0 ? tv('vr.yearAD', { y: fmt(year, 0) }) : tv('vr.yearBC', { y: fmt(1 - year, 0) });
+    // A year is written as a year: no thousands separator.
+    const name = year > 0 ? tv('vr.yearAD', { y: String(year) }) : tv('vr.yearBC', { y: String(1 - year) });
     ctx.fillText(name, 18, y + big * 0.9);
     const w = ctx.measureText(name).width;
     ctx.font = `400 ${Math.round(px * 0.85)}px ${FONTS.mono}`;
     ctx.fillStyle = look.neutral;
-    const off = clock.years === 0 ? tv('vr.today') : `${now} ${clock.years > 0 ? '+' : '−'} ${fmt(Math.abs(clock.years), 0)}`;
+    const off = clock.years === 0 ? tv('vr.today') : `${now} ${clock.years > 0 ? '+' : '−'} ${Math.abs(clock.years)}`;
     ctx.fillText(off, Math.min(W - 200, 18 + w + 24), y + big * 0.9);
   }
 
@@ -858,7 +877,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
   }
 
   /** Labels are few: the field's own target, the bodies, a galaxy or two. */
-  const objectLabels = () => labels.filter((l) => !l.keep).length;
+  const objectLabels = () => labels.filter((l) => !l.keep && !l.minor).length;
 
   function placeAlong(dir, distAU) {
     const u = unit(dir);
@@ -894,6 +913,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
       const world = v3(best.it.pos).applyMatrix4(group.matrixWorld);
       return { card: withTools(best.it, world), at: world, distance: best.distance };
     },
+    /** For the checks: a filter on or off, as its chip would; the count of each class. */
+    filter(kind, on) { shown[kind] = on; applyFilters(); drawControls(); return { bodies: state.bodies.length, labels: layers.bodies?.labels.filter((l) => l.mesh.visible).length ?? 0 }; },
     /** For the checks: set the stars' clock, in years from now, or run it. */
     clockTo(years, play = false) { clock.playing = play; clock.last = performance.now(); setYears(years); },
     /** For the checks: where the `i`th pickable thing of a class stands, in the world. */
@@ -1002,7 +1023,13 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
         layer.objects.push(t);
       }
       followers.length = 0;
-      setLayer('gaiaUnknown', items.filter((it) => !it.known), { plateLines: false });
+      const unknownLayer = setLayer('gaiaUnknown', items.filter((it) => !it.known), { plateLines: false });
+      // The far shell named, and each thing on it: the "No distance" filter shows and hides exactly these.
+      for (const it of items.filter((x) => !x.known).slice(0, 3)) {
+        const l = addLabel([tv('vr.unknown')], it.pos, { tone: 'neutral', width: 10, priority: 1 });
+        l.minor = true;
+        unknownLayer.labels.push(l);
+      }
       const fixed = (pc) => fmt(pc, pc < 10 ? 2 : pc < 100 ? 1 : 0);
       const starCard = (o, seen) => () => ({
         title: `Gaia DR3 ${o.id}`,
@@ -1068,9 +1095,9 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
         const expected = (omega / 3) * LOCAL_STARS_PC3 * (CONE_FAR_PC ** 3 - nearPc ** 3);
         const words = tv('vr.coneNote', { from: fmt(nearPc, nearPc < 10 ? 1 : 0), to: fmt(CONE_FAR_PC, 0), n: fmt(expected, expected < 10 ? 1 : 0) });
         const mid = Math.sqrt(nearPc * CONE_FAR_PC) * AU_PER_PC;
-        layer.labels.push(addLabel([words], along(depthMetres(mid)).addScaledVector(v3(frame.r), -cone(depthMetres(mid)) * 1.4).toArray(), { tone: 'neutral', width: 40, priority: 3 }));
+        layer.labels.push(addLabel([words], along(depthMetres(mid)).addScaledVector(v3(frame.u), cone(depthMetres(mid)) * 1.3).toArray(), { tone: 'neutral', width: 40, priority: 3 }));
       }
-      layer.labels.push(addLabel([tv('vr.unknown')], along(unknownShell()).addScaledVector(v3(frame.u), cone(unknownShell()) * 0.7).toArray(), { tone: 'neutral', width: 16, priority: 2 }));
+      unknownLayer.labels.push(addLabel([tv('vr.unknownShell')], along(unknownShell()).addScaledVector(v3(frame.u), cone(unknownShell()) * 0.7).toArray(), { tone: 'neutral', width: 16, priority: 2 }));
       state.asking = false;
       setYears(clock.years);
       drawSign();
@@ -1081,7 +1108,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
      * with dGeo), each with its path over the season: `tracks` Map name →
      * [{ ra, dec, au, mjd }].
      */
-    setBodies(bodies, tracks = new Map()) {
+    setBodies(bodies, tracks = new Map(), { failed = false } = {}) {
+      state.bodiesFailed = failed;
       if (!(bodies instanceof Error)) {
         when.bodies = [bodies, tracks];
         if (when.mjd != null) bodies = bodiesOn(bodies, tracks, when.mjd);
@@ -1092,6 +1120,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
         return;
       }
       const withDistance = bodies.filter((b) => Number.isFinite(b.dGeo) && b.dGeo > 0);
+      state.bodyAsked = true;
       state.bodies = withDistance;
       state.bodyNote = withDistance.length > 0;
       const items = withDistance.map((b) => ({ pos: placeAlong(dirOf(b.ra, b.dec), b.dGeo), sizeDeg: 1.0, color: look.counter, solid: Boolean(b.seen), known: true }));
@@ -1128,13 +1157,21 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
         for (let k = 1; k < pts.length; k++) paths.push(...pts[k - 1].toArray(), ...pts[k].toArray());
       });
       if (paths.length) layer.objects.push(lines(paths, look.counter, 0.85));
-      const room = Math.max(0, Math.min(3, D.maxLabels - objectLabels()));
-      withDistance.slice(0, room).forEach((b, i) => {
+      // The nearest first: every one named while there is room among the names.
+      const order = withDistance.map((b, i) => i).sort((p, q) => withDistance[p].dGeo - withDistance[q].dGeo);
+      const day = (mjd) => formatDay(new Date((mjd - MJD_UNIX) * 86400000));
+      // Each body's path over its season, faint, so where they are going reads at a glance.
+      const faint = [];
+      withDistance.forEach((b) => {
+        const t = tracks.get(b.name) ?? [];
+        for (let k = 1; k < t.length; k++) faint.push(...placeAlong(dirOf(t[k - 1].ra, t[k - 1].dec), t[k - 1].au), ...placeAlong(dirOf(t[k].ra, t[k].dec), t[k].au));
+      });
+      if (faint.length) layer.objects.push(lines(faint, look.counter, 0.5));
+      order.slice(0, Math.max(0, Math.min(6, D.maxLabels + 2 - objectLabels()))).forEach((i) => {
+        const b = withDistance[i];
         const name = b.num ? `(${b.num}) ${b.name}` : b.name;
-        const track = tracks.get(b.name) ?? [];
-        const day = (mjd) => formatDay(new Date((mjd - MJD_UNIX) * 86400000));
-        const second = track.length >= 2
-          ? tv('vr.bodyPath', { au: fmt(b.dGeo, 2), from: day(track[0].mjd), to: day(track.at(-1).mjd) })
+        const second = Number.isFinite(b.mjd)
+          ? tv('vr.bodyAtDate', { au: fmt(b.dGeo, 2), date: day(b.mjd) })
           : tv('vr.bodyAt', { au: fmt(b.dGeo, 2) });
         layer.labels.push(addLabel([name, second], items[i].pos, { tone: 'counter', priority: 5 }));
       });
@@ -1206,7 +1243,16 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
       }
       // Every few frames, the names that would cover one another as seen
       // from where the viewer now stands: the more important one is shown.
-      if (++settleFrame % 8 === 0) settleLabels(headWorld);
+      // Names are settled by where the head is, not where it looks: again only
+      // once it has moved a few centimetres, or the names or the morph changed.
+      if (++settleFrame % 8 === 0) {
+        const sig = `${labels.length}|${morph.value < 0.05}|${labels.filter((l) => l.on !== false).length}`;
+        if (!settledAt || settledAt.distanceTo(headWorld) > 0.05 || sig !== settledSig) {
+          settleLabels(headWorld);
+          settledAt = (settledAt ?? new THREE.Vector3()).copy(headWorld);
+          settledSig = sig;
+        }
+      }
       if (morph.value !== morphTo.to) {
         const k = Math.min(1, (performance.now() - morphTo.t0) / 1200);
         const e = k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;

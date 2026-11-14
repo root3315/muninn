@@ -1118,7 +1118,7 @@ export function openFieldVR(target, env) {
       else st.bodiesFailed.add(frame.obsId);
       if (sky.marks.length) { nameMarks(); sky.draw(); drawMarks(); }
       if (sky.current?.frame === frame) drawSide();
-      if (!st.depthVisit || sky.current?.frame === frame) updateDepthBodies();
+      updateDepthBodies();
     });
   }
 
@@ -1131,32 +1131,42 @@ export function openFieldVR(target, env) {
   }
 
   /** The bodies in the depth view: those at the visit on the screen, with their paths over its season. */
+  /**
+   * Every known body of the field in the depth view: each named body once,
+   * where it was at the answered visit nearest the one on the screen, with
+   * its path over that visit's season.
+   */
   function updateDepthBodies(force = false) {
-    let v = sky.current?.frame ?? null;
-    let objs = v ? sky.knownObjects.get(v.obsId) : null;
-    if (!objs) {
-      // Until the visit on the screen has its answer, the visit with the most known bodies.
-      let best = null;
-      for (const e of st.entries) {
-        const list = sky.knownObjects.get(e.frame.obsId);
-        if (list && (!best || list.length > best.list.length)) best = { frame: e.frame, list };
-      }
-      if (best) { v = best.frame; objs = best.list; }
+    const answered = st.entries.filter((e) => sky.knownObjects.has(e.frame.obsId));
+    const at = sky.current?.frame ?? null;
+    const key = `${at?.obsId ?? ''}|${answered.length}|${st.bodiesFailed.size}`;
+    if (!answered.length || (!force && st.depthVisit === key)) {
+      if (!answered.length && st.entries.length && st.bodiesFailed.size >= st.entries.length) depthView.setBodies([], new Map(), { failed: true });
+      return;
     }
-    if (!objs || (!force && st.depthVisit === v.obsId)) return;
-    st.depthVisit = v.obsId;
-    const tracks = new Map();
-    for (const e of st.entries) {
-      if (Math.abs(e.frame.mjd - v.mjd) > SEASON_DAYS) continue;
+    st.depthVisit = key;
+    const refMjd = at?.mjd ?? answered[Math.floor(answered.length / 2)].frame.mjd;
+    const byName = new Map();
+    for (const e of answered) {
       for (const o of sky.knownObjects.get(e.frame.obsId) ?? []) {
         if (!Number.isFinite(o.dGeo)) continue;
-        if (!tracks.has(o.name)) tracks.set(o.name, []);
-        tracks.get(o.name).push({ ra: o.ra, dec: o.dec, au: o.dGeo, mjd: e.frame.mjd });
+        if (!byName.has(o.name)) byName.set(o.name, []);
+        byName.get(o.name).push({ o, frame: e.frame });
       }
     }
-    for (const list of tracks.values()) list.sort((a, b) => a.mjd - b.mjd);
-    const shown = sky.current?.frame === v;
-    depthView.setBodies(objs.map((o) => ({ ...o, seen: shown && detected(o.ra, o.dec) })), tracks);
+    const bodies = [];
+    const tracks = new Map();
+    for (const [name, list] of byName) {
+      list.sort((p, q) => Math.abs(p.frame.mjd - refMjd) - Math.abs(q.frame.mjd - refMjd));
+      const { o, frame } = list[0];
+      const onScreen = at && frame.obsId === at.obsId;
+      bodies.push({ ...o, mjd: frame.mjd, seen: Boolean(onScreen) && detected(o.ra, o.dec) });
+      const season = list.filter((p) => Math.abs(p.frame.mjd - frame.mjd) <= SEASON_DAYS)
+        .map((p) => ({ ra: p.o.ra, dec: p.o.dec, au: p.o.dGeo, mjd: p.frame.mjd }))
+        .sort((p, q) => p.mjd - q.mjd);
+      tracks.set(name, season);
+    }
+    depthView.setBodies(bodies, tracks);
   }
 
   async function loadDepthData(chosen) {
@@ -1280,6 +1290,7 @@ export function openFieldVR(target, env) {
     },
     depthPlace: (kind, i) => depthView.placeOf(kind, i),
     clockTo: (years, play) => depthView.clockTo(years, play),
+    depthFilter: (kind, on) => depthView.filter(kind, on),
     get stats() {
       return { status: st.status, read: sky.visits.length, planned: st.entries.length, mode: st.mode, depth: st.depth?.single ?? null, hunt: st.hunt ? (st.hunt.list?.length ?? 0) : null, baked: Boolean(baked) };
     },
