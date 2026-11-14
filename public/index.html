@@ -74,6 +74,13 @@
 <body>
 <a class="skip" href="#sky" data-i18n="app.skip">Skip to the sky</a>
 
+<!-- In a headset's own browser, once: the way in is one tap (app.js offerVR). -->
+<div class="vr-banner" id="vr-banner" hidden>
+  <span data-i18n="gate.vrBanner"></span>
+  <button type="button" class="vr-go" id="banner-vr" data-i18n="gate.vr"></button>
+  <button type="button" class="link" id="banner-close" data-i18n="card.close"></button>
+</div>
+
 <!--
   The way in: the real sky, and everything on it is a door.
 
@@ -96,7 +103,7 @@
   <div class="gate__acts">
     <a class="link" href="talk.html" data-i18n="gate.talk"></a>
     <!-- Shown only where the browser can run an immersive VR session (app.js offerVR). -->
-    <a class="link" id="gate-vr" href="vr.html" hidden data-i18n="gate.vr"></a>
+    <button type="button" class="vr-go" id="gate-vr" hidden data-i18n="gate.vr"></button>
     <button type="button" class="link" id="gate-about" data-i18n="app.about"></button>
     <button type="button" class="link link--lang" id="gate-lang" data-i18n-title="lang.switch" data-i18n-label="lang.switch"><span id="gate-lang-name">RU</span></button>
   </div>
@@ -210,6 +217,7 @@
         <button type="button" class="link" id="tools-toggle" aria-expanded="false" aria-controls="tools" data-i18n="tools.toggle"></button>
       </div>
       <button type="button" class="link" id="random" data-i18n="target.random"></button>
+      <button type="button" class="vr-go vr-go--mast" id="mast-vr" hidden data-i18n="gate.vr"></button>
       <button type="button" class="link" id="to-sky" data-i18n="gate.back"></button>
       <button type="button" class="link" id="about-open" data-i18n="app.about"></button>
       <button type="button" class="link link--lang" id="lang" data-i18n-title="lang.switch" data-i18n-label="lang.switch"><span id="lang-name">RU</span></button>
