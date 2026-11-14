@@ -2539,9 +2539,14 @@ function renderMarks() {
     return;
   }
 
+  // The newest mark opens; the ones before it fold to a line when it arrives.
+  const last = sky.marks.length - 1;
+  if (sky.marks[last].open === undefined) sky.marks.forEach((m, i) => { m.open = i === last; });
+
   sky.marks.forEach((m, i) => {
     const li = document.createElement('li');
     li.className = 'mark';
+    li.dataset.open = String(m.open !== false);
 
     const n = document.createElement('span');
     n.className = 'mark__n';
@@ -2595,25 +2600,45 @@ function renderMarks() {
     // A source that sits still in every visit is not a solar-system body, and
     // "no match in SkyBoT" under it only raised the question of why anyone
     // asked. What it is comes from the star catalogues instead.
-    body.append(call, detail);
+    // Folded, a mark is its verdict and one line: what the catalogues call it,
+    // or else what was measured.
+    const brief = document.createElement('p');
+    brief.className = 'mark__brief';
+    brief.textContent = m.tag && m.tag !== call.textContent ? m.tag : detail.textContent;
+
+    // Unfolded, the evidence in groups, each under a small heading, so the
+    // verdict, the catalogues, the light and the place do not run together.
+    const group = (key, ...nodes) => {
+      const kept = nodes.filter(Boolean);
+      if (!kept.length) return null;
+      const g = document.createElement('div');
+      g.className = 'mark__group';
+      const k = document.createElement('p');
+      k.className = 'mark__k';
+      k.textContent = t(key);
+      g.append(k, ...kept);
+      return g;
+    };
+    const verdictNodes = [detail];
     const shape = sharpLine(m.analysis);
     if (shape) {
       if (shape.sharp) call.dataset.kind = 'sharp';
-      body.append(shape.line);
+      verdictNodes.push(shape.line);
     }
     const motion = saturatedMotion(m);
     if (motion) {
       const p = document.createElement('p');
       p.className = 'mark__detail';
       p.textContent = motion;
-      body.append(p);
+      verdictNodes.push(p);
     }
-    if (!STILL.has(m.analysis?.kind)) body.append(id);
-    if (m.who) body.append(...whoLines(m.who, m.analysis?.kind));
+    const whoNodes = [];
+    if (!STILL.has(m.analysis?.kind)) whoNodes.push(id);
+    if (m.who) whoNodes.push(...whoLines(m.who, m.analysis?.kind));
 
+    const lightNodes = [];
     const curve = m.analysis?.seen ? markCurve(m.analysis) : null;
-    if (curve) body.append(curve);
-
+    if (curve) lightNodes.push(curve);
     if (m.analysis?.brightness && m.analysis.seen > 1) {
       const b = document.createElement('p');
       b.className = 'mark__detail';
@@ -2622,9 +2647,14 @@ function renderMarks() {
         faint: fmt(m.analysis.brightness.faintest, 1),
         band: m.analysis.brightness.band,
       });
-      body.append(b);
+      lightNodes.push(b);
     }
-    body.append(pos);
+    body.append(call, brief, ...[
+      group('mark.kVerdict', ...verdictNodes),
+      group('mark.kWho', ...whoNodes),
+      group('mark.kLight', ...lightNodes),
+      group('mark.kWhere', pos),
+    ].filter(Boolean));
 
     const kill = document.createElement('button');
     kill.type = 'button';
@@ -2640,7 +2670,29 @@ function renderMarks() {
       writeHash();
     });
 
-    li.append(n, body, kill);
+    const fold = document.createElement('button');
+    fold.type = 'button';
+    fold.className = 'mark__fold';
+    fold.setAttribute('aria-expanded', String(m.open !== false));
+    fold.setAttribute('aria-label', `${t(m.open !== false ? 'mark.fold' : 'mark.unfold')} ${i + 1}`);
+    fold.title = t(m.open !== false ? 'mark.fold' : 'mark.unfold');
+    const SVG_NS = 'http://www.w3.org/2000/svg';
+    const chevron = document.createElementNS(SVG_NS, 'svg');
+    chevron.setAttribute('viewBox', '0 0 24 24');
+    chevron.setAttribute('aria-hidden', 'true');
+    const stroke = document.createElementNS(SVG_NS, 'path');
+    stroke.setAttribute('d', 'M6 9l6 6 6-6');
+    chevron.append(stroke);
+    fold.append(chevron);
+    fold.addEventListener('click', () => {
+      m.open = m.open === false;
+      renderMarks();
+    });
+    const acts = document.createElement('div');
+    acts.className = 'mark__acts';
+    acts.append(fold, kill);
+
+    li.append(n, body, acts);
     // The numbers behind the verdict, to check or to take elsewhere.
     if (m.track?.length || measuredExposures(m).length) {
       const csv = document.createElement('button');
