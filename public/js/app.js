@@ -3380,6 +3380,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   archives = null;
   archivesNeossat = null;
   renderArchives();
+  showFieldPlanets();
   showTip(null);
   clearTimeout(skybot.clock);
   skybot = newSkybot();
@@ -3959,17 +3960,39 @@ async function showPlanets(hit) {
   const at = preset?.target ?? hit;
   const host = await planetHostNear(at.ra, at.dec);
   if (cardHit !== hit || !host) return;
+  offerSystem(link, host, hit.label, 'card.planets');
+}
+
+/**
+ * The open field, when its target or its centre is a star with known planets,
+ * offers the system in ExoVision under the field's facts, the same way in as
+ * from the sky's card. A field on no such star shows nothing.
+ */
+async function showFieldPlanets() {
+  const link = $('field-planets');
+  link.hidden = true;
+  const gen = fieldSeq;
+  const at = state.target ?? { ra: state.ra, dec: state.dec };
+  if (!Number.isFinite(at?.ra) || !Number.isFinite(at?.dec)) return;
+  const host = await planetHostNear(at.ra, at.dec);
+  if (gen !== fieldSeq || !host) return;
+  offerSystem(link, host, state.label ? state.label.split(' · ')[0] : null, 'field.planets');
+}
+
+/** Point `link` at a host's system in ExoVision, entered by the flight in. */
+function offerSystem(link, host, label, key) {
   const [, , n, name] = host;
-  const url = { href: systemUrl(host, hit.label ?? name, getLanguage()) };
-  link.href = url.href;
-  link.textContent = t('card.planets', { n });
+  const shown = label ?? name;
+  const href = systemUrl(host, shown, getLanguage());
+  link.href = href;
+  link.textContent = t(key, { n });
   link.title = t('card.planetsTitle');
   link.hidden = false;
   link.onclick = (e) => {
     // A press with a modifier, or another button, opens a tab as usual.
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     e.preventDefault();
-    jumpToSystem(url.href, link.getBoundingClientRect(), hit.label ?? name);
+    jumpToSystem(href, link.getBoundingClientRect(), shown);
   };
 }
 
@@ -5334,6 +5357,7 @@ function relabel() {
   $('mark-help').textContent = t($('mark-help').dataset.i18n);
   renderPresets();
   renderArchives();
+  if (state.ra != null) showFieldPlanets();
   // Where the sky in the entry screen comes from, with the other credits.
   const skyCredit = [
     state.skyLayers.stars && t('credit.stars'), state.skyLayers.deep && t('credit.deep'), t('gate.modelled'),
