@@ -38,7 +38,7 @@ import { drawGaiaSky, psfFor } from './gaiasky.js';
 import { fieldArchives, CADC_SEARCH } from './archives.js';
 import {
   SIMBAD_PAGE, VIZIER_PAGE,
-  searchFrames, NoRelayError, UpstreamError, groupVisits, findHeldVisit, bandsPresent, bandRange, parseCoordinates,
+  searchFrames, NoRelayError, UpstreamError, groupVisits, findHeldVisit, nearestHost, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, identifySource, arcsecBetween, fieldObjects, toS3, surveySources,
 } from './catalog.js';
 import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP, propagate, epochOfMjd } from './overlay.js';
@@ -3961,6 +3961,43 @@ function cardFact(name, value) {
  * a field whose frames are stored here, one real frame and every visit SPHEREx
  * has made. Nothing is opened until the card's button is pressed.
  */
+/** Where a star's planetary system is shown: ExoVision, the team's exoplanet explorer. */
+const EXOVISION_URL = 'https://exovision.mydevbox.xyz';
+/** A host star is taken as the card's star within this: the sky's catalogue and the archive's positions differ by proper motion and rounding. */
+const HOST_REACH_ARCSEC = 90;
+let planetHosts = null;
+
+/** The star with known planets nearest (ra, dec) within reach, as [ra, dec, planets, name], or null. */
+async function planetHostNear(ra, dec) {
+  planetHosts ??= fetch('data/planet-hosts.json', { signal: deadline(null, CATALOG_DEADLINE_MS) })
+    .then((r) => (r.ok ? r.json() : { hosts: [] }))
+    .then((body) => body.hosts ?? [])
+    .catch(() => { planetHosts = null; return []; });
+  return nearestHost(await planetHosts, ra, dec, HOST_REACH_ARCSEC);
+}
+
+/** A star with planets, or a field centred on one, offers its system in ExoVision. */
+async function showPlanets(hit) {
+  const link = $('gate-card-planets');
+  link.hidden = true;
+  if (hit.kind !== 'star' && hit.kind !== 'field') return;
+  // A field is centred where its target's path is best seen, not on the
+  // target: the target's own catalogue position is the one to look up.
+  const preset = hit.kind === 'field' ? state.presets.find((p) => p.key === hit.key) : null;
+  const at = preset?.target ?? hit;
+  const host = await planetHostNear(at.ra, at.dec);
+  if (cardHit !== hit || !host) return;
+  const [ra, dec, n, name] = host;
+  const url = new URL('/system', EXOVISION_URL);
+  url.search = new URLSearchParams({
+    ra: ra.toFixed(5), dec: dec.toFixed(5), from: 'muninn', name: hit.label ?? name,
+  }).toString();
+  link.href = url.href;
+  link.textContent = t('card.planets', { n });
+  link.title = t('card.planetsTitle');
+  link.hidden = false;
+}
+
 async function showCard(hit, { focus = false } = {}) {
   if (flying) return;
   const card = $('gate-card');
@@ -4005,6 +4042,7 @@ async function showCard(hit, { focus = false } = {}) {
   if (hit.kind === 'planet') facts.push(cardFact(t('card.distance'), t('card.au', { au: fmt(hit.au, 2) })));
   facts.push(where);
   $('gate-card-facts').replaceChildren(...facts);
+  showPlanets(hit);
 
   // The frame: only where one is stored. No picture stands in for a missing one.
   cardThumbs ??= await Promise.all(['data/thumbs.json', 'data/sky/thumbs.json'].map((url) => (

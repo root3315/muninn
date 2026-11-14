@@ -73,3 +73,12 @@ test('a held visit is found again by its file, then by its moment and band', asy
   assert.equal(findHeldVisit(list, null), -1);
   assert.equal(findHeldVisit([], { mjd: 1 }), -1);
 });
+
+test('a star with planets is found within reach, and only within it', async () => {
+  const { nearestHost } = await import('../public/js/catalog.js');
+  const hosts = [[269.44861, 4.73798, 4, "Barnard's star"], [344.36754, 20.7691, 1, '51 Peg'], [344.4, 20.77, 2, 'near 51 Peg']];
+  assert.equal(nearestHost(hosts, 269.4485, 4.7395, 90)?.[3], "Barnard's star", 'a 2025 position, 6″ from the archive’s');
+  assert.equal(nearestHost(hosts, 344.3676, 20.7692, 90)?.[3], '51 Peg', 'the nearest of two');
+  assert.equal(nearestHost(hosts, 344.3676, 20.80, 90), null, '110″ away is another star');
+  assert.equal(nearestHost([], 0, 0, 90), null);
+});

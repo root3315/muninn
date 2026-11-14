@@ -251,6 +251,22 @@ export function groupVisits(frames, { ra, dec, band = 'all', minGapHours = 6 } =
   return visits;
 }
 
+/**
+ * The entry of `hosts` ([ra, dec, …] rows) nearest (ra, dec) within `reach`
+ * arcseconds, or null.
+ */
+export function nearestHost(hosts, ra, dec, reach) {
+  let best = null;
+  let bestGap = reach;
+  const band = reach / 3600;
+  for (const host of hosts) {
+    if (Math.abs(host[1] - dec) > band) continue;
+    const gap = arcsecBetween(ra, dec, host[0], host[1]);
+    if (gap < bestGap) { best = host; bestGap = gap; }
+  }
+  return best;
+}
+
 /** Exposures closer than this (in days, ~9 s) are one moment: all six detectors shoot together. */
 const SAME_MOMENT_DAYS = 1e-4;
 
