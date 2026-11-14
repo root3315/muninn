@@ -362,7 +362,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   }
 
   /* ---- the name of what the pointer has snapped to, beside the reticle ---- */
-  const SNAP_W = 0.62;
+  const SNAP_W = 1.1;
   const SNAP_H = 0.1;
   const SNAP_DIST = 2.5;
   const snapLabel = createPanel({ widthM: SNAP_W, heightM: SNAP_H, pxPerM: 1000, name: 'snap-name' });
@@ -403,16 +403,17 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       snapLabel.draw((ctx, W, H) => {
         const px = Math.round(H * 0.5);
         ctx.font = `500 ${px}px ${FONTS.body}`;
-        let s = found.text;
-        while (s.length > 4 && ctx.measureText(s).width > W - 36) s = s.slice(0, -2);
-        if (s !== found.text) s = `${s.trimEnd()}…`;
+        // Never cut: a long name takes a smaller size until it fits.
+        const s = found.text;
+        let size = px;
+        while (size > px * 0.6 && ctx.measureText(s).width > W - 36) { size -= 1; ctx.font = `500 ${size}px ${FONTS.body}`; }
         const w = Math.min(W - 4, ctx.measureText(s).width + 36);
         ctx.beginPath();
         ctx.roundRect(2, 2, w, H - 4, (H - 4) / 2);
         ctx.fillStyle = 'rgba(10, 10, 18, 0.78)';
         ctx.fill();
         ctx.fillStyle = look.ink;
-        ctx.fillText(s, 18, H / 2 + px * 0.36);
+        ctx.fillText(s, 18, H / 2 + size * 0.36);
       });
     }
     const { head: h } = headPose();
