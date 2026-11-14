@@ -526,8 +526,9 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
         button(ctx, hits, look, { x, y, w, h: bh, label, id, font, on, hover: hoverId === `${id}:${data ?? ''}`, data });
         x += w + 12;
       };
+      // Back to the field's screens, the way the viewer came; or out to the sky.
+      chip('screens', `‹ ${tv('vr.screensAway')}`);
       chip('back', tv('vr.backSky'));
-      chip('flip', tv('vr.depthFront'));
       chip('morph', morphTo.to > 0.5 ? tv('vr.trueDistances') : tv('vr.asSeen'), morphTo.to > 0.5);
       chip('reset', tv('vr.resetView'));
       // What a metre along the corridor is worth now, in distance.
