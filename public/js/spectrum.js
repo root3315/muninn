@@ -39,6 +39,26 @@ export const LIMIT_SIGMA = 5;
  */
 export const RESOLVING_POWER = { D1: 39, D2: 41, D3: 41, D4: 35, D5: 112, D6: 128 };
 
+/**
+ * How much two exposures see the same light: each one's channel is λ ± w/2,
+ * w the bandwidth the file's WCS-WAVE table gives there or else λ/R for the
+ * detector's resolving power, and the share is the overlap over the
+ * narrower channel, 0 to 1. Two visits of one band can sit at different λ
+ * where the field falls on a different part of the filter, and their
+ * difference then holds the spectrum as well as any change in time.
+ */
+export function channelOverlap(a, b) {
+  const range = ({ lambda, width, band }) => {
+    const half = (width > 0 ? width : lambda / (RESOLVING_POWER[band] ?? 40)) / 2;
+    return [lambda - half, lambda + half];
+  };
+  if (!Number.isFinite(a?.lambda) || !Number.isFinite(b?.lambda)) return null;
+  const [a0, a1] = range(a);
+  const [b0, b1] = range(b);
+  const shared = Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
+  return shared / Math.min(a1 - a0, b1 - b0);
+}
+
 /** How many exposures have their wavelength looked up, and how many of those are measured. */
 export const MAX_POOL = 160;
 export const MAX_MEASURED = 60;

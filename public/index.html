@@ -474,6 +474,10 @@
       <label class="row" for="slot-b"><span class="slot slot--b" data-i18n="epochs.b"></span>
         <select id="slot-b" class="field field--compact"></select>
       </label>
+      <!-- The wavelength each of the two saw at the field's centre, read from
+           the files' own WCS-WAVE tables. -->
+      <p class="compare__lambda num" id="compare-lambda" aria-live="polite" hidden></p>
+      <button type="button" class="link compare__match" id="compare-match" data-i18n="lambda.match" hidden></button>
     </div>
     </div>
 

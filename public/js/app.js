@@ -29,7 +29,7 @@ import { seasonChunks, chunkAt, forStack, averaged } from './stack.js';
 import { linkSeasons, parallaxArc, distanceGrid, arcPoint, ARC_TICKS_AU, NEAR_AU, FAR_AU, separationArcsec } from './seasons.js';
 import { TangentGrid, separation, deltaRA } from './wcs.js';
 import { loadStamp, loadWavelength } from './stamp.js';
-import { motionOf, visitPool, chooseMeasured, visitPoint, placeInBand } from './spectrum.js';
+import { motionOf, visitPool, chooseMeasured, visitPoint, placeInBand, channelOverlap } from './spectrum.js';
 import { spectrumBlock } from './spectrum-view.js';
 import { trackCSV } from './export.js';
 import { SkyView, shortName, mostlySaturated } from './sky.js';
@@ -1472,6 +1472,113 @@ function fillSlots() {
     // A long choice is cut by the width of the list; its whole name is the title.
     sel.title = sel.selectedOptions[0]?.textContent ?? '';
   }
+  renderCompareLambda();
+}
+
+/* -------------------------------------------------------- A and B's light */
+
+/** Below this share of shared channel, A minus B is said to mix spectrum into time. */
+const CHANNEL_SHARED_ENOUGH = 0.5;
+/** Each frame's wavelength at a field's centre, by URL and centre: read once. */
+const centreWaves = new Map();
+let lambdaSeq = 0;
+/** A search for B is its own question: visits landing redraw the line, and must not cancel it. */
+let matchSeq = 0;
+let matching = false;
+
+/** The wavelength and bandwidth a frame saw at the field's centre, or null. */
+function centreWave(frame, signal) {
+  const key = `${frame.url}@${state.ra.toFixed(4)},${state.dec.toFixed(4)}`;
+  if (!centreWaves.has(key)) {
+    centreWaves.set(key, loadWavelength(toS3(frame.url), state.ra, state.dec, { signal })
+      .then((w) => (w ? { lambda: w.um, width: w.width, band: frame.band } : null))
+      .catch((err) => { centreWaves.delete(key); throw err; }));
+  }
+  return centreWaves.get(key);
+}
+
+/** The pair being compared, as two SPHEREx frames, or null when B is not a visit. */
+function comparedFrames() {
+  if (!sky?.visits.length || state.reference) return null;
+  const a = sky.visits[sky.a]?.frame;
+  const b = sky.visits[sky.b]?.frame;
+  return a && b && a !== b ? [a, b] : null;
+}
+
+/** Under A and B: the wavelength each saw, and a warning when they saw different light. */
+async function renderCompareLambda() {
+  const line = $('compare-lambda');
+  const match = $('compare-match');
+  const comparing = sky && (sky.mode === 'wipe' || sky.mode === 'difference');
+  const pair = comparing ? comparedFrames() : null;
+  match.hidden = !pair;
+  if (!pair) { line.hidden = true; return; }
+  if (matching) return;
+  const seq = ++lambdaSeq;
+  line.hidden = false;
+  line.dataset.warn = 'false';
+  line.textContent = t('lambda.reading');
+  let a; let b;
+  try {
+    [a, b] = await Promise.all(pair.map((f) => centreWave(f, state.abort?.signal)));
+  } catch {
+    if (seq === lambdaSeq) line.hidden = true;
+    return;
+  }
+  if (seq !== lambdaSeq) return;
+  if (!a || !b) { line.hidden = true; return; }
+  const shared = channelOverlap(a, b);
+  line.textContent = t('lambda.pair', { a: fmt(a.lambda, 3), b: fmt(b.lambda, 3) });
+  if (shared != null && shared < CHANNEL_SHARED_ENOUGH) {
+    line.dataset.warn = 'true';
+    line.textContent += `. ${t('lambda.apart')}`;
+  }
+}
+
+/**
+ * B at A's light: of the visits on the plate in A's band, the one whose
+ * channel shares most with A's at the field's centre, and of equals the
+ * nearest in time. Asked for, not automatic: each wavelength is a read.
+ */
+async function matchB() {
+  const a = sky.visits[sky.a]?.frame;
+  if (!a || matching) return;
+  const line = $('compare-lambda');
+  const others = sky.visits.map((v, i) => ({ frame: v.frame, i })).filter((v) => v.i !== sky.a && v.frame.band === a.band);
+  line.hidden = false;
+  line.dataset.warn = 'false';
+  line.textContent = t('lambda.matching', { n: others.length + 1 });
+  const seq = ++matchSeq;
+  const field = fieldSeq;
+  matching = true;
+  let waveA;
+  const scored = [];
+  try {
+    waveA = await centreWave(a, state.abort?.signal);
+    await pool(others, 4, async (v) => {
+      const w = await centreWave(v.frame, state.abort?.signal).catch(() => null);
+      const shared = waveA && w ? channelOverlap(waveA, w) : null;
+      if (shared != null) scored.push({ ...v, shared });
+    });
+  } catch {
+    matching = false;
+    if (seq === matchSeq) renderCompareLambda();
+    return;
+  }
+  matching = false;
+  if (seq !== matchSeq || field !== fieldSeq) return;
+  scored.sort((p, q) => (q.shared - p.shared) || (Math.abs(p.frame.mjd - a.mjd) - Math.abs(q.frame.mjd - a.mjd)));
+  const best = scored[0];
+  if (!best || best.shared < CHANNEL_SHARED_ENOUGH) {
+    line.dataset.warn = 'true';
+    line.textContent = t('lambda.none');
+    return;
+  }
+  // Visits land and re-sort while the wavelengths are read: B is found by its frame.
+  const at = sky.visits.findIndex((v) => v.frame === best.frame);
+  if (at < 0 || sky.visits[sky.b]?.frame === best.frame) { renderCompareLambda(); return; }
+  sky.setAB(null, at);
+  syncScrub();
 }
 
 /* ------------------------------------------------------------------ playback */
@@ -5099,6 +5206,7 @@ function wire() {
     // The survey beside A names A's date, and the Gaia model has just moved to it.
     if (state.reference) $('mode-hint').textContent = modeHint(sky.mode);
   });
+  $('compare-match').addEventListener('click', matchB);
   $('slot-b').addEventListener('change', (e) => {
     const v = e.target.value;
     if (v.startsWith('wise') || v === 'gaia') { chooseReference(referenceOf(v)); return; }

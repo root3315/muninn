@@ -1296,3 +1296,9 @@ body { font-size: var(--text-base); line-height: 1.5; }
 }
 @media (pointer: coarse) { .mark__fold { inline-size: 40px; block-size: 40px; } }
 @media (prefers-reduced-motion: reduce) { .mark__fold svg { transition: none; } }
+/* Under A and B: the light each saw at the field's centre. Amber when the two
+   saw different wavelengths, so a residual is not read as change alone. */
+.compare__lambda { flex: 1 1 100%; margin: 0; font-size: var(--text-xs); color: var(--color-neutral); line-height: 1.45; }
+.compare__lambda[data-warn="true"] { color: var(--color-counter); }
+.compare__lambda[hidden], .compare__match[hidden] { display: none; }
+.compare__match { justify-self: start; font-size: var(--text-xs); color: var(--color-accent); }

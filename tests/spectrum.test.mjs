@@ -188,3 +188,12 @@ test('measure with orLimit: blank sky gives its noise, not null; a source gives 
   assert.ok(!seen.limit && seen.flux > 0 && seen.noise === 0.02);
   assert.equal(fluxPoint(seen).kind, 'detection');
 });
+
+test('channel overlap: the same λ is whole, a far λ is none, a near one is partial', async () => {
+  const { channelOverlap } = await import('../public/js/spectrum.js');
+  assert.equal(channelOverlap({ lambda: 1.4, band: 'D2' }, { lambda: 1.4, band: 'D2' }), 1);
+  assert.equal(channelOverlap({ lambda: 1.2, band: 'D2' }, { lambda: 1.6, band: 'D2' }), 0);
+  const half = channelOverlap({ lambda: 1.4, band: 'D2' }, { lambda: 1.4 * (1 + 1 / 82), band: 'D2' });
+  assert.ok(half > 0.4 && half < 0.6, `about half: ${half}`);
+  assert.equal(channelOverlap({ lambda: NaN, band: 'D2' }, { lambda: 1.4, band: 'D2' }), null);
+});
