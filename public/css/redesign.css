@@ -500,7 +500,7 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .spectrum__tick, .spectrum__unit { font-family: var(--font-mono); font-size: 10px; fill: var(--color-neutral); }
 .spectrum__unit { fill: var(--color-muted); }
 
-/* One hue per band, the same six the filter wheel uses. */
+/* One hue per band, the same six the band chips use. */
 .spectrum [data-band] { --pt: oklch(var(--acc-l) var(--acc-c) var(--pt-h)); }
 .spectrum [data-band="D1"] { --pt-h: var(--hue-d1); }
 .spectrum [data-band="D2"] { --pt-h: var(--hue-d2); }
@@ -1277,7 +1277,7 @@ body { font-size: var(--text-base); line-height: 1.5; }
   .mount > .compare .row { min-inline-size: 0; flex-wrap: nowrap; }
   .mount > .compare select { flex: 1 1 0; min-inline-size: 0; max-inline-size: none; }
   .run__head > .key--fit { margin-inline-start: auto; }
-  /* The filter wheel under the plate, in two rows of four. */
+  /* The band chips under the plate, in two rows of four. */
   .bands { align-self: stretch; }
   .bands .lambda { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-3xs); }
   .bands .lambda__chip { min-inline-size: 0; }
@@ -1285,7 +1285,7 @@ body { font-size: var(--text-base); line-height: 1.5; }
 
 /* A phone held upright: the plate the full width, and under it one row of
    transport (a step back, play, a step on), the five modes as one track, and
-   the filter wheel as two rows of chips. */
+   the band chips as two rows. */
 @media (max-width: 40rem) {
   .mount {
     --pad: var(--space-sm);
