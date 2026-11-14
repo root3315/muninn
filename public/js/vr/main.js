@@ -21,7 +21,7 @@ import * as THREE from '../vendor/three.module.js';
 import { setLanguage, getLanguage, t } from '../i18n.js';
 import { loadStars } from '../gate.js';
 import { planetsNow } from '../ephemeris.js';
-import { createSky } from './sky3d.js';
+import { createSky, SKY_RADIUS } from './sky3d.js';
 import { createCard } from './card.js';
 import { formatRA, formatDec } from '../catalog.js';
 import { fmt } from '../i18n.js';
@@ -34,6 +34,7 @@ import { LAYOUT, yawOf, minTextPx } from './layout.js';
 import { navigate } from './nav.js';
 import { tv } from './strings.js';
 import { planetHostNear, systemUrl } from '../exovision.js';
+import { clearOf } from './windows.js';
 
 const D2R = Math.PI / 180;
 const EYE_HEIGHT = 1.6;
@@ -43,6 +44,14 @@ const AHEAD = 'barnard';
 const HAPTIC = { hover: [0.15, 12], select: [0.6, 35] };
 /** A flight in the depth view: how long, and how far short of the thing it stops, metres. */
 const FLY_MS = 900;
+/** How far out the field's picture stands on the sky, metres: inside the sky's sphere. */
+const SKY_PATCH_M = 290;
+/** The field's screen's width over its height (layout.js). */
+const FIELD_ASPECT = LAYOUT.screens.main.w / LAYOUT.screens.main.h;
+/** A step to the floor: how fast the arc is thrown (m/s), how far it may land, and the fade over the jump. */
+const ARC_MPS = 7;
+const STEP_MAX_M = 12;
+const STEP_FADE_MS = 160;
 const FLY_STOP_M = 0.6;
 
 /** The page's language: ?lang=, else the site's stored choice, else the browser's. */
@@ -229,6 +238,8 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   const showCard = (content, at) => {
     const { head: h, dir: d } = headPose();
     card.show(content, at ?? h.clone().addScaledVector(d, 2), h);
+    // Off every panel standing round: the screens, the depth view's signs, the first sign.
+    clearOf(card.mesh, [firstSign.mesh, ...(field?.panels() ?? [])], h, { parent: scene });
   };
 
   /**
@@ -251,7 +262,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       if (!host || !card.visible || card.content !== content) return;
       const label = `${t('card.planets', { n: host[2] })} →`;
       content.actions.push({ id: 'planets', label, run: () => leaveTo(systemUrl(host, name || host[3], getLanguage())) });
-      card.show(content, at, headPose().head);
+      showCard(content, at);
     });
   }
 
@@ -326,7 +337,8 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       const used = mesh.userData.panel?.used ?? 1;
       // The drawn plate's centre: a card is drawn from its top.
       const c = mesh.localToWorld(new THREE.Vector3(0, (g.height * (1 - used)) / 2, 0)).sub(at);
-      zones.push({ dir: toSky(c.clone().normalize()), deg: Math.atan(Math.hypot(g.width, g.height * used) / 2 / c.length()) / D2R });
+      const d = c.length();
+      zones.push({ dir: toSky(c.clone().normalize()), hw: Math.atan(g.width / 2 / d) / D2R, hh: Math.atan((g.height * used) / 2 / d) / D2R });
     }
     return zones;
   }
@@ -348,6 +360,74 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   function haptic(kind) {
     if (lastRay && HAPTIC[kind]) pointers.pulse(lastRay, ...HAPTIC[kind]);
   }
+
+  /* ---- the name of what the pointer has snapped to, beside the reticle ---- */
+  const SNAP_W = 0.62;
+  const SNAP_H = 0.1;
+  const SNAP_DIST = 2.5;
+  const snapLabel = createPanel({ widthM: SNAP_W, heightM: SNAP_H, pxPerM: 1000, name: 'snap-name' });
+  snapLabel.mesh.material.depthTest = false;
+  snapLabel.mesh.renderOrder = 52;
+  snapLabel.mesh.visible = false;
+  scene.add(snapLabel.mesh);
+  let snapText = null;
+
+  /** The name of a target, as its field's card has it. */
+  function markerName(m) {
+    if (m.kind === 'planet') return t(`planet.${m.key}`);
+    return m.key ? t(`preset.${m.key}`) : (m.target?.name ?? '');
+  }
+
+  /** What a hit is called, in a few words, or null for nothing named. */
+  function snapName(hit) {
+    if (!hit) return null;
+    if (hit.kind === 'star' && hit.star >= 0) {
+      const n = named.get(hit.star);
+      const name = n ? [n.name, n.bayer].filter(Boolean)[0] : null;
+      return `${name ?? tv('vr.skyStarTitle')} · V ${fmt(stars.mag[hit.star], 1)}`;
+    }
+    if (hit.kind === 'marker') {
+      const m = hit.marker;
+      return m.kind === 'planet' && Number.isFinite(m.target?.au) ? `${markerName(m)} · ${tv('vr.au', { v: fmt(m.target.au, 2) })}` : markerName(m);
+    }
+    if (hit.kind === 'depth') return hit.depth.card.title;
+    return null;
+  }
+
+  /** Small, turned to the head, just right of and above the reticle, so the thing itself stays clear. */
+  function showSnapName(found) {
+    const at = found ? pointers.reticleAt(found.id) : null;
+    if (!at) { snapLabel.mesh.visible = false; snapText = null; return; }
+    if (found.text !== snapText) {
+      snapText = found.text;
+      snapLabel.draw((ctx, W, H) => {
+        const px = Math.round(H * 0.5);
+        ctx.font = `500 ${px}px ${FONTS.body}`;
+        let s = found.text;
+        while (s.length > 4 && ctx.measureText(s).width > W - 36) s = s.slice(0, -2);
+        if (s !== found.text) s = `${s.trimEnd()}…`;
+        const w = Math.min(W - 4, ctx.measureText(s).width + 36);
+        ctx.beginPath();
+        ctx.roundRect(2, 2, w, H - 4, (H - 4) / 2);
+        ctx.fillStyle = 'rgba(10, 10, 18, 0.78)';
+        ctx.fill();
+        ctx.fillStyle = look.ink;
+        ctx.fillText(s, 18, H / 2 + px * 0.36);
+      });
+    }
+    const { head: h } = headPose();
+    const dir = at.clone().sub(h).normalize();
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(headQuat);
+    const up = new THREE.Vector3(0, 1, 0).applyQuaternion(headQuat);
+    // Its left end 1.5° right of the reticle, its middle 1° above it.
+    const side = SNAP_DIST * Math.tan(1.5 * D2R) + SNAP_W / 2;
+    snapLabel.mesh.position.copy(h).addScaledVector(dir, SNAP_DIST).addScaledVector(right, side).addScaledVector(up, SNAP_DIST * Math.tan(1 * D2R));
+    snapLabel.mesh.quaternion.copy(headQuat);
+    snapLabel.mesh.visible = true;
+  }
+
+  /** The open field's picture on the sky, at its own place. */
+  let skyPatch = null;
 
   function openTarget(marker) {
     closeField(false);
@@ -378,6 +458,19 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     dimTo(LAYOUT.dive.skyDim);
     markers.setDim(0.45);
     markers.setFirst(null);
+    // The field's picture on the sky itself, at its true place and true size, north up.
+    const t = marker.target;
+    const fovDeg = t.fov ?? 0.3;
+    const wM = 2 * SKY_PATCH_M * Math.tan((fovDeg / 2) * D2R);
+    skyPatch = new THREE.Mesh(
+      new THREE.PlaneGeometry(wM, wM / FIELD_ASPECT),
+      new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, opacity: 0.95, depthWrite: false }),
+    );
+    // In the sky's own frame, which stays round the head: facing the centre, north up.
+    skyPatch.position.fromArray(marker.v).normalize().multiplyScalar(SKY_PATCH_M);
+    skyPatch.quaternion.setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), skyPatch.position, new THREE.Vector3(0, 1, 0)));
+    skyPatch.renderOrder = 2;
+    sky.group.add(skyPatch);
     firstSign.mesh.visible = false;
     view = navigate(view, 'open');
     ui.field(field.label);
@@ -385,6 +478,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
 
   function closeField(animate = true) {
     if (!field) return;
+    if (skyPatch) { skyPatch.removeFromParent(); skyPatch.geometry.dispose(); skyPatch.material.dispose(); skyPatch = null; }
     field.close();
     field = null;
     markers.setDim(1);
@@ -498,6 +592,8 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     onStep: (d) => field?.step(d),
     onToggle: () => field?.toggle(),
     onTurn: (d) => turnBy(d * LAYOUT.move.snapDeg * D2R),
+    onTeleport: (id) => stepTo(id),
+    skyRadius: SKY_RADIUS,
   });
 
   /* ---- moving about: walking, flying, turning ----------------------- */
@@ -554,6 +650,78 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       const v = pointers.flatView;
       pointers.setFlatView({ ...v, yaw: v.yaw + a });
     }
+  }
+
+  /* ---- a step to the floor: an arc while the stick is held in, a jump on letting go ---- */
+  const arc = new THREE.Line(
+    new THREE.BufferGeometry().setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(32 * 3), 3)),
+    new THREE.LineBasicMaterial({ color: new THREE.Color(look.accent), transparent: true, opacity: 0.9, depthTest: false }),
+  );
+  arc.renderOrder = 95;
+  arc.frustumCulled = false;
+  arc.visible = false;
+  const spot = new THREE.Mesh(
+    new THREE.RingGeometry(0.22, 0.3, 40),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(look.accent), transparent: true, opacity: 0.9, depthTest: false, side: THREE.DoubleSide }),
+  );
+  spot.rotation.x = -Math.PI / 2;
+  spot.renderOrder = 95;
+  spot.visible = false;
+  scene.add(arc, spot);
+  /** Where each aiming pointer's arc lands, by id. */
+  const landing = new Map();
+  let stepFade = null;
+
+  /** The arc thrown along a ray, to the floor under the viewer; null if it lands too far or not at all. */
+  function arcOf(ray) {
+    const floor = headPose().head.y - (renderer.xr.isPresenting ? headPose().head.y - floorY() : EYE_HEIGHT);
+    const pts = [];
+    const v = ray.dir.clone().multiplyScalar(ARC_MPS);
+    const p = ray.origin.clone();
+    for (let k = 0; k < 32; k++) {
+      pts.push(p.clone());
+      if (p.y <= floor) { p.y = floor; pts[pts.length - 1].y = floor; break; }
+      p.addScaledVector(v, 0.06);
+      v.y -= 9.8 * 0.06;
+    }
+    const end = pts.at(-1);
+    const reach = Math.hypot(end.x - ray.origin.x, end.z - ray.origin.z);
+    return end.y <= floor + 1e-3 && reach <= STEP_MAX_M ? { pts, end } : { pts, end: null };
+  }
+
+  /** The floor's height in the room: the reference space's own floor, moved with the viewer. */
+  function floorY() {
+    return new THREE.Vector3().setFromMatrixPosition(new THREE.Matrix4().copy(offset).invert()).y;
+  }
+
+  function aimSteps(rays) {
+    const ids = pointers.aiming();
+    landing.clear();
+    arc.visible = false;
+    spot.visible = false;
+    for (const id of ids) {
+      const ray = rays.find((r) => r.id === id);
+      if (!ray) continue;
+      const a = arcOf(ray);
+      const pos = arc.geometry.attributes.position;
+      for (let k = 0; k < 32; k++) pos.setXYZ(k, ...(a.pts[Math.min(k, a.pts.length - 1)]).toArray());
+      pos.needsUpdate = true;
+      arc.material.color.set(a.end ? look.accent : look.neutral);
+      arc.visible = true;
+      if (a.end) {
+        spot.position.copy(a.end).setY(a.end.y + 0.01);
+        spot.visible = true;
+        landing.set(id, a.end);
+      }
+    }
+  }
+
+  /** Step to where the arc of pointer `id` landed: the head comes down over that spot, through a short fade. */
+  function stepTo(id) {
+    const at = landing.get(id);
+    if (!at) return;
+    const h = headPose().head;
+    stepFade = { t0: performance.now(), move: new THREE.Vector3(at.x - h.x, 0, at.z - h.z), done: false };
   }
 
   /** A flight to something in the depth view: there in a short eased glide, the vignette closed. */
@@ -885,10 +1053,12 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       }
       if (k >= 1) home = null;
     }
-    const dark = Math.max(field?.veil ?? 0, home?.veil ?? 0);
+    const stepDark = stepFade ? 1 - Math.abs(1 - 2 * Math.min(1, (now - stepFade.t0) / STEP_FADE_MS)) : 0;
+    const dark = Math.max(field?.veil ?? 0, home?.veil ?? 0, stepDark);
     veil.visible = dark > 0.001;
     veil.material.opacity = dark;
     if (field) markers.setDim(0.45, toSky(field.depthAxis()), LAYOUT.depth.clearDeg, 0.12);
+    if (skyPatch && field && skyPatch.material.map !== field.picture) { skyPatch.material.map = field.picture; skyPatch.material.needsUpdate = true; }
     else markers.keepClear(clearZones(h));
     markers.tick(now, { growMs: LAYOUT.dive.ms, grow: LAYOUT.dive.markerGrow });
 
@@ -910,19 +1080,28 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
 
     const rays = pointers.update(h, headQuat);
     handleWindows(rays, dt, h);
+    aimSteps(rays);
+    if (stepFade) {
+      const k = (now - stepFade.t0) / STEP_FADE_MS;
+      if (k >= 0.5 && !stepFade.done) { stepFade.done = true; moveBy(stepFade.move); }
+      if (k >= 1) stepFade = null;
+    }
     const seen = new Set();
     let markerHover = null;
     let starHover = -1;
+    let snapped = null;
     for (const ray of rays) {
       seen.add(ray.id);
       const hit = hitOf(ray);
       setHover(ray.id, hit);
+      snapped ??= snapName(hit) ? { id: ray.id, text: snapName(hit) } : null;
       if (hit?.kind === 'marker') markerHover = hit.marker;
       if (hit?.kind === 'star') starHover = hit.star;
       const pickable = hit ? (hit.kind === 'sky' ? false : hit.kind !== 'mesh' || (hit.object.userData.pickable?.(hit.uv) ?? Boolean(hit.object.userData.pick))) : false;
       pointers.setHit(ray.id, hit?.distance ?? null, pickable);
     }
     for (const id of [...hovered.keys()]) if (!seen.has(id)) { setHover(id, null); hovered.delete(id); }
+    showSnapName(snapped);
     markers.setHover(markerHover);
     if (starHover !== starHeld) {
       if (starHover >= 0 && rays.length && rays[0].id !== 'mouse') pointers.pulse(rays[0].id, ...HAPTIC.hover);

@@ -26,12 +26,80 @@ const PUSH_MPS = 1.6;
 
 const wrap = (a) => Math.atan2(Math.sin(a), Math.cos(a));
 
+/** Turn a panel to face the head, upright, in `parent`'s frame. */
+function face(mesh, head, parent) {
+  mesh.updateMatrixWorld();
+  const at = mesh.getWorldPosition(new THREE.Vector3());
+  const look = new THREE.Object3D();
+  look.position.copy(at);
+  look.lookAt(head);
+  parent.updateMatrixWorld();
+  const q = parent.getWorldQuaternion(new THREE.Quaternion()).invert();
+  mesh.quaternion.copy(q.multiply(look.quaternion));
+}
+
+/** A panel's box as seen from the head: centre yaw and pitch, half sizes, all in radians. */
+function boxOf(mesh, head) {
+  mesh.updateMatrixWorld();
+  const c = mesh.getWorldPosition(new THREE.Vector3()).sub(head);
+  const d = c.length();
+  const g = mesh.geometry.parameters;
+  const s = mesh.getWorldScale(new THREE.Vector3()).x;
+  const used = mesh.userData.panel?.used ?? 1;
+  return {
+    yaw: Math.atan2(-c.x, -c.z),
+    pitch: Math.asin(Math.max(-1, Math.min(1, c.y / d))),
+    hw: Math.atan((g.width * s) / 2 / d),
+    hh: Math.atan((g.height * s * used) / 2 / d),
+    // A card drawn from its top: its box sits that much higher.
+    lift: Math.atan((g.height * s * (1 - used)) / 2 / d),
+    d,
+  };
+}
+
+/** Stand a panel at a yaw and pitch from the head, `d` metres out, facing it. */
+function standAt(mesh, head, yaw, pitch, d, parent) {
+  const world = new THREE.Vector3(
+    -Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch),
+  ).multiplyScalar(d).add(head);
+  parent.updateMatrixWorld();
+  mesh.position.copy(parent.worldToLocal(world));
+  face(mesh, head, parent);
+}
+
+/**
+ * Move `mesh` the least way out of every one of `others` it overlaps, as seen
+ * from `head`, with `gap` radians between: it gives way, the others stay.
+ * Used for the windows in hand, and for a card over the depth view's signs.
+ */
+export function clearOf(mesh, others, head, { parent = mesh.parent, gap = (1.2 * Math.PI) / 180 } = {}) {
+  for (let pass = 0; pass < 8; pass++) {
+    const m = boxOf(mesh, head);
+    const my = m.pitch + m.lift;
+    let moved = false;
+    for (const other of others) {
+      if (other === mesh || !other.visible) continue;
+      const o = boxOf(other, head);
+      const oy = o.pitch + o.lift;
+      const dyaw = wrap(m.yaw - o.yaw);
+      const dp = my - oy;
+      const ox = m.hw + o.hw + gap - Math.abs(dyaw);
+      const oyv = m.hh + o.hh + gap - Math.abs(dp);
+      if (ox <= 0 || oyv <= 0) continue;
+      if (ox < oyv) m.yaw += (dyaw >= 0 ? 1 : -1) * ox;
+      else m.pitch += (dp >= 0 ? 1 : -1) * oyv;
+      standAt(mesh, head, m.yaw, m.pitch, m.d, parent);
+      moved = true;
+      break;
+    }
+    if (!moved) return;
+  }
+}
+
 export function createWindows({ group, minGapDeg = 1.2, onMoved = () => {} }) {
   const gap = (minGapDeg * Math.PI) / 180;
   const windows = new Map();
   const grabs = new Map();
-  const tmp = new THREE.Vector3();
-  const tmpQ = new THREE.Quaternion();
 
   function pose(mesh) {
     return { position: mesh.position.clone(), quaternion: mesh.quaternion.clone(), scale: mesh.scale.x };
@@ -42,74 +110,7 @@ export function createWindows({ group, minGapDeg = 1.2, onMoved = () => {} }) {
     mesh.scale.setScalar(p.scale);
   }
 
-  /** Turn a window to face the head, upright. */
-  function face(mesh, head) {
-    mesh.updateMatrixWorld();
-    const at = mesh.getWorldPosition(new THREE.Vector3());
-    const look = new THREE.Object3D();
-    look.position.copy(at);
-    look.lookAt(head);
-    group.updateMatrixWorld();
-    group.getWorldQuaternion(tmpQ).invert();
-    mesh.quaternion.copy(tmpQ.multiply(look.quaternion));
-  }
-
-  /** A window's box as seen from the head: centre yaw and pitch, half sizes, all in radians. */
-  function boxOf(mesh, head) {
-    mesh.updateMatrixWorld();
-    const c = mesh.getWorldPosition(new THREE.Vector3()).sub(head);
-    const d = c.length();
-    const g = mesh.geometry.parameters;
-    const s = mesh.getWorldScale(tmp).x;
-    return {
-      yaw: Math.atan2(-c.x, -c.z),
-      pitch: Math.asin(Math.max(-1, Math.min(1, c.y / d))),
-      hw: Math.atan((g.width * s) / 2 / d),
-      hh: Math.atan((g.height * s * (mesh.userData.panel?.used ?? 1)) / 2 / d),
-      // A card drawn from its top: its box sits that much higher.
-      lift: Math.atan((g.height * s * (1 - (mesh.userData.panel?.used ?? 1))) / 2 / d),
-      d,
-    };
-  }
-
-  /** Stand a window at a yaw and pitch from the head, `d` metres out, facing it. */
-  function standAt(mesh, head, yaw, pitch, d) {
-    const world = new THREE.Vector3(
-      -Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch),
-    ).multiplyScalar(d).add(head);
-    group.updateMatrixWorld();
-    mesh.position.copy(group.worldToLocal(world));
-    face(mesh, head);
-  }
-
-  /**
-   * Move `mesh` the least way out of every other window it overlaps, as seen
-   * from the head, with `minGapDeg` between: the one in hand gives way, the
-   * others stay where they were put.
-   */
-  function clear(mesh, head) {
-    for (let pass = 0; pass < 8; pass++) {
-      const m = boxOf(mesh, head);
-      const my = m.pitch + m.lift;
-      let moved = false;
-      for (const other of windows.keys()) {
-        if (other === mesh || !other.visible) continue;
-        const o = boxOf(other, head);
-        const oy = o.pitch + o.lift;
-        const dyaw = wrap(m.yaw - o.yaw);
-        const dp = my - oy;
-        const ox = m.hw + o.hw + gap - Math.abs(dyaw);
-        const oyv = m.hh + o.hh + gap - Math.abs(dp);
-        if (ox <= 0 || oyv <= 0) continue;
-        if (ox < oyv) m.yaw += (dyaw >= 0 ? 1 : -1) * ox;
-        else m.pitch += (dp >= 0 ? 1 : -1) * oyv;
-        standAt(mesh, head, m.yaw, m.pitch, m.d);
-        moved = true;
-        break;
-      }
-      if (!moved) return;
-    }
-  }
+  const clear = (mesh, head) => clearOf(mesh, [...windows.keys()], head, { parent: group, gap });
 
   return {
     /** A window to manage; it takes the pose the viewer last gave a window of its name. */
@@ -121,6 +122,8 @@ export function createWindows({ group, minGapDeg = 1.2, onMoved = () => {} }) {
     /** Whether a window is in a hand now. */
     held(mesh) { for (const g of grabs.values()) if (g.mesh === mesh) return true; return false; },
     get holding() { return grabs.size > 0; },
+    /** Every managed window. */
+    get list() { return [...windows.keys()]; },
     /** Take `mesh` by the point of it the ray `id` met. */
     grab(id, mesh, ray, point) {
       mesh.updateMatrixWorld();
@@ -142,7 +145,7 @@ export function createWindows({ group, minGapDeg = 1.2, onMoved = () => {} }) {
       const world = ray.origin.clone().addScaledVector(ray.dir, g.dist).add(g.offset);
       group.updateMatrixWorld();
       g.mesh.position.copy(group.worldToLocal(world));
-      face(g.mesh, head);
+      face(g.mesh, head, group);
       clear(g.mesh, head);
     },
     /** Both hands on one window: its size by how far apart they are now against when taken. */
