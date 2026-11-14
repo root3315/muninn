@@ -5086,6 +5086,10 @@ function gaiaHint() {
 
 function applyMode(mode) {
   sky.setMode(mode);
+  // A minus B is taken between two SPHEREx visits only: AllWISE or the Gaia
+  // model as B would have been named in the picker while a visit was
+  // subtracted. Difference goes back to a visit as B, and the picker says so.
+  if (mode === 'difference' && state.reference) chooseReference(null);
   $('plate').dataset.mode = mode;
   $('mode-hint').textContent = modeHint(mode);
   const comparing = mode === 'wipe' || mode === 'difference';
