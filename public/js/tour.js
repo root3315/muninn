@@ -14,7 +14,7 @@
  */
 
 import { t } from './i18n.js';
-import { openRead } from './read.js';
+import { openRead, mountDemo } from './read.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -26,18 +26,13 @@ function modes() {
 
 const STEPS = [
   { key: 'plate', find: () => $('plate'), read: 'read-blink' },
+  { key: 'rings', find: () => $('plate'), read: 'read-ring' },
   { key: 'modes', find: modes, read: 'read-modes' },
   { key: 'bands', find: () => document.querySelector('.bands'), read: 'read-spectrum' },
   { key: 'run', find: () => $('run-scroll'), read: 'read-run' },
   { key: 'marks', find: () => $('marks')?.closest('.part'), read: 'read-mark' },
   { key: 'depth', find: () => $('depth'), read: 'read-depth' },
   { key: 'hunt', find: () => $('hunt'), read: 'read-hunt' },
-  { key: 'view', find: () => $('tools-toggle'), read: 'read-overlay' },
-  // On a phone the link is folded under "⋯"; the tour points at the fold and says so.
-  {
-    key: 'link', find: () => (shown($('copy-link')) ? $('copy-link') : $('more-key')), read: null,
-    words: (el) => (el?.id === 'more-key' ? 'linkFold' : 'link'),
-  },
 ];
 
 const PAD = 8;
@@ -52,6 +47,12 @@ let at = 0;
 let expanded = false;
 let returnTo = null;
 let frame = 0;
+/** The live demo in the open "Not clear", if any. */
+let demo = null;
+/** Whether the current part has been scrolled back into view after a shift. */
+let nudged = false;
+/** Watches the current part and its neighbours, which can push it about as they fill in. */
+const shifts = 'ResizeObserver' in window ? new ResizeObserver(() => { nudged = false; schedule(); }) : null;
 
 function shown(el) {
   return Boolean(el && !el.closest('[hidden]') && el.getClientRects().length);
@@ -75,8 +76,12 @@ function build() {
       <div class="tour__body" aria-live="polite">
         <h2 class="tour__title" id="tour-title"></h2>
         <p class="tour__say"></p>
-        <div class="tour__more" id="tour-more" hidden>
-          <p class="tour__more-text"></p>
+        <div class="tour__more" id="tour-more" tabindex="-1" hidden>
+          <div class="tour__more-head">
+            <p class="tour__more-text"></p>
+            <button type="button" class="tour__more-x"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+          </div>
+          <div class="tour__demo is-on"></div>
           <video class="tour__clip" muted loop playsinline preload="none" hidden></video>
           <button type="button" class="link tour__read"></button>
         </div>
@@ -92,11 +97,13 @@ function build() {
     root, hole: q('.tour__hole'), card: q('.tour__card'), count: q('.tour__count'), pips: q('.tour__pips'),
     skip: q('.tour__skip'), title: q('.tour__title'), say: q('.tour__say'), more: q('.tour__more'),
     moreText: q('.tour__more-text'), clip: q('.tour__clip'), read: q('.tour__read'),
+    demo: q('.tour__demo'), moreX: q('.tour__more-x'),
     next: q('.tour__next'), toggle: q('.tour__toggle'),
   };
   ui.next.addEventListener('click', () => go(at + 1));
   ui.skip.addEventListener('click', end);
   ui.toggle.addEventListener('click', () => setExpanded(!expanded));
+  ui.moreX.addEventListener('click', () => { setExpanded(false); ui.toggle.focus(); });
   ui.read.addEventListener('click', () => { const id = steps[at]?.read; if (id) openRead(id); });
   root.addEventListener('keydown', trap);
 }
@@ -112,7 +119,7 @@ function onKey(e) {
 
 function trap(e) {
   if (e.key !== 'Tab') return;
-  const stops = [...ui.card.querySelectorAll('button')].filter((b) => b.getClientRects().length);
+  const stops = [...ui.card.querySelectorAll('button, input, [tabindex="0"]')].filter((b) => b.getClientRects().length);
   const first = stops[0];
   const last = stops[stops.length - 1];
   if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
@@ -125,8 +132,17 @@ function setExpanded(on) {
   ui.more.hidden = !on;
   ui.toggle.setAttribute('aria-expanded', String(on));
   ui.toggle.textContent = t(on ? 'tour.less' : 'tour.more');
-  if (on) loadClip(step.key);
-  else ui.clip.pause();
+  if (on) {
+    loadClip(step.key);
+    // The same small demo as the matching card of How to read this.
+    demo = step.read ? mountDemo(step.read, ui.demo) : null;
+    ui.demo.hidden = !demo;
+    ui.more.focus({ preventScroll: true });
+  } else {
+    ui.clip.pause();
+    ui.demo.replaceChildren();
+    demo = null;
+  }
   schedule();
 }
 
@@ -168,17 +184,66 @@ function render() {
     return pip;
   }));
   ui.skip.textContent = t('tour.skip');
-  const words = step.words?.(step.el) ?? step.key;
+  const words = step.key;
   ui.title.textContent = t(`tour.${words}H`);
   ui.say.textContent = t(`tour.${words}P`);
   ui.moreText.textContent = t(`tour.${words}More`);
   ui.read.hidden = !step.read;
   ui.read.textContent = t('tour.read');
+  ui.moreX.setAttribute('aria-label', t('tour.demoClose'));
+  demo?.relabel();
   ui.next.textContent = t(last ? 'tour.finish' : 'tour.next');
   ui.toggle.textContent = t(expanded ? 'tour.less' : 'tour.more');
   ui.card.classList.remove('is-fresh');
   void ui.card.offsetWidth;
   ui.card.classList.add('is-fresh');
+}
+
+/**
+ * The part of an element that can be seen: its box cut by every ancestor that
+ * clips it. A panel in the scrolling side column runs on below the column's
+ * edge, and its whole box would light the strip beneath.
+ */
+function visibleBox(el) {
+  let { left, top, right, bottom } = el.getBoundingClientRect();
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const cs = getComputedStyle(p);
+    const clipX = cs.overflowX !== 'visible';
+    const clipY = cs.overflowY !== 'visible';
+    if (!clipX && !clipY) continue;
+    const c = p.getBoundingClientRect();
+    if (clipX) { left = Math.max(left, c.left); right = Math.min(right, c.right); }
+    if (clipY) { top = Math.max(top, c.top); bottom = Math.min(bottom, c.bottom); }
+  }
+  return { left, top, right: Math.max(left, right), bottom: Math.max(top, bottom) };
+}
+
+/** Whether two boxes ({x, y, w, h}) share any area. */
+const overlaps = (a, b) => a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+
+/** Where the card goes beside the cut-out: a side with room, else the corner covering least. */
+function cardSpot(hole, cw, ch, vw, vh) {
+  const { x, y, w, h } = hole;
+  const clampX = (v) => Math.min(Math.max(GAP, v), vw - cw - GAP);
+  const clampY = (v) => Math.min(Math.max(GAP, v), vh - ch - GAP);
+  if (vw - (x + w) >= cw + 2 * GAP) return [x + w + GAP, clampY(y)];
+  if (x >= cw + 2 * GAP) return [x - cw - GAP, clampY(y)];
+  if (vh - (y + h) >= ch + 2 * GAP) return [clampX(x), y + h + GAP];
+  if (y >= ch + 2 * GAP) return [clampX(x), y - ch - GAP];
+  const covers = ([px, py]) => Math.max(0, Math.min(px + cw, x + w) - Math.max(px, x))
+    * Math.max(0, Math.min(py + ch, y + h) - Math.max(py, y));
+  const corners = [[vw - cw - GAP, GAP], [vw - cw - GAP, vh - ch - GAP], [GAP, GAP], [GAP, vh - ch - GAP]]
+    .map(([px, py]) => [clampX(px), clampY(py)]);
+  return corners.reduce((best, c) => (covers(c) < covers(best) ? c : best));
+}
+
+/** Cut the hole back so the card never sits on it, keeping the larger part in view. */
+function trimHole(hole, card) {
+  if (!overlaps(hole, card)) return hole;
+  const above = card.y - GAP - hole.y;
+  const below = hole.y + hole.h - (card.y + card.h + GAP);
+  if (above >= below) return { ...hole, h: Math.max(0, above) };
+  return { ...hole, y: card.y + card.h + GAP, h: Math.max(0, below) };
 }
 
 /** Where the cut-out and the card go, from where the part is now. */
@@ -187,38 +252,36 @@ function place() {
   if (!ui || ui.root.hidden) return;
   const el = steps[at]?.el;
   if (!el) return;
-  const vw = window.innerWidth;
+  const vw = document.documentElement.clientWidth;
   const vh = window.innerHeight;
-  const r = el.getBoundingClientRect();
-  const x = Math.max(4, r.left - PAD);
-  const y = Math.max(4, r.top - PAD);
-  const w = Math.min(vw - 4, r.right + PAD) - x;
-  const h = Math.min(vh - 4, r.bottom + PAD) - y;
-  ui.hole.style.transform = `translate(${x}px, ${y}px)`;
-  ui.hole.style.inlineSize = `${Math.max(0, w)}px`;
-  ui.hole.style.blockSize = `${Math.max(0, h)}px`;
-  if (PHONE.matches) return;
-
-  const cw = ui.card.offsetWidth;
-  const ch = ui.card.offsetHeight;
-  const clampX = (v) => Math.min(Math.max(GAP, v), vw - cw - GAP);
-  const clampY = (v) => Math.min(Math.max(GAP, v), vh - ch - GAP);
-  let cx;
-  let cy;
-  if (vw - (x + w) >= cw + 2 * GAP) { cx = x + w + GAP; cy = clampY(y); }
-  else if (x >= cw + 2 * GAP) { cx = x - cw - GAP; cy = clampY(y); }
-  else if (vh - (y + h) >= ch + 2 * GAP) { cx = clampX(x); cy = y + h + GAP; }
-  else if (y >= ch + 2 * GAP) { cx = clampX(x); cy = y - ch - GAP; }
-  else {
-    // No side has the room (a phone on its side): the corner of the screen
-    // where the card covers least of the part.
-    const covers = ([px, py]) => Math.max(0, Math.min(px + cw, x + w) - Math.max(px, x))
-      * Math.max(0, Math.min(py + ch, y + h) - Math.max(py, y));
-    const corners = [[vw - cw - GAP, GAP], [vw - cw - GAP, vh - ch - GAP], [GAP, GAP], [GAP, vh - ch - GAP]]
-      .map(([px, py]) => [clampX(px), clampY(py)]);
-    [cx, cy] = corners.reduce((best, c) => (covers(c) < covers(best) ? c : best));
+  const r = visibleBox(el);
+  // Something above it grew (a list filling in) and pushed it out of view: bring it back once.
+  if (r.bottom - r.top < Math.min(el.offsetHeight, 48) && !nudged) {
+    nudged = true;
+    el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    schedule();
+    return;
   }
-  ui.card.style.transform = `translate(${Math.round(cx)}px, ${Math.round(cy)}px)`;
+  // Whole pixels: a huge spread shadow at a fractional edge leaves hairline
+  // seams running the width of the page.
+  const x = Math.round(Math.max(4, r.left - PAD));
+  const y = Math.round(Math.max(4, r.top - PAD));
+  let hole = { x, y, w: Math.round(Math.min(vw - 4, r.right + PAD)) - x, h: Math.round(Math.min(vh - 4, r.bottom + PAD)) - y };
+  let card;
+  if (PHONE.matches) {
+    const box = ui.card.getBoundingClientRect();
+    card = { x: box.left, y: box.top, w: box.width, h: box.height };
+  } else {
+    const cw = ui.card.offsetWidth;
+    const ch = ui.card.offsetHeight;
+    const [cx, cy] = cardSpot(hole, cw, ch, vw, vh).map(Math.round);
+    card = { x: cx, y: cy, w: cw, h: ch };
+    ui.card.style.transform = `translate(${cx}px, ${cy}px)`;
+  }
+  hole = trimHole(hole, card);
+  ui.hole.style.transform = `translate(${hole.x}px, ${hole.y}px)`;
+  ui.hole.style.inlineSize = `${Math.max(0, hole.w)}px`;
+  ui.hole.style.blockSize = `${Math.max(0, hole.h)}px`;
 }
 
 function schedule() {
@@ -234,9 +297,17 @@ function go(i) {
   if (!shown(step.el)) { steps.splice(at, 1); if (at >= steps.length) { end(); return; } go(at); return; }
   if (expanded) setExpanded(false);
   render();
-  step.el.style.scrollMarginTop = PHONE.matches ? '16px' : '';
-  // A part taller than most of the screen is shown from its heading down.
-  const tall = step.el.getBoundingClientRect().height > window.innerHeight * 0.6;
+  nudged = false;
+  shifts?.disconnect();
+  for (const el of [step.el, ...(step.el.parentElement?.children ?? [])]) shifts?.observe(el);
+  // A part taller than most of the screen is shown from its heading down; when
+  // the card cannot stand beside it, the heading lands just under the card.
+  const box = step.el.getBoundingClientRect();
+  const tall = box.height > window.innerHeight * 0.6;
+  const cw = ui.card.offsetWidth + 2 * GAP;
+  const besideRoom = document.documentElement.clientWidth - box.right >= cw || box.left >= cw;
+  step.el.style.scrollMarginTop = PHONE.matches ? '16px'
+    : tall && !besideRoom ? `${ui.card.offsetHeight + 2 * GAP + PAD}px` : '';
   step.el.scrollIntoView({ block: PHONE.matches || tall ? 'start' : 'nearest', inline: 'nearest', behavior: STILL.matches ? 'auto' : 'smooth' });
   schedule();
   // A smooth scroll can end without a last scroll event; look again once it has settled.
@@ -267,6 +338,7 @@ function end() {
   if (!ui || ui.root.hidden) return;
   ui.root.hidden = true;
   ui.clip.pause();
+  shifts?.disconnect();
   window.removeEventListener('keydown', onKey, true);
   window.removeEventListener('scroll', schedule, { capture: true });
   window.removeEventListener('resize', schedule);
