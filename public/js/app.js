@@ -1599,6 +1599,15 @@ async function renderCompareLambda() {
   const comparing = sky && (sky.mode === 'wipe' || sky.mode === 'difference');
   const pair = comparing ? comparedFrames() : null;
   match.hidden = !pair;
+  // A against itself shows nothing, and says why rather than leaving a blank.
+  const same = comparing && !state.reference && sky.visits.length > 1 && sky.a === sky.b;
+  if (same) {
+    lambdaSeq++;
+    line.hidden = false;
+    line.dataset.warn = 'true';
+    line.textContent = t('compare.same');
+    return;
+  }
   if (!pair) { line.hidden = true; return; }
   if (matching) return;
   const seq = ++lambdaSeq;
@@ -4720,10 +4729,27 @@ function refreshStack() {
   });
 }
 
-/** One step along the run: a visit, or in the stack a whole season. */
+/** One step along the run: a visit, or in the stack a whole season; in Wipe and Difference, B. */
 function stepBy(dir) {
+  if (sky.mode === 'wipe' || sky.mode === 'difference') { stepB(dir); return; }
   holdStill();
   sky.setIndex(sky.mode === 'stack' ? stackStep(dir) : sky.index + dir);
+  syncScrub();
+  refreshKnownObjects();
+}
+
+/**
+ * In Wipe and Difference the picture is A against B, and a step moves B
+ * through the visits, round from the last to the first. B on another
+ * telescope's picture comes back to a visit with the first step.
+ */
+function stepB(dir) {
+  const n = sky.visits.length;
+  if (!n) return;
+  stopPlayback();
+  if (state.reference) chooseReference(null);
+  state.abChosen = true;
+  sky.setAB(null, (((sky.b ?? 0) + dir) % n + n) % n);
   syncScrub();
   refreshKnownObjects();
 }
