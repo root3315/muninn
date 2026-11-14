@@ -35,6 +35,7 @@ import { navigate } from './nav.js';
 import { tv } from './strings.js';
 import { planetHostNear, systemUrl } from '../exovision.js';
 import { clearOf } from './windows.js';
+import { brightStars } from '../brightstars.js';
 
 const D2R = Math.PI / 180;
 const EYE_HEIGHT = 1.6;
@@ -104,6 +105,8 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     fetch('data/targets.json').then((r) => (r.ok ? r.json() : { targets: [] })).catch(() => ({ targets: [] })),
   ]);
   const sky = createSky(stars);
+  // The naked-eye stars whose stray light a mark near them is read against, as on the site.
+  const brightList = brightStars(stars);
   scene.add(sky.group);
   const markers = createMarkers({ fields: targets.targets ?? [], planets: planetsNow(), look, lang: getLanguage() });
   sky.group.add(markers.group);
@@ -448,7 +451,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     markers.burst(marker);
     card.hide();
     field = openFieldVR(marker.target, {
-      scene, head: h, baseYawDeg: yawDeg, fromDir: world.clone().normalize(), lang: getLanguage(), pxPerDeg, haptic, showCard,
+      scene, head: h, baseYawDeg: yawDeg, fromDir: world.clone().normalize(), lang: getLanguage(), pxPerDeg, haptic, showCard, brightList,
       onBack: () => closeField(true),
       onBring: returnToScreens,
       onFlipped: (flipped) => { view = flipped ? 'depth' : 'field'; },

@@ -7,7 +7,7 @@
  *   createMarksPanel({ look, widthM, heightM, pxPerM, dist, onAct })
  *     -> { mesh, render(view), hover(uv), dispose() }
  *
- * `view` is { marks, visits, undo, linkFor(m), target }; `onAct(id, index)`
+ * `view` is { marks, visits, undo, target, bright (brightstars.js) }; `onAct(id, index)`
  * gets fold, remove, link, arc, jump, spectrum, retry, clear, undo, up, down.
  */
 import { createPanel, FONTS, wrapLines, button, roundRect, chipWidth } from './panel.js';
@@ -15,7 +15,7 @@ import { minTextPx } from './layout.js';
 import { tv } from './strings.js';
 import {
   markCall, verdict, sharpWords, saturatedMotion, skybotLine, STILL, whoWords, predictedWords,
-  brightnessWords, peaksOf, linkWords,
+  brightnessWords, peaksOf, linkWords, brightNeighbourWords,
 } from '../marks.js';
 import { formatRA, formatDec } from '../catalog.js';
 import { fmtDate } from '../i18n.js';
@@ -48,6 +48,9 @@ export function createMarksPanel({ look, widthM, heightM, pxPerM, dist, onAct })
     if (shape) L.push({ text: shape.text, tone: shape.verdict === 'sharp' ? 'counter' : 'muted' });
     const motion = saturatedMotion(m, view.target);
     if (motion) L.push({ text: motion, tone: 'muted' });
+    // Near a naked-eye star, its stray light and ghosts are a likelier cause (marks.js, as on the site).
+    const neighbour = brightNeighbourWords(m, view.bright ?? []);
+    if (neighbour) L.push({ text: neighbour, tone: 'muted' });
 
     const who = [];
     if (!STILL.has(a?.kind)) who.push({ text: predicted ? predicted.id : skybotLine(m.catalog, view.visits), tone: m.catalog?.state === 'match' ? 'counter' : 'muted' });
@@ -150,7 +153,7 @@ export function createMarksPanel({ look, widthM, heightM, pxPerM, dist, onAct })
             items.push({ type: 'buttons', list: l.buttons, i, h: rows * (bh + 10) + 4 });
           }
           else {
-            const lines = wrapLines(body(l.mono), l.text, w - 64 - (l[ASKING] ? 26 : 0), b.open ? 8 : 2);
+            const lines = wrapLines(body(l.mono), l.text, w - 64 - (l[ASKING] ? 26 : 0), b.open ? 12 : 3);
             items.push({ type: 'text', l, lines, h: lines.length * lh + 6 });
           }
         }
