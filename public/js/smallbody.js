@@ -67,8 +67,12 @@ export function readSbdb(body, sstr) {
   if (String(body?.code) === '300' && Array.isArray(body.list)) {
     const word = String(sstr).toLowerCase();
     const named = (n) => String(n).toLowerCase().split(/[\s/()]+/).includes(word);
+    // A numbered comet goes first: "Halley" is 1P/Halley to nearly everyone
+    // who types it, and only then the asteroid that shares the name.
+    const rank = (c) => (/^\d+[PDI]$/.test(String(c.pdes)) ? 0 : 1);
     return body.list
       .filter((c) => c?.pdes && (named(c.name) || String(c.pdes).toLowerCase() === word))
+      .sort((x, y) => rank(x) - rank(y))
       .slice(0, SMALL_BODY_MAX)
       .map((c) => ({ des: String(c.pdes), name: String(c.name).replace(/\s*\([^)]*\)\s*$/, ''), comet: isCometDes(c.pdes) }));
   }

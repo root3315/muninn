@@ -1952,8 +1952,12 @@ async function askSkybot(v, signal) {
       radiusDeg: Math.max(0.03, (sky.grid?.spanDeg ?? state.fov) * 0.8), iso: mid,
     }, { signal });
     if (!signal?.aborted && asked === skybot) sky.setKnownObjects(id, objects);
-  } catch {
-    if (!signal?.aborted) { asked.failed.add(id); asked.failedAt.set(id, Date.now()); }
+  } catch (err) {
+    if (!signal?.aborted) {
+      console.debug(`SkyBoT: no answer for ${id}:`, err?.name ?? '', err?.message ?? err);
+      asked.failed.add(id);
+      asked.failedAt.set(id, Date.now());
+    }
   } finally {
     asked.asking.delete(id);
   }
@@ -2113,8 +2117,9 @@ function retrackMarks() {
 
 /** Match every mark against SkyBoT's answers so far, and ask who the still ones are. */
 function nameMarks() {
+  const loaded = sky.visits.map((v) => v.frame.obsId);
   for (const m of sky.marks) {
-    m.catalog = skybotVerdict(seenAt(m.analysis, { ra: m.ra, dec: m.dec, obsId: m.obsId }));
+    m.catalog = skybotVerdict(seenAt(m.analysis, { ra: m.ra, dec: m.dec, obsId: m.obsId }, loaded));
     // A body that explains some of the visits leaves the others unexplained,
     // and the picture must not draw the mark as accounted for.
     m.known = m.catalog.state === 'match' && !m.catalog.unmatched?.length ? m.catalog.name : null;
@@ -2618,10 +2623,13 @@ function renderMarks() {
     if (!STILL.has(m.analysis?.kind)) whoNodes.push(id);
     if (m.who) whoNodes.push(...whoLines(m.who, m.analysis?.kind));
 
+    // A saturated core has no brightness to read: its curve would be a few
+    // stray points that look broken, so the section says so in a line instead.
+    const saturated = m.analysis?.kind === 'saturated';
     const lightNodes = [];
-    const curve = m.analysis?.seen ? markCurve(m.analysis) : null;
+    const curve = m.analysis?.seen && !saturated ? markCurve(m.analysis) : null;
     if (curve) lightNodes.push(curve);
-    const brightness = brightnessWords(m.analysis);
+    const brightness = saturated ? t('mark.saturatedLight') : brightnessWords(m.analysis);
     if (brightness) {
       const b = document.createElement('p');
       b.className = 'mark__detail';
@@ -4767,7 +4775,7 @@ function modeHint(mode) {
   const loaded = new Set(members.map((m) => m.frame.url));
   const pending = stackPlanned.filter((f) => !loaded.has(f.url) && !stackDropped.has(f.url)).length;
   const reading = pending ? t('mode.stackReading', { done: n, total: n + pending }) : '';
-  if (n < 2 && !reading) return t('mode.stackAlone', { band });
+  if (n < 2 && !reading) return [t('mode.stackAlone', { band }), stackEnd(band)].filter(Boolean).join(' ');
   // The depth of this very stack: its own visits' detector noise, then what
   // averaging them buys (see averaged in stack.js).
   const sigmas = members.map((m) => m.stamp.meta?.detectorSigma).filter((x) => x > 0).sort((a, b) => a - b);
@@ -4775,7 +4783,15 @@ function modeHint(mode) {
   const line = single == null || n < 2
     ? t('mode.stackHintNoDepth', { n, band })
     : t('mode.stackHint', { n, band, mag: fmt(single + 2.5 * Math.log10(Math.sqrt(averaged(n))), 1) });
-  return reading ? `${line} ${reading}` : line;
+  return [line, reading, stackEnd(band)].filter(Boolean).join(' ');
+}
+
+/** At either end of the seasons, the step that goes nowhere says why rather than doing nothing. */
+function stackEnd(band) {
+  if (!sky?.current) return '';
+  if (stackStep(1) === sky.index) return t('mode.stackLast', { band });
+  if (stackStep(-1) === sky.index) return t('mode.stackFirst', { band });
+  return '';
 }
 
 /* ------------------------------------------------------------------ stack */
@@ -4866,7 +4882,7 @@ function stepBy(dir) {
 
 /**
  * In Wipe and Difference the picture is A against B, and a step moves B
- * through the visits, round from the last to the first. B on another
+ * through the visits, round from the last to the first and past A's own. B on another
  * telescope's picture comes back to a visit with the first step.
  */
 function stepB(dir) {
@@ -4875,7 +4891,11 @@ function stepB(dir) {
   stopPlayback();
   if (state.reference) chooseReference(null);
   state.abChosen = true;
-  sky.setAB(null, (((sky.b ?? 0) + dir) % n + n) % n);
+  const wrap = (k) => ((k % n) + n) % n;
+  let b = wrap((sky.b ?? 0) + dir);
+  // B on A's own visit compares a picture with itself: that visit is passed over.
+  if (b === sky.a && n > 1) b = wrap(b + dir);
+  sky.setAB(null, b);
   syncScrub();
   refreshKnownObjects();
 }
@@ -5059,6 +5079,14 @@ function renderArchives() {
   $('archives-note').textContent = archives === 'asking' ? t('archives.asking')
     : archives === 'failed' ? t('archives.failed')
       : list.length ? t('archives.lede') : t('archives.none');
+  if (archives === 'failed') {
+    const again = document.createElement('button');
+    again.type = 'button';
+    again.className = 'survey__retry';
+    again.textContent = t('survey.retry');
+    again.addEventListener('click', () => loadArchives(state.abort?.signal));
+    $('archives-note').append(' ', again);
+  }
   const rows = list.map((a) => {
     const row = document.createElement('div');
     const dt = document.createElement('dt');

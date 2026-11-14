@@ -51,17 +51,16 @@ const NUMBER = /^[+-]?\d+(?:\.\d+)?$/;
 /**
  * Accepts `148.145 +1.003`, `13,4194 3,8459`, `133.795° -7.245°`,
  * `10 00 34.7 +01 00 11`, `10:00:34.7, +01:00:11` and the same without
- * seconds (`08 55 -07 14`, `00ʰ 53ᵐ +03° 50′`), separated by spaces, tabs,
+ * seconds (`08 55 -07 14`, `00ʰ 53ᵐ +03° 50′`) or with them on one side
+ * only (`08:55:10 -07:14`), separated by spaces, tabs,
  * a comma or a semicolon. A comma between two digits with no space is a
  * decimal comma, not a list separator.
  */
 export function parseCoordinates(raw) {
   // The page prints positions with a typographic minus and superscript units
   // (08ʰ 55ᵐ 10.83ˢ −07° 14′ 42.5″); pasted back, they are the same position.
-  const tokens = String(raw).replace(/[−–—]/g, '-')
-    .replace(/(^|[^\d.])(\d+),(\d+)/g, '$1$2.$3')
-    .replace(/[ʰᵐˢhmsdнм°'′"″:;,]/gi, ' ')
-    .trim().split(/\s+/);
+  const text = String(raw).replace(/[−–—]/g, '-').replace(/(^|[^\d.])(\d+),(\d+)/g, '$1$2.$3');
+  const tokens = numbersIn(text);
   if (!tokens.every((tok) => NUMBER.test(tok))) return null;
   const sexagesimal = ([d, m = '0', s = '0']) => {
     if (+m >= 60 || +s >= 60) return null;
@@ -72,9 +71,11 @@ export function parseCoordinates(raw) {
   if (tokens.length === 2) {
     ra = +tokens[0];
     dec = +tokens[1];
-  } else if (tokens.length === 4 || tokens.length === 6) {
-    const h = tokens.slice(0, tokens.length / 2);
-    const d = tokens.slice(tokens.length / 2);
+  } else if (tokens.length >= 4 && tokens.length <= 6) {
+    const raLength = tokens.length === 5 ? mixedSplit(tokens, text) : tokens.length / 2;
+    if (raLength === null) return null;
+    const h = tokens.slice(0, raLength);
+    const d = tokens.slice(raLength);
     if (h[0].startsWith('-')) return null;
     const hours = sexagesimal(h);
     const degrees = sexagesimal(d);
@@ -85,6 +86,24 @@ export function parseCoordinates(raw) {
     return null;
   }
   return ra >= 0 && ra < 360 && dec >= -90 && dec <= 90 ? { ra, dec } : null;
+}
+
+/** The numbers of a position, its units and separators taken out. */
+const numbersIn = (text) => text.replace(/[ʰᵐˢhmsdнм°'′"″:;,]/gi, ' ').trim().split(/\s+/);
+
+/**
+ * Where five numbers part into right ascension and declination: three and two
+ * ("08:55:10 -07:14") or two and three ("08:55 -07:14:42"). The sign of the
+ * declination says so, or else the two words the text was typed as; with
+ * neither, the position is not guessed.
+ */
+function mixedSplit(tokens, text) {
+  const signed = tokens.findIndex((tok, i) => i > 0 && /^[+-]/.test(tok));
+  if (signed === 2 || signed === 3) return signed;
+  if (signed > 0) return null;
+  const words = text.trim().split(/\s+/).filter((w) => /\d/.test(w));
+  const first = words.length === 2 ? numbersIn(words[0]).length : 0;
+  return first === 2 || first === 3 ? first : null;
 }
 
 /** A count of hours or degrees split into whole, minutes and seconds, rounding carried upward. */
@@ -655,19 +674,26 @@ const CFA_CONES = {
   },
 };
 
-/** One catalogue's rows in a circle from the CfA's VizieR, under the shared column names. */
-async function cfaRows(kind, { ra, dec, radiusDeg, top }, signal) {
+/**
+ * One catalogue's rows in a circle from the CfA's VizieR, under the shared
+ * column names. A magnitude cut goes to the mirror as its own column
+ * constraint and is applied again here, so a row fainter than the cut never
+ * reaches the overlay whichever way the mirror reads it.
+ */
+async function cfaRows(kind, { ra, dec, radiusDeg, limit = null, top }, signal) {
   const { source, mag, columns } = CFA_CONES[kind];
   const q = new URLSearchParams({
     '-source': source, '-c': `${ra.toFixed(6)} ${dec >= 0 ? '+' : ''}${dec.toFixed(6)}`,
     '-c.rs': (radiusDeg * 3600).toFixed(2), '-out': Object.values(columns).join(','),
     '-sort': mag, '-out.max': String(top),
   });
+  if (limit !== null) q.set(mag, `<=${limit.toFixed(2)}`);
   const res = await fetch(`${VIZIER_CFA}?${q}`, { signal: deadline(signal, CATALOG_DEADLINE_MS) });
   if (!res.ok) throw new Error(`VizieR ${res.status}`);
   const { status, message, rows } = parseVOTable(await res.text());
   if (status === 'ERROR') throw new Error(message);
-  const named = rows.map((row) => Object.fromEntries(Object.entries(columns).map(([name, col]) => [name, row[col] ?? ''])));
+  const within = limit === null ? rows : rows.filter((row) => row[mag] !== '' && row[mag] != null && Number(row[mag]) <= limit);
+  const named = within.map((row) => Object.fromEntries(Object.entries(columns).map(([name, col]) => [name, row[col] ?? ''])));
   return { rows: named, via: 'VizieR' };
 }
 
@@ -684,9 +710,8 @@ export async function catalogueRows(kind, field, { signal } = {}) {
   if (vizier) {
     asks.push(tap(VIZIER_TAP, coneQuery(vizier, field), 'csv', signal).then((text) => ({ rows: parseCsv(text), via: 'VizieR' })));
   }
-  // The CfA's VizieR answers when Strasbourg does not; it is asked only
-  // without a magnitude cut, as a mark's own lookup is.
-  if (CFA_CONES[kind] && field.limit == null) asks.push(cfaRows(kind, field, signal));
+  // The CfA's VizieR answers when Strasbourg does not, with or without a magnitude cut.
+  if (CFA_CONES[kind]) asks.push(cfaRows(kind, field, signal));
   try {
     return await Promise.any(asks);
   } catch (err) {

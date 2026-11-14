@@ -189,11 +189,17 @@ const visitDate = (visits, obsId) => {
   return v ? fmtDate(v.frame.iso) : '—';
 };
 
-/** The places a tracked thing was seen, as skybotVerdict wants them. */
-export function seenAt(analysis, fallback) {
+/**
+ * The places a tracked thing was seen, as skybotVerdict wants them. A spot
+ * where nothing was seen, marked from a link with no visit of its own, is
+ * asked about at the same place in every visit in `obsIds`: with no places at
+ * all the verdict could only read "SkyBoT did not answer", though it had.
+ */
+export function seenAt(analysis, fallback, obsIds = []) {
   const track = analysis?.track ?? [];
   if (track.length) return track.map((p) => ({ ra: p.ra, dec: p.dec, obsId: p.obsId }));
-  return fallback?.obsId ? [fallback] : [];
+  if (fallback?.obsId) return [fallback];
+  return fallback ? obsIds.map((obsId) => ({ ra: fallback.ra, dec: fallback.dec, obsId })) : [];
 }
 
 /** The line a mark or a candidate shows for its SkyBoT check; `visits` date it. */

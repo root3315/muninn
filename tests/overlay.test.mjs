@@ -275,3 +275,48 @@ test('a fast star is matched at the visit date, and the other catalogues are ask
   assert.equal(motionAnchor(still, dwarf).pmRA, -8100);
   assert.equal(motionAnchor(still, null).pmRA, 2);
 });
+
+test('with IRSA and CDS both down, a magnitude-cut overlay is drawn from the CfA mirror', async () => {
+  const { catalogueRows } = await import('../public/js/catalog.js');
+  const votable = (fields, rows) => '<?xml version="1.0"?><VOTABLE><RESOURCE><TABLE>'
+    + fields.map((n) => `<FIELD name="${n}" datatype="char"/>`).join('')
+    + `<DATA><TABLEDATA>${rows.map((r) => `<TR>${r.map((v) => `<TD>${v}</TD>`).join('')}</TR>`).join('')}`
+    + '</TABLEDATA></DATA></TABLE></RESOURCE></VOTABLE>';
+  const mirror = {
+    'I/355/gaiadr3': votable(
+      ['Source', 'RA_ICRS', 'DE_ICRS', 'Gmag', 'pmRA', 'pmDE', 'Plx', 'e_Plx', 'VarFlag', 'PQSO', 'PGal', 'PSS'],
+      [['1', '180.0', '0.0', '9.5', '1', '2', '3', '0.1', 'NOT_AVAILABLE', '0', '0', '1'],
+        ['2', '180.01', '0.0', '15.9', '', '', '', '', '', '', '', ''],
+        ['3', '180.02', '0.0', '16.4', '', '', '', '', '', '', '', '']],
+    ),
+    'II/328/allwise': votable(
+      ['AllWISE', 'RAJ2000', 'DEJ2000', 'W1mag', 'W2mag'],
+      [['J120000.00+000000.0', '180.0', '0.0', '8.5', '8.4'], ['J120002.40+000000.0', '180.01', '0.0', '14.2', '']],
+    ),
+  };
+  const asked = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = new URL(String(url), 'http://local/');
+    if (u.hostname !== 'vizier.cfa.harvard.edu') throw new Error('down');
+    asked.push(u.searchParams);
+    return { ok: true, status: 200, text: async () => mirror[u.searchParams.get('-source')] };
+  };
+  try {
+    const gaia = await catalogueRows('gaia', { ra: 180, dec: 0, radiusDeg: 0.1, limit: 16, top: 50 });
+    assert.equal(gaia.via, 'VizieR');
+    assert.deepEqual(gaia.rows.map((r) => r.Source), ['1', '2']);
+    assert.deepEqual(Object.keys(gaia.rows[0]), ['Source', 'RA_ICRS', 'DE_ICRS', 'Gmag', 'pmRA', 'pmDE', 'Plx', 'e_Plx', 'VarFlag', 'PQSO', 'PGal', 'PSS']);
+    assert.equal(asked.at(-1).get('Gmag'), '<=16.00');
+
+    const wise = await catalogueRows('wise', { ra: 180, dec: 0, radiusDeg: 0.1, limit: 12, top: 50 });
+    assert.deepEqual(wise.rows, [{ AllWISE: 'J120000.00+000000.0', RAJ2000: '180.0', DEJ2000: '0.0', W1mag: '8.5', W2mag: '8.4' }]);
+    assert.equal(asked.at(-1).get('W1mag'), '<=12.00');
+
+    const all = await catalogueRows('gaia', { ra: 180, dec: 0, radiusDeg: 0.1, top: 50 });
+    assert.equal(all.rows.length, 3);
+    assert.equal(asked.at(-1).has('Gmag'), false);
+  } finally {
+    globalThis.fetch = real;
+  }
+});

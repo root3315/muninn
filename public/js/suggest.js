@@ -12,6 +12,7 @@
  */
 
 import { parseCoordinates } from './catalog.js';
+import { formatDay } from './i18n.js';
 
 export const SUGGEST_MAX = 8;
 
@@ -104,6 +105,16 @@ export function looksLikeCoordinates(text) {
   return /^[+\-−]?\d/.test(s) && /^[\s\d.,:+\-−hmsd°'′"″ʰᵐˢ]+$/i.test(s);
 }
 
+const EN_MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** A preset's date, written "25 Dec 2025" in targets.json, in the reader's language; anything else as it is. */
+function localDate(text, lang) {
+  const m = /^(\d{1,2}) ([A-Z][a-z]{2}) (\d{4})$/.exec(text);
+  const month = m ? EN_MONTHS.indexOf(m[2]) : -1;
+  if (month < 0) return text;
+  return formatDay(new Date(Date.UTC(Number(m[3]), month, Number(m[1]))), { year: true, lang });
+}
+
 /**
  * Everything the box can offer, built once per opening.
  *
@@ -128,10 +139,11 @@ export function buildIndex({ presets = [], stars = null, deep = null, planets = 
     const label = p.key ? say(lang, `preset.${p.key}`) : p.name;
     // The catalogue name beside the short one, unless it says the same thing.
     const [head, tail = ''] = (p.name ?? '').split(' · ');
+    const when = localDate(tail, lang);
     add({
       kind: p.group === 'challenge' ? 'target' : 'field',
-      label, alt: fold(head) === fold(label) ? tail : head,
-      names: [label, p.key ? say(other, `preset.${p.key}`) : '', p.name, ...(p.name ?? '').split(' · ')],
+      label, alt: fold(head) === fold(label) ? when : head,
+      names: [label, p.key ? say(other, `preset.${p.key}`) : '', p.name, ...(p.name ?? '').split(' · '), when],
       ra: p.ra, dec: p.dec, ref: p,
     });
   }

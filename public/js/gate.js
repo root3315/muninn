@@ -720,6 +720,9 @@ export class Gate {
   }
 
   draw() {
+    // Before the first resize there is nothing measured to draw into; a tap
+    // that early still records its choice, and the first resize draws it.
+    if (!this.box) return;
     const { ctx } = this;
     const { width, height, dpr } = this.box;
     const f = this.flight;
@@ -1250,7 +1253,7 @@ export class Gate {
         return;
       }
 
-      if (this.drag) {
+      if (this.drag && this.box) {
         // Degrees per pixel at the current field of view, so the sky moves by
         // exactly as much as the pointer moved across it.
         const perPx = this.cam.fov / this.box.height;
@@ -1298,7 +1301,7 @@ export class Gate {
 
   press() {
     if (this.hit) { this.onPick?.(this.hit); return; }
-    if (!this.pointer) return;
+    if (!this.pointer || !this.box) return;
     const [ra, dec] = this.unproject(this.pointer[0], this.pointer[1]);
     this.onPick?.({ kind: 'sky', ra, dec, label: null });
   }

@@ -59,9 +59,10 @@ test("JPL's answers are read: one body, a shared name, none", () => {
     code: '300',
     list: [{ pdes: '2688', name: '2688 Halley (1982 HG1)' }, { pdes: '1P', name: '1P/Halley' }, { pdes: '9999', name: '9999 Halleyfield' }],
   };
+  // The comet a person means by "Halley" comes first, the asteroid after it.
   assert.deepEqual(readSbdb(shared, 'Halley'), [
-    { des: '2688', name: '2688 Halley', comet: false },
     { des: '1P', name: '1P/Halley', comet: true },
+    { des: '2688', name: '2688 Halley', comet: false },
   ]);
   assert.deepEqual(readSbdb({ code: '200', message: 'specified object was not found' }, 'Sirius'), []);
 
