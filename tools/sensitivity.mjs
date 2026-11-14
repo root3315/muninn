@@ -24,7 +24,7 @@
 import { frameFromRow, groupVisits, toS3 } from '../public/js/catalog.js';
 import { TangentGrid } from '../public/js/wcs.js';
 import { loadStamp } from '../public/js/stamp.js';
-import { limitAB } from '../public/js/depth.js';
+import { limitAB, PLANET_NINE_V } from '../public/js/depth.js';
 import { siaRows } from './sia.mjs';
 
 const RA = Number(process.argv[2] ?? 13.4194);
@@ -82,10 +82,10 @@ for (const n of [10, 50, 100, 200]) {
   console.log(`  ${String(n).padStart(3)} visits:  ${(single + 2.5 * Math.log10(Math.sqrt(n))).toFixed(2)} AB`);
 }
 
-/* Planet Nine predictions, Brown & Batygin and the searches that followed. */
+/* Planet Nine near aphelion (Linder & Mordasini 2016), the range the page uses. */
 console.log('\n— against the prediction —');
 const deep = single + 2.5 * Math.log10(Math.sqrt(200));
-for (const [label, mag] of [['bright end of the prediction', 22], ['mid', 23.5], ['faint end', 25]]) {
+for (const [label, mag] of [['bright end of the prediction', PLANET_NINE_V.bright], ['faint end', PLANET_NINE_V.faint]]) {
   const gap = mag - deep;
   console.log(`  V≈${mag}  ${label.padEnd(30)} short by ${gap.toFixed(1)} mag `
     + `(a factor of ${Math.round(10 ** (0.4 * gap))} in flux)`);
