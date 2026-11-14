@@ -21,10 +21,11 @@
 <meta name="twitter:card" content="summary_large_image">
 <script src="js/theme-boot.js"></script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23171721'/%3E%3Ccircle cx='11' cy='13' r='2.5' fill='%23e6f0f7'/%3E%3Ccircle cx='21' cy='19' r='2.5' fill='%23b9a5f5'/%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="preconnect" href="https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;600&family=Onest:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<!-- Which fields ship with their frame lists: the first question a link to a
+     field asks, so it is on its way while the page is still being read. -->
+<link rel="preload" href="data/fields/index.json" as="fetch" crossorigin>
+<link rel="stylesheet" href="css/fonts.css">
 <!-- Every module, named up front: found one import at a time they arrive
      three round trips deep. -->
 <link rel="modulepreload" href="js/app.js">
@@ -49,6 +50,22 @@
 <link rel="modulepreload" href="js/twilight.js">
 <link rel="modulepreload" href="js/votable.js">
 <link rel="modulepreload" href="js/wcs.js">
+<link rel="modulepreload" href="js/archives.js">
+<link rel="modulepreload" href="js/csv.js">
+<link rel="modulepreload" href="js/export.js">
+<link rel="modulepreload" href="js/gaiasky.js">
+<link rel="modulepreload" href="js/hash.js">
+<link rel="modulepreload" href="js/overlay.js">
+<link rel="modulepreload" href="js/rice.js">
+<link rel="modulepreload" href="js/sbident.js">
+<link rel="modulepreload" href="js/seasons.js">
+<link rel="modulepreload" href="js/sharpness.js">
+<link rel="modulepreload" href="js/spectrum-view.js">
+<link rel="modulepreload" href="js/spectrum.js">
+<link rel="modulepreload" href="js/suggest-box.js">
+<link rel="modulepreload" href="js/suggest.js">
+<link rel="modulepreload" href="js/visits.js">
+<link rel="modulepreload" href="js/wise.js">
 <link rel="stylesheet" href="css/tokens.css">
 <link rel="stylesheet" href="css/app.css">
 <link rel="stylesheet" href="css/redesign.css">

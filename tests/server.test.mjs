@@ -52,6 +52,9 @@ test('search: absent coordinates are an error, a baked field answers offline', a
   const body = await res.json();
   assert.equal(body.cached, 'baked');
   assert.ok(body.frames.length > 10);
+  // A whole frame list may be kept; a refused question may not.
+  assert.match(res.headers.get('cache-control'), /public, max-age=\d+/);
+  assert.equal((await get('/api/search?ra=&dec=')).headers.get('cache-control'), 'no-cache');
 });
 
 test('catalogue relay: only a named template, a real position and a radius are asked', async () => {

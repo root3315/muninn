@@ -107,8 +107,18 @@ const send = (res, code, body, headers = {}) => {
   res.end(body);
 };
 
-const json = (res, code, value) =>
-  send(res, code, JSON.stringify(value), { 'content-type': TYPES['.json'] });
+const json = (res, code, value, headers = {}) =>
+  send(res, code, JSON.stringify(value), { 'content-type': TYPES['.json'], ...headers });
+
+/**
+ * A frame list that is whole — from the bake, or from the cache, where only
+ * whole answers are kept — may be kept by the browser (and by an edge told to)
+ * for an hour: the archive adds frames with a data release, not by the hour.
+ * Reopening a field, or a second visitor through a cache, then costs no trip
+ * to the relay. An answer still being worked out, or one that failed, is not
+ * kept.
+ */
+const KEEP_FRAME_LIST = { 'cache-control': 'public, max-age=3600' };
 
 /**
  * A fetch whose deadline covers the body as well as the headers: an archive
@@ -278,9 +288,9 @@ const pools = Object.fromEntries(Object.keys(POOL_MAX).map((k) => [k, new Set()]
  * question already out, or by asking. `ask` caches its own answer, since only
  * it knows whether the answer is whole.
  */
-async function relay(res, key, ask, pool = 'catalog') {
+async function relay(res, key, ask, pool = 'catalog', keep = {}) {
   const cached = await readCache(key);
-  if (cached) return json(res, 200, { ok: true, cached: true, ...cached });
+  if (cached) return json(res, 200, { ok: true, cached: true, ...cached }, keep);
 
   let pending = inflight.get(key);
   if (!pending && pools[pool].size >= POOL_MAX[pool]) {
@@ -328,11 +338,11 @@ async function handleSearch(url, res) {
     return json(res, 200, {
       ok: true, cached: 'baked', frames: prebaked.frames,
       truncated: Boolean(prebaked.truncated), warnings: [],
-    });
+    }, KEEP_FRAME_LIST);
   }
 
   const key = cacheKey(ra, dec, radius);
-  return relay(res, key, () => lookup(ra, dec, radius, key), 'search');
+  return relay(res, key, () => lookup(ra, dec, radius, key), 'search', KEEP_FRAME_LIST);
 }
 
 /* ------------------------------------------------------- catalogues at IRSA */
@@ -903,6 +913,7 @@ function cachePolicy(rel) {
   const path = rel.replace(/\\/g, '/');
   if (path.startsWith('data/')) return 'public, max-age=600, stale-while-revalidate=86400';
   if (path.startsWith('img/')) return 'public, max-age=86400';
+  if (path.startsWith('fonts/')) return 'public, max-age=31536000, immutable';
   return 'no-cache';
 }
 

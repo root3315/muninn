@@ -167,7 +167,42 @@ async function loadBakedIndex(signal) {
  * near-point query already finds everything that could cover the field, and a
  * wider one makes the archive do far more work for no extra frames.
  */
-export async function searchFrames({ ra, dec, radius = 0.006 }, { signal } = {}) {
+export function searchFrames({ ra, dec, radius = 0.006 }, { signal } = {}) {
+  if (ahead && ahead.ra === ra && ahead.dec === dec && radius === ahead.radius) {
+    const { promise } = ahead;
+    ahead = null;
+    return untilAborted(promise, signal);
+  }
+  return askFrames({ ra, dec, radius }, signal);
+}
+
+/**
+ * A field a link opens is asked for as the page starts, before the rest of
+ * it is ready to show anything: the frame list is a round trip or two to
+ * the relay, and nothing else on the way needs to wait for it. The first
+ * searchFrames for the same spot takes the answer over; a later one (a
+ * retry, a change of band) asks afresh.
+ */
+let ahead = null;
+
+export function searchAhead({ ra, dec, radius = 0.006 }) {
+  const promise = askFrames({ ra, dec, radius }, null);
+  promise.catch(() => {});
+  ahead = { ra, dec, radius, promise };
+}
+
+/** The promise, or an AbortError as soon as the signal fires. */
+function untilAborted(promise, signal) {
+  if (!signal) return promise;
+  return new Promise((resolve, reject) => {
+    const stop = () => reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+    if (signal.aborted) { stop(); return; }
+    signal.addEventListener('abort', stop, { once: true });
+    promise.then(resolve, reject).finally(() => signal.removeEventListener('abort', stop));
+  });
+}
+
+async function askFrames({ ra, dec, radius }, signal) {
   const index = await loadBakedIndex(signal);
   const cos = Math.cos((dec * Math.PI) / 180);
   const hit = index.find((f) => Math.hypot(deltaRA(f.ra, ra) * cos, f.dec - dec) < 0.01);

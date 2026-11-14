@@ -39,7 +39,7 @@ import { drawGaiaSky, psfFor } from './gaiasky.js';
 import { fieldArchives, CADC_SEARCH } from './archives.js';
 import {
   SIMBAD_PAGE, VIZIER_PAGE,
-  searchFrames, NoRelayError, UpstreamError, groupVisits, findHeldVisit, nearestHost, bandsPresent, bandRange, parseCoordinates,
+  searchFrames, searchAhead, NoRelayError, UpstreamError, groupVisits, findHeldVisit, nearestHost, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, identifySource, arcsecBetween, fieldObjects, toS3, surveySources,
 } from './catalog.js';
 import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP, propagate, epochOfMjd } from './overlay.js';
@@ -138,16 +138,7 @@ const stampWorkers = { idle: [], waiting: [], count: 0, broken: false, seq: 0 };
 function takeWorker(signal) {
   if (stampWorkers.idle.length) return Promise.resolve(stampWorkers.idle.pop());
   if (stampWorkers.broken) return Promise.resolve(null);
-  if (stampWorkers.count < FETCH_CONCURRENCY) {
-    try {
-      const w = new Worker(new URL('./stamp-worker.js', import.meta.url), { type: 'module' });
-      stampWorkers.count++;
-      return Promise.resolve(w);
-    } catch {
-      workersBroken();
-      return Promise.resolve(null);
-    }
-  }
+  if (stampWorkers.count < FETCH_CONCURRENCY) return Promise.resolve(spawnWorker());
   return new Promise((resolve, reject) => {
     const aborted = () => {
       stampWorkers.waiting = stampWorkers.waiting.filter((x) => x !== waiter);
@@ -158,6 +149,43 @@ function takeWorker(signal) {
     signal?.addEventListener('abort', aborted, { once: true });
     stampWorkers.waiting.push(waiter);
   });
+}
+
+/** A new worker, or null where workers cannot start. */
+function spawnWorker() {
+  let w;
+  try {
+    w = new Worker(new URL('./stamp-worker.js', import.meta.url), { type: 'module' });
+  } catch {
+    workersBroken();
+    return null;
+  }
+  stampWorkers.count++;
+  // One that fails to load while it waits for its first read is let go here,
+  // as readStamp lets go of one that fails during a read.
+  w.addEventListener('error', (e) => {
+    if (!stampWorkers.idle.includes(w)) return;
+    e.preventDefault?.();
+    stampWorkers.idle = stampWorkers.idle.filter((x) => x !== w);
+    w.terminate();
+    stampWorkers.count--;
+    workersBroken();
+  });
+  return w;
+}
+
+/**
+ * Every fetch slot's worker, started before the first read needs it. A
+ * worker loads its own copy of the code, a few round trips on a slow line
+ * and a second of a phone's time; done while the frame list is still on its
+ * way, that is off the time to the first picture.
+ */
+function warmWorkers() {
+  while (!stampWorkers.broken && stampWorkers.count < FETCH_CONCURRENCY) {
+    const w = spawnWorker();
+    if (!w) return;
+    releaseWorker(w);
+  }
 }
 
 /** A worker done with its read goes to the next read waiting, or back to the idle ones. */
@@ -173,9 +201,9 @@ function workersBroken() {
   for (const waiter of stampWorkers.waiting.splice(0)) waiter.give(null);
 }
 
-async function readStamp(url, grid, { signal } = {}) {
+async function readStamp(url, grid, { signal, onHeader } = {}) {
   const worker = await takeWorker(signal);
-  if (!worker) return loadStamp(url, grid, { signal });
+  if (!worker) return loadStamp(url, grid, { signal, onHeader });
   const id = ++stampWorkers.seq;
   return new Promise((resolve, reject) => {
     const settle = () => {
@@ -185,6 +213,7 @@ async function readStamp(url, grid, { signal } = {}) {
     };
     const onMessage = ({ data }) => {
       if (data.id !== id) return;
+      if (data.header) { onHeader?.(); return; }
       settle();
       releaseWorker(worker);
       if (data.error) {
@@ -203,14 +232,14 @@ async function readStamp(url, grid, { signal } = {}) {
       worker.terminate();
       stampWorkers.count--;
       workersBroken();
-      loadStamp(url, grid, { signal }).then(resolve, reject);
+      loadStamp(url, grid, { signal, onHeader }).then(resolve, reject);
     };
     const onAbort = () => worker.postMessage({ type: 'abort', id });
     worker.addEventListener('message', onMessage);
     worker.addEventListener('error', onError);
     signal?.addEventListener('abort', onAbort, { once: true });
     worker.postMessage({
-      id, url,
+      id, url, header: Boolean(onHeader),
       grid: { ra: grid.ra, dec: grid.dec, fovDeg: grid.fovDeg, width: grid.width, height: grid.height },
     });
   });
@@ -3348,12 +3377,12 @@ function addVisitInPlace(frame, stamp) {
  * while it fills in the background, that is left to fillRefresh, which runs
  * every few seconds instead of on every frame.
  */
-async function readOne(entry, grid, signal) {
+async function readOne(entry, grid, signal, { onHeader } = {}) {
   entry.status = 'reading';
   drawAxis();
   renderPlateLog();
   try {
-    const stamp = await readStamp(toS3(entry.frame.url), grid, { signal });
+    const stamp = await readStamp(toS3(entry.frame.url), grid, { signal, onHeader });
     await afterDive();
     if (signal.aborted) return 0;
     if (!stamp) {
@@ -3391,9 +3420,9 @@ async function readVisits(entries, grid, signal) {
   let done = 0;
   let bytes = 0;
   const total = entries.length;
-  await pool(entries, FETCH_CONCURRENCY, async (entry) => {
+  const step = async (entry, options) => {
     if (signal.aborted) return;
-    bytes += await readOne(entry, grid, signal);
+    bytes += await readOne(entry, grid, signal, options);
     done++;
     if (signal.aborted) return;
     if (!sky.visits.length) {
@@ -3403,7 +3432,20 @@ async function readVisits(entries, grid, signal) {
     }
     drawAxis();
     updateIdentity();
-  });
+  };
+  // Six visits started together split the line six ways, and the first
+  // picture waited for a sixth of six visits' bytes. One visit gets a head
+  // start: the rest begin once its header is in (or it has failed), so its
+  // rows are well on their way before theirs. Waiting for the whole of its
+  // rows was a second sooner still to the first picture but a second or two
+  // later to the tenth. The one a link holds goes first, as that is the one
+  // the page will show.
+  const lead = entries.find((e) => e.frame === state.allVisits[state.wantVisit]) ?? entries[0];
+  let leadIn;
+  const leadStarted = new Promise((resolve) => { leadIn = resolve; });
+  const first = step(lead, { onHeader: leadIn }).finally(leadIn);
+  await leadStarted;
+  await Promise.all([first, pool(entries.filter((e) => e !== lead), FETCH_CONCURRENCY, (e) => step(e))]);
   return bytes;
 }
 
@@ -3615,6 +3657,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.searched = false;
   setPlateState(t('epochs.searching'), { progress: 0 });
   drawAxis();
+  warmWorkers();
 
   let frames;
   let truncated = false;
@@ -5517,6 +5560,12 @@ function relabel() {
 
 async function boot() {
   const hash = readHash();
+  // A link to a field: its frame list is asked for now, beside everything
+  // the page still has to set up, rather than after it.
+  if (hash.position) {
+    searchAhead(hash.position);
+    warmWorkers();
+  }
   let stored = null;
   try { stored = localStorage.getItem('muninn.lang'); } catch { /* private window */ }
   // The hash for a shared field, the query for a plain link (/?lang=en), then what this browser chose before.
