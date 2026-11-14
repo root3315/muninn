@@ -518,7 +518,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
    * The stars' clock: years from now, within ±STAR_YEARS, running or not, at
    * ×1 or ×10. The shader moves every star from it; nothing loops over them.
    */
-  const clock = { years: 0, playing: false, fast: false, uniform: { value: 0 }, drawn: 0, last: 0 };
+  const clock = { years: 0, playing: false, dir: 1, fast: false, uniform: { value: 0 }, drawn: 0, last: 0 };
   /** Things that follow the clock on the CPU: a few names, and the pickable places. */
   const followers = [];
   /** The paths shown, by the thing they belong to. */
@@ -594,7 +594,11 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
       if (!state.bodies.length) y += Math.round(px * 1.1);
       // Time: the stars along their own motion; the bodies along their season.
       if (state.gaia?.known) {
-        chip('play', clock.playing ? '❚❚' : '▶', clock.playing);
+        // Back and on: play either way (a second tap pauses), or a step at a time.
+        chip('playBack', clock.playing && clock.dir < 0 ? '❚❚' : '◀', clock.playing && clock.dir < 0);
+        chip('step', '‹', false, '-1');
+        chip('step', '›', false, '1');
+        chip('play', clock.playing && clock.dir > 0 ? '❚❚' : '▶', clock.playing && clock.dir > 0);
         chip('speed', clock.fast ? '×10' : '×1', clock.fast);
         chip('today', tv('vr.today'), false);
         row();
@@ -663,7 +667,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
     if (!h) return;
     if (h.id === 'filter') { shown[h.data] = !shown[h.data]; applyFilters(); drawControls(); return; }
     if (h.id === 'morph') { api.toggleMorph(); return; }
-    if (h.id === 'play') { clock.playing = !clock.playing; if (clock.playing && clock.years >= STAR_YEARS) setYears(-STAR_YEARS); clock.last = performance.now(); drawControls(); return; }
+    if (h.id === 'play' || h.id === 'playBack') { playToward(h.id === 'play' ? 1 : -1); return; }
+    if (h.id === 'step') { clock.playing = false; setYears(clock.years + Number(h.data) * stepYears()); return; }
     if (h.id === 'speed') { clock.fast = !clock.fast; drawControls(); return; }
     if (h.id === 'today') { clock.playing = false; setYears(0); return; }
     if (h.id === 'clock') { clock.playing = false; setYears(yearsAt(uv)); return; }
@@ -708,20 +713,36 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
     hits.push({ x: b.x, y: b.y, w: b.w, h: b.h, id: 'clock' });
   }
 
+  /** Play the clock toward the future (1) or the past (−1); the same way again pauses. From an end, it starts over from the other. */
+  function playToward(dir) {
+    if (clock.playing && clock.dir === dir) { clock.playing = false; drawControls(); return; }
+    clock.dir = dir;
+    clock.playing = true;
+    clock.last = performance.now();
+    if (dir > 0 && clock.years >= STAR_YEARS) setYears(-STAR_YEARS);
+    else if (dir < 0 && clock.years <= -STAR_YEARS) setYears(STAR_YEARS);
+    else drawControls();
+  }
+
+  /** A step of the ‹ › buttons: a century at ×1, a millennium at ×10. */
+  const stepYears = () => (clock.fast ? 1000 : 100);
+
   /** The year the stars stand at, large, and how far from today, with the honest note. */
   function drawReadout(ctx, y, W, px) {
     const now = new Date().getUTCFullYear();
-    const year = now + clock.years;
+    const year = now + Math.round(clock.years);
     const big = Math.round(px * 1.35);
     ctx.font = `600 ${big}px ${FONTS.display}`;
     ctx.fillStyle = clock.years ? look.accent : look.ink;
     // A year is written as a year: no thousands separator.
-    const name = year > 0 ? tv('vr.yearAD', { y: String(year) }) : tv('vr.yearBC', { y: String(1 - year) });
+    const which = year > 0 ? tv('vr.yearAD', { y: String(year) }) : tv('vr.yearBC', { y: String(1 - year) });
+    // Which way it runs, before the year.
+    const name = clock.playing ? `${clock.dir > 0 ? '▶' : '◀'} ${which}` : which;
     ctx.fillText(name, 18, y + big * 0.9);
     const w = ctx.measureText(name).width;
     ctx.font = `400 ${Math.round(px * 0.85)}px ${FONTS.mono}`;
     ctx.fillStyle = look.neutral;
-    const off = clock.years === 0 ? tv('vr.today') : `${now} ${clock.years > 0 ? '+' : '−'} ${Math.abs(clock.years)}`;
+    const off = clock.years === 0 ? tv('vr.today') : `${now} ${clock.years > 0 ? '+' : '−'} ${Math.abs(Math.round(clock.years))}`;
     ctx.fillText(off, Math.min(W - 200, 18 + w + 24), y + big * 0.9);
   }
 
@@ -924,7 +945,15 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
     /** For the checks: a filter on or off, as its chip would; the count of each class. */
     filter(kind, on) { shown[kind] = on; applyFilters(); drawControls(); return { bodies: state.bodies.length, labels: layers.bodies?.labels.filter((l) => l.mesh.visible).length ?? 0 }; },
     /** For the checks: set the stars' clock, in years from now, or run it. */
-    clockTo(years, play = false) { clock.playing = play; clock.last = performance.now(); setYears(years); },
+    clockTo(years, play = false, dir = 1) { clock.playing = play; clock.dir = dir; clock.last = performance.now(); setYears(years); },
+    /** The controls panel, for the stick to scrub the clock while a ray is on it. */
+    get clockPanel() { return clock.uniform && state.gaia?.known ? controls.mesh : null; },
+    /** The stick aside scrubs the clock: `x` −1…1 over `dt` seconds; any push stops it playing. */
+    scrub(x, dt) {
+      if (Math.abs(x) < 0.15) return;
+      clock.playing = false;
+      setYears(clock.years + x * dt * CLOCK_YPS * 4 * (clock.fast ? 10 : 1));
+    },
     /** For the checks: where the `i`th pickable thing of a class stands, in the world. */
     placeOf(kind, i = 0) {
       const it = pickables[kind]?.[i];
@@ -1252,8 +1281,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
         const now = performance.now();
         const dt = Math.min(0.1, (now - clock.last) / 1000);
         clock.last = now;
-        const next = clock.years + dt * CLOCK_YPS * (clock.fast ? 10 : 1);
-        if (next >= STAR_YEARS) { clock.playing = false; setYears(STAR_YEARS); drawControls(); } else setYears(next);
+        const next = clock.years + clock.dir * dt * CLOCK_YPS * (clock.fast ? 10 : 1);
+        if (Math.abs(next) >= STAR_YEARS) { clock.playing = false; setYears(Math.sign(next) * STAR_YEARS); drawControls(); } else setYears(next);
       }
       // Every few frames, the names that would cover one another as seen
       // from where the viewer now stands: the more important one is shown.

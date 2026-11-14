@@ -70,6 +70,9 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
   const controllers = [];
   const walk = [0, 0];
   let fly = 0;
+  /** The sticks aside, while lent to the clock. */
+  let sticksTaken = false;
+  let scrubX = 0;
   const keys = new Set();
   for (let i = 0; i < 2; i++) {
     const c = renderer.xr.getController(i);
@@ -224,6 +227,12 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
     const x = pad.axes[2] ?? 0;
     const y = pad.axes[3] ?? 0;
     const dead = (v) => (Math.abs(v) < 0.15 ? 0 : v);
+    // While a ray is on the stars' clock, the stick aside scrubs it: no walk or turn.
+    if (sticksTaken) {
+      scrubX = Math.abs(x) > Math.abs(scrubX) ? dead(x) : scrubX;
+      if (entry.source.handedness === 'left') { walk[0] = 0; walk[1] = dead(y); } else { fly = 0; entry.stickArmed = Math.abs(x) < 0.3; }
+      return;
+    }
     if (entry.source.handedness === 'left') {
       walk[0] = dead(x);
       walk[1] = dead(y);
@@ -400,6 +409,10 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
       reticle.material.uniforms.glow.value = pickable ? 1 : 0;
       reticle.material.uniforms.held.value = ray.entry.hold?.kind === 'select' ? 1 : 0;
     },
+    /** Lend the sticks' sideways push to the clock, or take it back. */
+    takeSticks(on) { sticksTaken = on; },
+    /** The strongest sideways push this frame while lent, −1…1; read once a frame. */
+    scrub() { const x = scrubX; scrubX = 0; return x; },
     /** Where a pointer's reticle is now, or null: for a word beside it. */
     reticleAt(id) {
       const ray = rays.get(id);
