@@ -24,15 +24,44 @@ function modes() {
   return deck?.getClientRects().length ? deck : deck?.querySelector('.segments');
 }
 
+/** One of the five mode switches, by its value. */
+const segment = (mode) => () => document.querySelector(`input[name="mode"][value="${mode}"]`)?.closest('.segment');
+
+/** "Link across seasons" on the first mark that offers it, else on a Hunter X row. */
+function linkButton() {
+  const words = [t('link.run'), t('link.again')];
+  const all = [...document.querySelectorAll('#marks button, #hunt .cand__go')];
+  return all.find((b) => words.includes(b.textContent) && shown(b));
+}
+
+/**
+ * The walk, in the order the screen is read. `read` is the card of How to
+ * read this a step points into, `demo` the card whose picture plays under
+ * "Not clear" when it is another one, and `mode` the state that demo opens
+ * in. A step whose part is not on screen (no mark yet) is left out, and the
+ * count says so.
+ */
 const STEPS = [
   { key: 'plate', find: () => $('plate'), read: 'read-blink' },
   { key: 'rings', find: () => $('plate'), read: 'read-ring' },
-  { key: 'modes', find: modes, read: 'read-modes' },
-  { key: 'bands', find: () => document.querySelector('.bands'), read: 'read-spectrum' },
+  { key: 'bands', find: () => document.querySelector('.bands'), read: 'read-spectrum', demo: 'read-sky' },
+  { key: 'modes', find: modes, read: 'read-modes', mode: 'blink' },
+  { key: 'wipe', find: segment('wipe'), read: 'read-modes', demo: 'read-wise' },
+  { key: 'diff', find: segment('difference'), read: 'read-modes', mode: 'diff' },
+  { key: 'stack', find: segment('stack'), read: 'read-modes', mode: 'stack' },
   { key: 'run', find: () => $('run-scroll'), read: 'read-run' },
   { key: 'marks', find: () => $('marks')?.closest('.part'), read: 'read-mark' },
+  { key: 'spectrum', find: () => document.querySelector('#marks .spectrum'), read: 'read-spectrum' },
+  { key: 'seasons', find: linkButton, read: 'read-seasons' },
   { key: 'depth', find: () => $('depth'), read: 'read-depth' },
   { key: 'hunt', find: () => $('hunt'), read: 'read-hunt' },
+  { key: 'view', find: () => $('tools-toggle'), read: 'read-overlay' },
+  // On a phone the link is folded under "⋯"; the tour points at the fold and says so.
+  {
+    key: 'link', find: () => (shown($('copy-link')) ? $('copy-link') : $('more-key')), read: null,
+    words: (el) => (el?.id === 'more-key' ? 'linkFold' : 'link'),
+  },
+  { key: 'read', find: () => $('about-open'), read: 'read-sky' },
 ];
 
 const PAD = 8;
@@ -102,8 +131,8 @@ function build() {
   };
   ui.next.addEventListener('click', () => go(at + 1));
   ui.skip.addEventListener('click', end);
-  ui.toggle.addEventListener('click', () => setExpanded(!expanded));
-  ui.moreX.addEventListener('click', () => { setExpanded(false); ui.toggle.focus(); });
+  ui.toggle.addEventListener('click', () => setExpanded(!expanded, { animate: true }));
+  ui.moreX.addEventListener('click', () => { setExpanded(false, { animate: true }); ui.toggle.focus(); });
   ui.read.addEventListener('click', () => { const id = steps[at]?.read; if (id) openRead(id); });
   root.addEventListener('keydown', trap);
 }
@@ -126,24 +155,49 @@ function trap(e) {
   else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
 }
 
-function setExpanded(on) {
+/** Run `done` once `el` has played its closing animation, or at once when nothing moves. */
+function afterLeaving(el, cls, done) {
+  if (STILL.matches) { done(); return; }
+  el.classList.add(cls);
+  let over = false;
+  const finish = () => {
+    if (over) return;
+    over = true;
+    el.classList.remove(cls);
+    done();
+  };
+  const own = (e) => { if (e.target === el) { el.removeEventListener('animationend', own); finish(); } };
+  el.addEventListener('animationend', own);
+  setTimeout(finish, 320);
+}
+
+function setExpanded(on, { animate = false } = {}) {
   expanded = on;
   const step = steps[at];
-  ui.more.hidden = !on;
   ui.toggle.setAttribute('aria-expanded', String(on));
   ui.toggle.textContent = t(on ? 'tour.less' : 'tour.more');
   if (on) {
+    ui.more.classList.remove('is-leaving');
+    ui.more.hidden = false;
     loadClip(step.key);
     // The same small demo as the matching card of How to read this.
-    demo = step.read ? mountDemo(step.read, ui.demo) : null;
+    const card = step.demo ?? step.read;
+    demo = card ? mountDemo(card, ui.demo, { mode: step.mode }) : null;
     ui.demo.hidden = !demo;
     ui.more.focus({ preventScroll: true });
-  } else {
-    ui.clip.pause();
+    schedule();
+    return;
+  }
+  ui.clip.pause();
+  const close = () => {
+    if (expanded) return;
+    ui.more.hidden = true;
     ui.demo.replaceChildren();
     demo = null;
-  }
-  schedule();
+    schedule();
+  };
+  if (animate && !ui.more.hidden) afterLeaving(ui.more, 'is-leaving', close);
+  else close();
 }
 
 /** A short clip for this step, shown only if the file is there. */
@@ -184,7 +238,7 @@ function render() {
     return pip;
   }));
   ui.skip.textContent = t('tour.skip');
-  const words = step.key;
+  const words = step.words?.(step.el) ?? step.key;
   ui.title.textContent = t(`tour.${words}H`);
   ui.say.textContent = t(`tour.${words}P`);
   ui.moreText.textContent = t(`tour.${words}More`);
@@ -258,7 +312,7 @@ function place() {
   // Something above it grew (a list filling in) and pushed it out of view: bring it back once.
   if (r.bottom - r.top < Math.min(el.offsetHeight, 48) && !nudged) {
     nudged = true;
-    el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    bringIntoView(el, 'nearest');
     schedule();
     return;
   }
@@ -282,6 +336,32 @@ function place() {
   ui.hole.style.transform = `translate(${hole.x}px, ${hole.y}px)`;
   ui.hole.style.inlineSize = `${Math.max(0, hole.w)}px`;
   ui.hole.style.blockSize = `${Math.max(0, hole.h)}px`;
+}
+
+/** The nearest ancestor that scrolls the part, if it is not the page. */
+function scrollerOf(el) {
+  for (let p = el.parentElement; p && p !== document.body && p !== document.documentElement; p = p.parentElement) {
+    if (/(auto|scroll)/.test(getComputedStyle(p).overflowY) && p.scrollHeight > p.clientHeight + 1) return p;
+  }
+  return null;
+}
+
+/**
+ * Bring a part into view. Inside a scrolling column only that column moves,
+ * so the page under the scrim does not jump; on the page, the page.
+ */
+function bringIntoView(el, block) {
+  const behavior = STILL.matches ? 'auto' : 'smooth';
+  const box = scrollerOf(el);
+  if (!box) { el.scrollIntoView({ block, inline: 'nearest', behavior }); return; }
+  const r = el.getBoundingClientRect();
+  const c = box.getBoundingClientRect();
+  const margin = 12;
+  let delta = 0;
+  if (block === 'start' || r.height > c.height - 2 * margin) delta = r.top - c.top - margin;
+  else if (r.top < c.top + margin) delta = r.top - c.top - margin;
+  else if (r.bottom > c.bottom - margin) delta = r.bottom - c.bottom + margin;
+  if (Math.abs(delta) > 1) box.scrollTo({ top: box.scrollTop + delta, behavior });
 }
 
 function schedule() {
@@ -308,7 +388,7 @@ function go(i) {
   const besideRoom = document.documentElement.clientWidth - box.right >= cw || box.left >= cw;
   step.el.style.scrollMarginTop = PHONE.matches ? '16px'
     : tall && !besideRoom ? `${ui.card.offsetHeight + 2 * GAP + PAD}px` : '';
-  step.el.scrollIntoView({ block: PHONE.matches || tall ? 'start' : 'nearest', inline: 'nearest', behavior: STILL.matches ? 'auto' : 'smooth' });
+  bringIntoView(step.el, PHONE.matches || tall ? 'start' : 'nearest');
   schedule();
   // A smooth scroll can end without a last scroll event; look again once it has settled.
   setTimeout(schedule, 500);
@@ -324,6 +404,8 @@ export function startTour() {
   ran = true;
   returnTo = document.activeElement;
   expanded = false;
+  ui.more.hidden = true;
+  ui.root.classList.remove('is-leaving');
   ui.root.hidden = false;
   ui.root.classList.add('is-entering');
   window.addEventListener('keydown', onKey, true);
@@ -335,9 +417,9 @@ export function startTour() {
 }
 
 function end() {
-  if (!ui || ui.root.hidden) return;
-  ui.root.hidden = true;
+  if (!ui || ui.root.hidden || ui.root.classList.contains('is-leaving')) return;
   ui.clip.pause();
+  afterLeaving(ui.root, 'is-leaving', () => { ui.root.hidden = true; });
   shifts?.disconnect();
   window.removeEventListener('keydown', onKey, true);
   window.removeEventListener('scroll', schedule, { capture: true });
