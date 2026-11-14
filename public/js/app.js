@@ -5067,6 +5067,14 @@ function renderArchives() {
   $('archives-note').textContent = archives === 'asking' ? t('archives.asking')
     : archives === 'failed' ? t('archives.failed')
       : list.length ? t('archives.lede') : t('archives.none');
+  if (archives === 'failed') {
+    const again = document.createElement('button');
+    again.type = 'button';
+    again.className = 'survey__retry';
+    again.textContent = t('survey.retry');
+    again.addEventListener('click', () => loadArchives(state.abort?.signal));
+    $('archives-note').append(' ', again);
+  }
   const rows = list.map((a) => {
     const row = document.createElement('div');
     const dt = document.createElement('dt');
