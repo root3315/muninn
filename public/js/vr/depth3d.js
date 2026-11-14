@@ -1,0 +1,161 @@
+/**
+ * depth3d.js — the field in depth: where each object goes. Pure numbers.
+ *
+ * A SPHEREx field is a few tenths of a degree across, and everything in it is
+ * at a different distance: an asteroid a few astronomical units away, a star
+ * a few hundred parsecs, a galaxy tens of megaparsecs. Behind the viewer the
+ * same field is laid out along its own line of sight, every object along its
+ * own direction (the field's offsets widened so they can be told apart) and as
+ * far as its distance on one logarithmic scale, from a tenth of an AU to the
+ * edge of the observed universe. What has no measured distance is not given
+ * one: it waits on a far shell labelled as such.
+ */
+
+import { LAYOUT } from './layout.js';
+
+const D2R = Math.PI / 180;
+
+/** Astronomical units in a parsec (IAU 2015: 648000/π). */
+export const AU_PER_PC = 648000 / Math.PI;
+
+/** Light speed in km/s, for a redshift's recession velocity. */
+const C_KMS = 299792.458;
+
+/** The scale the corridor is drawn on (see LAYOUT.depth). */
+export const DEPTH_SCALE = LAYOUT.depth;
+
+/** Where a measured distance stands along its ray, in metres from the eye. */
+export function depthMetres(au, { nearM, farM, minAU, maxPc } = DEPTH_SCALE) {
+  const lo = Math.log10(minAU);
+  const hi = Math.log10(maxPc * AU_PER_PC);
+  const k = (Math.log10(au) - lo) / (hi - lo);
+  return nearM + (farM - nearM) * Math.max(0, Math.min(1, k));
+}
+
+/** The shell for what has no measured distance, just past the far end of the scale. */
+export const unknownShell = ({ unknownM } = DEPTH_SCALE) => unknownM;
+
+/**
+ * Objects `{ id, dir: [x, y, z], au, label }` (au null or missing when there
+ * is no measured distance) to `{ id, pos, scale, label, known }`: each along
+ * its own direction, at its distance on the log scale, or on the far shell.
+ * `scale` is the distance in metres, for sizing a label to stay legible.
+ */
+export function placeByDistance(objects, opts = DEPTH_SCALE) {
+  const scale = { ...DEPTH_SCALE, ...opts };
+  return objects.map((o) => {
+    const known = Number.isFinite(o.au) && o.au > 0;
+    const r = known ? depthMetres(o.au, scale) : unknownShell(scale);
+    const [x, y, z] = o.dir;
+    const len = Math.hypot(x, y, z) || 1;
+    return {
+      id: o.id,
+      pos: [(x / len) * r, (y / len) * r, (z / len) * r],
+      scale: r,
+      label: known ? o.label : (o.label ?? null),
+      known,
+    };
+  });
+}
+
+/**
+ * Gaia DR3's parallax zero-point, in mas: the catalogue's parallaxes read
+ * about this much too small on average (Lindegren et al. 2021).
+ */
+export const GAIA_ZERO_POINT_MAS = -0.017;
+
+/**
+ * Parsecs from a Gaia parallax in milliarcseconds, with the ±1σ range, only
+ * when it is measured to 1 part in `minSnr` (5: an error of 20 % or less).
+ * Returns `{ pc, lo, hi }` or null.
+ */
+export function parallaxDistancePc(plxMas, plxErrMas, minSnr = 5, zeroPoint = GAIA_ZERO_POINT_MAS) {
+  if (!(plxMas > 0) || !(plxErrMas > 0) || plxMas / plxErrMas < minSnr) return null;
+  const p = plxMas - zeroPoint;
+  return { pc: 1000 / p, lo: 1000 / (p + plxErrMas), hi: 1000 / Math.max(1e-9, p - plxErrMas) };
+}
+
+/**
+ * Comoving distance in megaparsecs for a redshift, in a flat ΛCDM universe
+ * with the Planck 2018 values (H0 = 67.7 km/s/Mpc, Ωm = 0.31): the integral
+ * of c/H(z), by Simpson's rule. A model distance, and the view says so
+ * wherever it shows one.
+ */
+export function redshiftDistanceMpc(z, { h0 = 67.7, omegaM = 0.31 } = {}) {
+  if (!(z > 0)) return null;
+  const e = (x) => Math.sqrt(omegaM * (1 + x) ** 3 + (1 - omegaM));
+  const n = 64;
+  const step = z / n;
+  let sum = 1 / e(0) + 1 / e(z);
+  for (let i = 1; i < n; i++) sum += (i % 2 ? 4 : 2) / e(i * step);
+  return (C_KMS / h0) * (step / 3) * sum;
+}
+
+/** Below this redshift a galaxy's own motion swamps the expansion: no distance from z. */
+export const MIN_REDSHIFT = 0.003;
+
+/**
+ * How much a body `au` away shifts against the stars between two places of
+ * the Earth `baselineAU` apart, in arcminutes.
+ */
+export const parallaxShiftArcmin = (baselineAU, au) => (Math.atan(baselineAU / au) * 180 / Math.PI) * 60;
+
+/** The milestones along the scale, each named, from an AU to a hundred megaparsecs. */
+export const DEPTH_TICKS = [
+  { au: 1, key: 'au1' },
+  { au: 30, key: 'neptune' },
+  { au: AU_PER_PC, key: 'pc1' },
+  { au: 1e3 * AU_PER_PC, key: 'kpc1' },
+  { au: 1e6 * AU_PER_PC, key: 'mpc1' },
+  { au: 1e8 * AU_PER_PC, key: 'mpc100' },
+];
+
+/** Where Planet X is predicted to be, in AU: the range the rest of the site works with (hunt.js). */
+export const PLANET_X_AU = [400, 800];
+
+/** Every power of ten across the scale, for a ring each. */
+export function decadeRings(scale = DEPTH_SCALE) {
+  const out = [];
+  const lo = Math.ceil(Math.log10(scale.minAU));
+  const hi = Math.floor(Math.log10(scale.maxPc * AU_PER_PC));
+  for (let k = lo; k <= hi; k++) out.push(10 ** k);
+  return out;
+}
+
+/**
+ * An orthonormal frame for looking along `axis` with the world's up as up:
+ * `right` and `up` as the viewer facing that way sees them.
+ */
+export function viewFrame(axis) {
+  const [ax, ay, az] = axis;
+  const len = Math.hypot(ax, ay, az) || 1;
+  const f = [ax / len, ay / len, az / len];
+  // right = f × up(0,1,0)
+  let r = [-f[2], 0, f[0]];
+  const rl = Math.hypot(r[0], r[2]) || 1;
+  r = [r[0] / rl, 0, r[2] / rl];
+  // up = right × f
+  const u = [
+    r[1] * f[2] - r[2] * f[1],
+    r[2] * f[0] - r[0] * f[2],
+    r[0] * f[1] - r[1] * f[0],
+  ];
+  return { f, r, u };
+}
+
+/**
+ * A position in the field to a direction in the corridor. The field's offsets
+ * from its centre (east and north, in degrees) are widened by `spread` so a
+ * fifth of a degree becomes tens; east is to the viewer's left, north up, as
+ * on the sky.
+ */
+export function fieldDirection(dEastDeg, dNorthDeg, frame, spread) {
+  const a = Math.tan(Math.max(-80, Math.min(80, dEastDeg * spread)) * D2R);
+  const b = Math.tan(Math.max(-80, Math.min(80, dNorthDeg * spread)) * D2R);
+  const { f, r, u } = frame;
+  return [
+    f[0] - a * r[0] + b * u[0],
+    f[1] - a * r[1] + b * u[1],
+    f[2] - a * r[2] + b * u[2],
+  ];
+}

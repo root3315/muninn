@@ -5645,6 +5645,18 @@ async function boot() {
   // of a phone's time, while the field's frames are what it came for. It is
   // built when the sky is asked for.
   if (!hash.position) ensureGate();
+  offerVR();
+}
+
+/** The headset's way in, offered only where the browser can run an immersive VR session. */
+async function offerVR() {
+  const link = $('gate-vr');
+  if (!link || !navigator.xr?.isSessionSupported) return;
+  try {
+    link.hidden = !(await navigator.xr.isSessionSupported('immersive-vr'));
+  } catch {
+    link.hidden = true;
+  }
 }
 
 boot();
