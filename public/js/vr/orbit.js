@@ -111,3 +111,92 @@ export function ringLayout(mjds, { gapDays = 45, bodyAU = 500, minSepDeg = 0 } =
   }
   return out;
 }
+
+/**
+ * The same visits on a short arc in front of the viewer rather than all
+ * round: the places of the orbit SPHEREx looked from (seasons at about the
+ * same longitude, a year apart, are one place) stand in the orbit's order,
+ * left to right as time runs, each as wide as its visits need and the next
+ * `gapDeg` beyond it, the whole centred in front and no wider than
+ * `arcDeg`. Inside a place each return to it (a year later) is a row below
+ * the last, and its visits keep their order `minSepDeg` apart. The gaps are
+ * labelled with how long they were; their width says nothing. The baseline
+ * keeps its true length in AU and is drawn as the chord between the places
+ * it joins.
+ *
+ * Returns { angles, tiers, seasons, gaps, baseline, places } with angles in
+ * degrees, positive to the left (as three.js turns), so later is to the right.
+ */
+export function arcLayout(mjds, { gapDays = 45, bodyAU = 500, minSepDeg = 8, gapDeg = 9, arcDeg = 130 } = {}) {
+  const orbit = ringLayout(mjds, { gapDays, bodyAU });
+  const n = mjds.length;
+  const out = { angles: new Array(n).fill(0), tiers: new Array(n).fill(0), seasons: orbit.seasons, gaps: [], baseline: null, places: [] };
+  if (!n) return out;
+
+  // Each season's mean longitude, then the seasons gathered into places.
+  const lon = mjds.map(earthLongitude);
+  const meanLon = (s) => {
+    let x = 0;
+    let y = 0;
+    for (let i = s.from; i <= s.to; i++) { x += Math.cos(lon[i] * D2R); y += Math.sin(lon[i] * D2R); }
+    return Math.atan2(y, x) / D2R;
+  };
+  for (const s of orbit.seasons) {
+    const l = meanLon(s);
+    const place = out.places.find((p) => Math.abs(wrap180(p.lon - l)) < 60);
+    if (place) place.seasons.push(s);
+    else out.places.push({ lon: l, seasons: [s] });
+  }
+  // In the orbit's order, starting from the first season's place.
+  const first = out.places[0].lon;
+  out.places.sort((a, b) => wrap180(a.lon - first) - wrap180(b.lon - first));
+  const k = out.places.length;
+  // Each place as wide as its longest row, the places a fixed gap apart; all
+  // of it narrowed to the arc if it would not fit.
+  const widest = (p) => Math.max(...p.seasons.map((s) => s.to - s.from)) ;
+  let sep = minSepDeg;
+  let gap = gapDeg;
+  const total = () => out.places.reduce((sum, p) => sum + widest(p) * sep, 0) + (k - 1) * (gap + sep);
+  if (total() > arcDeg) { const f = arcDeg / total(); sep *= f; gap *= f; }
+  let edge = total() / 2;
+  for (const p of out.places) {
+    const w = widest(p) * sep;
+    p.at = edge - w / 2;
+    edge -= w + gap + sep;
+  }
+
+  // Inside a place, one row per return to it (a year apart), its visits in
+  // time order from left to right.
+  for (const p of out.places) {
+    p.seasons.forEach((s, row) => {
+      const count = s.to - s.from + 1;
+      for (let i = s.from; i <= s.to; i++) {
+        out.tiers[i] = row;
+        out.angles[i] = p.at - (i - s.from - (count - 1) / 2) * sep;
+      }
+      s.at = p.at;
+      s.tier = row;
+    });
+  }
+  out.sepDeg = sep;
+
+  for (const g of orbit.gaps) {
+    const a = orbit.seasons.find((s) => g.from >= s.from && g.from <= s.to);
+    const b = orbit.seasons.find((s) => g.to >= s.from && g.to <= s.to);
+    out.gaps.push({ ...g, at: (a.at + b.at) / 2 });
+  }
+
+  if (orbit.baseline && k >= 2) {
+    // The two places farthest apart in longitude are the ends of the chord.
+    let best = [0, 1];
+    let far = -1;
+    for (let i = 0; i < k; i++) {
+      for (let j = i + 1; j < k; j++) {
+        const d = Math.abs(wrap180(out.places[i].lon - out.places[j].lon));
+        if (d > far) { far = d; best = [i, j]; }
+      }
+    }
+    out.baseline = { ...orbit.baseline, a: out.places[best[0]].at, b: out.places[best[1]].at };
+  }
+  return out;
+}

@@ -156,10 +156,13 @@ const FIELDS = [
     // motion (-8123.7, +673.2) mas a year from Kirkpatrick et al. (2021,
     // ApJS 253, 7), as SIMBAD gives them; carried to 2026.12, the mean date
     // of its D6 visits, that is 2.1' west of the challenge's coordinates.
+    // Not in Gaia DR3: its distance is the Spitzer parallax of the same
+    // paper, 439.0 ± 2.4 mas (2.28 pc).
     key: 'wise0855', group: 'challenge', name: 'WISE 0855−0714',
     ra: 133.7595, dec: -7.2422, fov: 0.3, band: 'D6',
     target: {
       ra: 133.81890825, dec: -7.24704800, epoch: 2000.0, pmRA: -8123.7, pmDE: 673.2,
+      plx: 439.0, plxErr: 2.4,
       ref: 'Kirkpatrick et al. 2021, ApJS 253, 7',
     },
     why: {

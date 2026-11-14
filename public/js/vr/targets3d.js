@@ -31,7 +31,7 @@ const atR = (deg) => MARKER_RADIUS * Math.tan(deg * D2R);
 /** The label's width on the sky, in degrees, and its canvas. */
 const LABEL_DEG = 14;
 const LABEL_PX = 380;
-const LABEL_H_PX = 420;
+const LABEL_H_PX = 470;
 const PX_PER_DEG = LABEL_PX / LABEL_DEG;
 
 export function createMarkers({ fields, planets, look, lang }) {
@@ -87,7 +87,7 @@ export function createMarkers({ fields, planets, look, lang }) {
   }
 
   function sub(m) {
-    if (m.kind === 'planet') return t('gate.au', { au: fmt(m.target.au, 2) });
+    if (m.kind === 'planet') return tv('vr.au', { v: fmt(m.target.au, 2) });
     // A challenge target says so by its gold; the line itself is short.
     return `${m.target.visits ?? '—'} ${t('stats.visits')}`;
   }
@@ -106,20 +106,41 @@ export function createMarkers({ fields, planets, look, lang }) {
       ctx.shadowBlur = 10;
       ctx.fillStyle = hover ? look.ink : look.muted;
       ctx.font = `600 ${PX.name}px ${FONTS.display}`;
-      ctx.fillText(fitText(ctx, title(m), W - 8), W / 2, PX.name + 2);
+      // A long name takes a second line rather than losing its end.
+      let y = wrapText(ctx, title(m), W / 2, PX.name + 2, W - 8, PX.name * 1.1, 2);
       ctx.font = `500 ${PX.body}px ${FONTS.mono}`;
       ctx.fillStyle = m.kind === 'challenge' ? look.counter : look.neutral;
-      ctx.fillText(fitText(ctx, sub(m), W - 8), W / 2, PX.name + PX.body + 14);
+      ctx.fillText(fitText(ctx, sub(m), W - 8), W / 2, y + 6);
+      y += PX.body + 20;
       const why = m.target.why?.[lang] ?? m.target.why?.en;
       if (hover && why) {
         ctx.font = `400 ${PX.body}px ${FONTS.body}`;
         ctx.fillStyle = look.ink;
-        wrapText(ctx, why, W / 2, PX.name + PX.body * 2 + 30, W - 12, PX.body + 6, 6);
+        wrapText(ctx, why, W / 2, y, W - 12, PX.body + 6, 6);
       }
     });
   }
 
   for (const m of markers) drawLabel(m, false);
+
+  // Names that would cover one another on the sky: the field's stays, the
+  // other steps down under it, once or twice, and is hidden if still covered.
+  {
+    const rank = { challenge: 3, field: 2, planet: 1 };
+    const placedBoxes = [];
+    const nameH = (PX.name + PX.body + 24) / PX_PER_DEG;
+    for (const m of markers.slice().sort((a, b) => rank[b.kind] - rank[a.kind])) {
+      const cos = Math.cos(m.dec * D2R);
+      let drop = 0;
+      const box = () => ({ x: m.ra * cos, y: m.dec - 1.6 - drop - nameH / 2, w: LABEL_DEG * 0.45, h: nameH / 2 });
+      const covered = (b) => placedBoxes.some((o) => Math.abs(((o.x - b.x + 540) % 360) - 180) < o.w + b.w && Math.abs(o.y - b.y) < o.h + b.h);
+      let b = box();
+      for (let k = 0; k < 2 && covered(b); k++) { drop += nameH; b = box(); }
+      if (covered(b)) { m.label.mesh.visible = false; continue; }
+      if (drop) m.label.mesh.position.y -= atR(drop);
+      placedBoxes.push(b);
+    }
+  }
 
   /* ---- the sky's own words ------------------------------------------ */
   const captions = [];
@@ -157,7 +178,8 @@ export function createMarkers({ fields, planets, look, lang }) {
     }
     caption(tv('vr.skyBand'), best[0], best[1], 'muted');
   }
-  caption(tv('vr.ecliptic'), 255, -22.5, 'neutral');
+  // Clear of the visits' arc in front, where the ecliptic runs higher.
+  caption(tv('vr.ecliptic'), 225, -16.2, 'neutral');
 
   let hovered = null;
   let first = null;
@@ -204,11 +226,17 @@ export function createMarkers({ fields, planets, look, lang }) {
         m.ring.material.opacity = m.burst ? opacity : m.ring.material.userData.dimmed ?? m.ring.material.userData.base;
       }
     },
-    /** Quieter while a field is open, so the screens are what is read. */
-    setDim(k) {
+    /**
+     * Quieter while a field is open, so the screens are what is read; and,
+     * along `axis` (a direction in the sky's own frame), quieter still, so the
+     * names on the sky do not stand in the field's corridor.
+     */
+    setDim(k, axis = null, clearDeg = 35, kAxis = 0.12) {
       for (const m of markers) {
-        m.ring.material.userData.dimmed = (m.ring.material.userData.base ?? 0.95) * k;
-        m.label.mesh.material.opacity = k;
+        const along = axis && angleBetween([axis.x, axis.y, axis.z], m.v) < clearDeg;
+        const f = along ? Math.min(k, kAxis) : k;
+        m.ring.material.userData.dimmed = (m.ring.material.userData.base ?? 0.95) * f;
+        m.label.mesh.material.opacity = f;
       }
     },
     dispose() {

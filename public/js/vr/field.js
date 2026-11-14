@@ -21,19 +21,20 @@
 
 import * as THREE from '../vendor/three.module.js';
 import { t, fmt } from '../i18n.js';
-import { searchFrames, groupVisits, toS3, skybotCone, knownBodies, surveySources, nearestHost } from '../catalog.js';
+import { searchFrames, groupVisits, toS3, skybotCone, knownBodies, surveySources, nearestHost, formatRA, formatDec } from '../catalog.js';
 import { spread, VISITS_PER_BATCH } from '../visits.js';
 import { TangentGrid, deltaRA } from '../wcs.js';
 import { SkyView } from '../sky.js';
 import { scoreSectors } from '../sectors.js';
 import { searchField } from '../huntcore.js';
-import { rankCandidates } from '../hunt.js';
-import { stackDepth, shortfall } from '../depth.js';
+import { rankCandidates, distanceCeilingAU } from '../hunt.js';
+import { stackDepth } from '../depth.js';
 import { magLimit, searchRadius, epochOfMjd, properMotion } from '../overlay.js';
 import { loadWise } from '../wise.js';
 import { readStamp, inPool } from './stamps.js';
-import { createPanel, placePanel, readLook, FONTS, wrapText, fitText, button, roundRect } from './panel.js';
-import { LAYOUT, SCREENS, screenPose, typeFor } from './layout.js';
+import { createPanel, placePanel, readLook, FONTS, wrapText, button, roundRect, chipWidth } from './panel.js';
+import { LAYOUT, SCREENS, screenPose, typeFor, minTextPx } from './layout.js';
+import { eclipticLatitude, PLANET_X_V, PLANET_X_MAX_BETA } from './depth3d.js';
 import { createTimeline } from './timeline.js';
 import { createDepthView } from './depthview.js';
 import { geometricDistances, galaxiesWithRedshift, bakedAnswers } from './distances.js';
@@ -84,6 +85,8 @@ export function openFieldVR(target, env) {
 
   // The band in the beam colours the chrome, as on the site.
   const band = target.band ?? 'all';
+  // The page's own band comes back when the field closes (the headset may be over the site).
+  const bandBefore = document.documentElement.dataset.band;
   document.documentElement.dataset.band = band;
   const look = readLook();
 
@@ -99,6 +102,9 @@ export function openFieldVR(target, env) {
     depthVisit: null, wise: null, flipped: false, anim: null,
     head: env.head.clone(), yaw: env.baseYawDeg * D2R,
   };
+
+  /** The answers kept with the site for a demonstration field (distances.js), once read. */
+  let baked = null;
 
   /* ---- two groups that stand at the head: the screens, the depth ---- */
   const screens = new THREE.Group();
@@ -150,6 +156,9 @@ export function openFieldVR(target, env) {
   main.mesh.userData.hover = (uv) => { if (uv) wipeAt(uv); };
   main.mesh.userData.press = () => st.mode === 'wipe';
   main.mesh.userData.drag = wipeAt;
+  // Anywhere else, a press on the field drops a mark and measures it, as on the site.
+  main.mesh.userData.pick = (uv, hit) => { if (st.mode !== 'wipe' && sky.visits.length) markAt(uv, hit); };
+  main.mesh.userData.pickable = () => st.mode !== 'wipe' && sky.visits.length > 0;
   screens.add(main.mesh);
   interactive.add(main.mesh);
 
@@ -240,6 +249,12 @@ export function openFieldVR(target, env) {
   /* ---- the field in depth, behind ------------------------------------ */
   const radiusDeg = searchRadius(grid.fovDeg, grid.fovHeightDeg);
   const depthView = createDepthView({
+    onAction: (id) => {
+      if (id === 'back') env.onBack?.();
+      else if (id === 'flip') flip();
+      // The view as it was opened: where it stood, at its own size.
+      else if (id === 'reset') { depthHolder.scale.setScalar(1); stand(); depthView.setScale(1); }
+    },
     head: new THREE.Vector3(0, env.head.y, 0),
     behind: new THREE.Vector3(0, 0, 1),
     look,
@@ -253,6 +268,7 @@ export function openFieldVR(target, env) {
   const depthHolder = new THREE.Group();
   depthHolder.add(depthView.group);
   root.add(depthHolder);
+  interactive.add(depthView.controls);
 
   /** Stand both groups at the head, turned to `yaw` (radians), the depth behind or, flipped, in front. */
   function stand() {
@@ -316,9 +332,12 @@ export function openFieldVR(target, env) {
   }
 
   let lastShown = null;
+  const slotOf = (v) => (v ? st.entries.findIndex((e) => e.frame === v.frame) : -1);
   function afterVisitChange(force = false) {
     const v = sky.current;
     timeline?.setCurrent(currentSlot());
+    const comparing = st.mode === 'wipe' || st.mode === 'difference';
+    timeline?.setAB(comparing ? slotOf(sky.visits[sky.a]) : -1, comparing && !sky.useRef ? slotOf(sky.visits[sky.b]) : -1);
     if (v !== lastShown || force) {
       lastShown = v;
       drawSide();
@@ -327,9 +346,48 @@ export function openFieldVR(target, env) {
     if (force) drawBar();
   }
 
-  /** The depth view flips to the front (for a viewer who cannot turn round), and back. */
+  /** The depth view flips to the front (for a viewer who cannot turn round), and back, through a short fade. */
   function flip() {
     st.flipAnim = { t0: performance.now(), swapped: false };
+  }
+
+  /**
+   * A mark where the field was pressed: the same measurement the site makes
+   * (sky.js trackMark across every visit read), said on a card beside it.
+   */
+  function markAt(uv, hit) {
+    const [gi, gj] = sky.toGrid(uv.x * sky.cssW, (1 - uv.y) * sky.cssH);
+    const at = grid.indexToWorld(gi, gj);
+    if (!at) return;
+    const [mra, mdec] = at;
+    const a = sky.trackMark(mra, mdec);
+    const v = sky.current;
+    sky.marks.push({ ra: mra, dec: mdec, obsId: v?.frame.obsId ?? null, track: a.track, analysis: a, known: null });
+    while (sky.marks.length > 5) sky.marks.shift();
+    sky.draw();
+    const lines = [];
+    if (a.kind === 'saturated') lines.push({ text: tv('vr.markSat'), tone: 'counter' });
+    else if (!a.seen) lines.push({ text: tv('vr.markNone'), tone: 'neutral' });
+    else {
+      lines.push({ text: tv('vr.markSeen', { seen: a.seen, total: a.total }), tone: 'muted' });
+      if (a.kind === 'moving') {
+        const au = distanceCeilingAU(a.ratePerHour);
+        const rate = fmt(a.ratePerHour, a.ratePerHour < 1 ? 3 : 2);
+        lines.push({ text: au != null && au <= 2000 ? tv('vr.markMoving', { rate, au: fmt(au, 0) }) : tv('vr.markMovingVague', { rate }), tone: 'counter' });
+      } else if (a.kind === 'fixed') {
+        lines.push({ text: tv('vr.markFixed', { n: a.total }), tone: 'ink' });
+      }
+    }
+    const bodies = v ? sky.knownObjects.get(v.frame.obsId) ?? [] : [];
+    const cos = Math.cos(mdec * D2R);
+    const near = bodies.find((b) => Math.hypot(deltaRA(b.ra, mra) * cos, b.dec - mdec) * 3600 < SAME_BODY_ARCSEC);
+    if (near) lines.push({ text: tv('vr.markKnown', { name: near.num ? `(${near.num}) ${near.name}` : near.name }), tone: 'counter' });
+    // A detection in the visit on the screen is felt in the hand.
+    if (v && a.track.some((p) => p.obsId === v.frame.obsId && (p.saturated || p.snr >= 5))) env.haptic?.('select');
+    // Beside the field, to its left, so the picture it is about stays in view.
+    main.mesh.updateMatrixWorld();
+    const beside = main.mesh.localToWorld(new THREE.Vector3(-SCREENS.main.w / 2 - 0.5, -0.1, 0));
+    env.showCard?.({ title: tv('vr.markTitle', { ra: formatRA(mra), dec: formatDec(mdec) }), lines }, beside);
   }
 
   /** The AllWISE picture of the field, fifteen years older, as B of the wipe. */
@@ -359,6 +417,7 @@ export function openFieldVR(target, env) {
 
   /* ---- drawing the screens ------------------------------------------ */
   const TYPE = { bar: typeFor(SCREENS.bar), card: typeFor(SCREENS.card), side: typeFor(SCREENS.side) };
+  const SMALL = minTextPx(SCREENS.card.pxPerM, Math.hypot(SCREENS.card.dist, SCREENS.card.dy), 1.2);
 
   function panelGround(ctx, W, H) {
     roundRect(ctx, 2, 2, W - 4, H - 4, 30);
@@ -374,32 +433,46 @@ export function openFieldVR(target, env) {
 
   function drawBar() {
     bar.draw((ctx, W, H, hits) => {
-      roundRect(ctx, 0, 0, W, H, H / 2);
-      ctx.fillStyle = look.paper;
-      ctx.fill();
+      const rowH = Math.round(SCREENS.bar.rowH * SCREENS.bar.pxPerM);
       const pad = 8;
-      const bh = H - pad * 2;
-      const y = pad;
+      const bh = rowH - pad * 2;
       const font = `500 ${TYPE.bar.body}px ${FONTS.body}`;
-      let x = pad;
-      const chip = (id, label, w, opts = {}) => {
-        button(ctx, hits, look, { x, y, w, h: bh, label, id, font, hover: hov('bar', id, opts.data ?? ''), ...opts });
-        x += w + 10;
-      };
-      chip('mode', t('mode.blink'), 170, { data: 'blink', on: st.mode === 'blink' });
-      chip('mode', t('mode.single'), 170, { data: 'single', on: st.mode === 'single' });
-      chip('prev', '‹', bh * 1.2);
-      chip('next', '›', bh * 1.2);
-      if (st.more) {
-        chip('mode', t('mode.wipe'), 150, { data: 'wipe', on: st.mode === 'wipe' && !sky.useRef });
-        chip('mode', t('mode.diff'), 190, { data: 'difference', on: st.mode === 'difference' });
-        if (target.target?.pmRA != null) chip('wise', tv('vr.wise'), 150, { on: st.mode === 'wipe' && sky.useRef });
-        chip('more', tv('vr.less'), 140);
-      } else {
-        chip('more', tv('vr.more'), 140);
+      const minW = LAYOUT.minChipM * SCREENS.bar.pxPerM;
+      // Every chip as wide as its word needs: nothing is cut. What does not fit
+      // in the first row goes to a second; the row's backing is drawn to fit.
+      const size = (label) => chipWidth(ctx, font, label, bh, minW);
+      const chips = [
+        ['mode', t('mode.blink'), { data: 'blink', on: st.mode === 'blink' }],
+        ['mode', t('mode.single'), { data: 'single', on: st.mode === 'single' }],
+        ['prev', '‹', {}],
+        ['next', '›', {}],
+        ...(st.more ? [
+          ['mode', t('mode.wipe'), { data: 'wipe', on: st.mode === 'wipe' && !sky.useRef }],
+          ['mode', t('mode.diff'), { data: 'difference', on: st.mode === 'difference' }],
+          ...(target.target?.pmRA != null ? [['wise', tv('vr.wise'), { on: st.mode === 'wipe' && sky.useRef }]] : []),
+          ['more', tv('vr.less'), {}],
+        ] : [['more', tv('vr.more'), {}]]),
+        ['flip', st.flipped ? tv('vr.screensFront') : tv('vr.depthFront'), {}],
+      ].map(([id, label, opts]) => ({ id, label, opts, w: size(label) }));
+      const rows = [[]];
+      let used = pad;
+      for (const c of chips) {
+        if (used + c.w + pad > W && rows.at(-1).length) { rows.push([]); used = pad; }
+        rows.at(-1).push(c);
+        used += c.w + 10;
       }
-      x = W - pad - 200;
-      button(ctx, hits, look, { x, y, w: 200, h: bh, label: st.flipped ? tv('vr.screensFront') : tv('vr.depthFront'), id: 'flip', font, hover: hov('bar', 'flip') });
+      rows.forEach((row, r) => {
+        const width = row.reduce((sum, c) => sum + c.w + 10, pad * 2 - 10);
+        const x0 = (W - width) / 2;
+        roundRect(ctx, x0, r * rowH, width, rowH, rowH / 2);
+        ctx.fillStyle = look.paper;
+        ctx.fill();
+        let x = x0 + pad;
+        for (const c of row) {
+          button(ctx, hits, look, { x, y: r * rowH + pad, w: c.w, h: bh, label: c.label, id: c.id, font, hover: hov('bar', c.id, c.opts.data ?? ''), ...c.opts });
+          x += c.w + 10;
+        }
+      });
     });
   }
 
@@ -409,18 +482,28 @@ export function openFieldVR(target, env) {
       const x = 34;
       const w = W - 68;
       const T = TYPE.card;
-      // The way back, always at the top.
-      button(ctx, hits, look, { x, y: 26, w: 220, h: T.body * 1.9, label: tv('vr.backSky'), id: 'back', font: `500 ${T.body}px ${FONTS.body}`, hover: hov('card', 'back') });
-      button(ctx, hits, look, { x: x + 236, y: 26, w: 300, h: T.body * 1.9, label: tv('vr.bring'), id: 'bring', font: `500 ${T.body}px ${FONTS.body}`, hover: hov('card', 'bring') });
-      let y = 26 + T.body * 1.9 + 30 + T.heading;
+      const font = `500 ${T.body}px ${FONTS.body}`;
+      const bh = T.body * 1.9;
+      const minW = LAYOUT.minChipM * SCREENS.card.pxPerM;
+      // The way back, always at the top, and the way to bring the screens round.
+      const backW = chipWidth(ctx, font, tv('vr.backSky'), bh, minW);
+      button(ctx, hits, look, { x, y: 26, w: backW, h: bh, label: tv('vr.backSky'), id: 'back', font, hover: hov('card', 'back') });
+      const bringW = Math.min(w - backW - 16, chipWidth(ctx, font, tv('vr.bring'), bh, minW));
+      button(ctx, hits, look, { x: x + backW + 16, y: 26, w: bringW, h: bh, label: tv('vr.bring'), id: 'bring', font, hover: hov('card', 'bring') });
+      // What the controller's buttons do, under the buttons that do the same by hand.
+      ctx.font = `400 ${SMALL}px ${FONTS.mono}`;
+      ctx.fillStyle = look.neutral;
+      // Its own row, clear of the buttons above and the name below.
+      let y = 26 + bh + 40 + SMALL;
+      y = wrapText(ctx, tv('vr.returnHint'), x, y, w, SMALL * 1.3, 2) - SMALL * 1.3 + 30 + T.heading;
       ctx.font = `600 ${T.heading}px ${FONTS.display}`;
       ctx.fillStyle = look.ink;
-      y = wrapText(ctx, label, x, y, w, T.heading * 1.15, 2) + 6;
+      y = wrapText(ctx, label, x, y, w, T.heading * 1.15, 3) + 6;
       const why = target.why?.[lang] ?? target.why?.en ?? (target.planet ? tv('vr.planet') : '');
       if (why) {
         ctx.font = `400 ${T.body}px ${FONTS.body}`;
         ctx.fillStyle = look.muted;
-        y = wrapText(ctx, why, x, y, w, T.body * 1.3, 4) + 10;
+        y = wrapText(ctx, why, x, y, w, T.body * 1.3, 8) + 10;
       }
       ctx.font = `500 ${T.body}px ${FONTS.mono}`;
       ctx.fillStyle = target.group === 'challenge' ? look.counter : look.accent;
@@ -435,7 +518,7 @@ export function openFieldVR(target, env) {
       }
       ctx.font = `500 ${T.body}px ${FONTS.body}`;
       ctx.fillStyle = look.accent;
-      ctx.fillText(fitText(ctx, `↻ ${tv('vr.turn')}`, w), x, H - 34);
+      wrapText(ctx, `↻ ${tv('vr.turn')}`, x, H - 34 - T.body * 1.3, w, T.body * 1.3, 2);
     });
   }
 
@@ -444,6 +527,26 @@ export function openFieldVR(target, env) {
     ctx.fillStyle = look.ink;
     ctx.fillText(text, x, y);
     return y + TYPE.side.heading * 0.6 + TYPE.side.body;
+  }
+
+  /** "Frames: 5 of 10", and a bar in the band's hue. */
+  function framesRead(ctx, x, y, w, lh) {
+    const T = TYPE.side;
+    ctx.font = `500 ${T.body}px ${FONTS.mono}`;
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = look.muted;
+    const total = st.entries.length;
+    y = wrapText(ctx, total ? tv('vr.framesRead', { done: st.done, total }) : tv('vr.searching'), x, y, w, lh, 3) - lh;
+    const by = y + 16;
+    roundRect(ctx, x, by, w, 12, 6);
+    ctx.fillStyle = look.paper3;
+    ctx.fill();
+    if (total) {
+      roundRect(ctx, x, by, Math.max(12, (w * st.done) / total), 12, 6);
+      ctx.fillStyle = look.accent;
+      ctx.fill();
+    }
+    return by + 12 + lh;
   }
 
   function drawSide() {
@@ -455,34 +558,42 @@ export function openFieldVR(target, env) {
       const lh = Math.round(T.body * 1.3);
       const body = `400 ${T.body}px ${FONTS.body}`;
       let y = 34 + T.body;
+      const reading = st.status === 'searching' || st.status === 'reading';
 
-      // How deep one visit goes: the key number.
+      // How deep one visit goes: the key number, measured here or, for a
+      // demonstration field, as measured when its answers were kept.
+      const d = st.depth ?? (baked?.depth ? { ...baked.depth, baked: true } : null);
       ctx.font = body;
       ctx.fillStyle = look.muted;
-      ctx.fillText(tv('vr.reaches'), x, y);
-      y += T.key + 8;
-      const d = st.depth;
-      ctx.font = `600 ${T.key}px ${FONTS.display}`;
-      ctx.fillStyle = look.accent;
-      const big = d ? `${fmt(d.single, 1)} AB` : '—';
-      ctx.fillText(big, x, y);
+      y = wrapText(ctx, d?.baked ? tv('vr.reachesBaked', { date: baked.made }) : tv('vr.reaches'), x, y, w, lh, 3) - lh + 14;
       if (d) {
+        y += T.key;
+        ctx.font = `600 ${T.key}px ${FONTS.display}`;
+        ctx.fillStyle = look.accent;
+        const big = `${fmt(d.single, 1)} AB`;
+        ctx.fillText(big, x, y);
         const bw = ctx.measureText(big).width;
         ctx.font = `500 ${T.body}px ${FONTS.mono}`;
         ctx.fillStyle = look.neutral;
         ctx.fillText(d.band, x + bw + 16, y);
-        const s = shortfall(d.single);
         y += lh + 4;
         ctx.font = body;
         ctx.fillStyle = look.muted;
-        y = wrapText(ctx, s && s.magnitudes > 0 ? tv('vr.short', { gap: fmt(s.magnitudes, 1) }) : tv('vr.deep'), x, y, w, lh, 2);
+        const beta = eclipticLatitude(ra, dec);
+        const say = Math.abs(beta) > PLANET_X_MAX_BETA
+          ? tv('vr.cannotX', { beta: `${beta >= 0 ? '+' : '−'}${fmt(Math.abs(beta), 0)}` })
+          : tv('vr.shortX', { nominal: fmt(PLANET_X_V.nominal, 1), faint: fmt(PLANET_X_V.faint, 1), a: fmt(PLANET_X_V.nominal - d.single, 1), b: fmt(PLANET_X_V.faint - d.single, 1) });
+        y = wrapText(ctx, say, x, y, w, lh, 3);
+        if (reading) y = framesRead(ctx, x, y + 6, w, lh);
+      } else if (reading) {
+        y = framesRead(ctx, x, y + lh + 6, w, lh);
       } else {
-        y += lh + 4;
+        y += T.body;
         ctx.font = body;
         ctx.fillStyle = look.muted;
-        y = wrapText(ctx, tv('vr.depthWait'), x, y, w, lh, 2);
+        y = wrapText(ctx, tv('vr.depthNone'), x, y, w, lh, 2);
       }
-      y += 16;
+      y += 12;
 
       // The AllWISE comparison, when it is on the screen.
       if (st.wise && target.target?.pmRA != null) {
@@ -491,22 +602,12 @@ export function openFieldVR(target, env) {
         const v = sky.current;
         const years = v ? epochOfMjd(v.frame.mjd) - 2010.5 : 15;
         const shift = (properMotion(target.target) ?? 0) * years;
+        const ref = /^Gaia DR3/.test(target.target.ref ?? '') ? 'Gaia DR3' : (target.target.ref ?? '');
+        const at = v ? sky.measure(v, sky.target?.ra ?? ra, sky.target?.dec ?? dec) : null;
         const say = st.wise.state === 'asking' ? tv('vr.wiseWait') : st.wise.state === 'failed' ? tv('vr.wiseFail')
-          : tv('vr.wiseNote', { shift: fmt(shift, 0), years: fmt(years, 0) });
-        y = wrapText(ctx, say, x, y, w, lh, 3) + 16;
+          : `${tv('vr.wiseNote', { shift: fmt(shift, 0), years: fmt(years, 0), ref })}${at?.saturated ? ` ${tv('vr.wiseSat')}` : ''}`;
+        y = wrapText(ctx, say, x, y, w, lh, 4) + 12;
       }
-
-      // Hunter X, and what it is.
-      y = heading(ctx, x, y + T.heading * 0.4, tv('vr.hunt'));
-      ctx.font = body;
-      ctx.fillStyle = look.ink;
-      const h = st.hunt;
-      const say = !h ? (st.hunting ? t('hunt.running') : tv('vr.depthWait'))
-        : h.error ? t('hunt.failed', { why: h.error })
-          : h.list.length ? tv('vr.huntFound', { n: h.list.length, checked: h.checked }) : tv('vr.huntNone', { checked: h.checked });
-      y = wrapText(ctx, say, x, y, w, lh, 2);
-      ctx.fillStyle = look.neutral;
-      y = wrapText(ctx, tv('vr.huntHonest'), x, y + 4, w, lh, 5) + 14;
 
       // The known bodies at the visit on the screen.
       y = heading(ctx, x, y + T.heading * 0.4, tv('vr.known'));
@@ -515,26 +616,49 @@ export function openFieldVR(target, env) {
       ctx.font = body;
       if (!v || (!objs && !st.bodiesFailed.has(v.frame.obsId))) {
         ctx.fillStyle = look.muted;
-        wrapText(ctx, tv('vr.knownWait'), x, y, w, lh, 1);
+        y = wrapText(ctx, tv('vr.knownWait'), x, y, w, lh, 2);
       } else if (!objs) {
         ctx.fillStyle = look.counter;
-        wrapText(ctx, tv('vr.knownFail'), x, y, w, lh, 1);
+        y = wrapText(ctx, tv('vr.knownFail'), x, y, w, lh, 2);
       } else if (!objs.length) {
         ctx.fillStyle = look.muted;
-        wrapText(ctx, tv('vr.knownNone'), x, y, w, lh, 2);
+        y = wrapText(ctx, tv('vr.knownNone'), x, y, w, lh, 3);
       } else {
-        for (const o of objs.slice(0, Math.max(1, Math.floor((H - y - 20) / (lh + 2))))) {
+        // Each name whole; its distance beside it if there is room, under it if not.
+        for (const o of objs) {
+          if (y > H * 0.62) break;
+          const name = o.num ? `(${o.num}) ${o.name}` : o.name;
+          const far = Number.isFinite(o.dGeo) ? `${fmt(o.dGeo, 2)} AU` : `V ${fmt(o.mag, 1)}`;
+          ctx.font = `400 ${T.body}px ${FONTS.mono}`;
+          const farW = ctx.measureText(far).width;
           ctx.font = `500 ${T.body}px ${FONTS.body}`;
+          const nameW = ctx.measureText(name).width;
           ctx.fillStyle = look.counter;
-          ctx.fillText(fitText(ctx, o.num ? `(${o.num}) ${o.name}` : o.name, w * 0.55), x, y);
+          ctx.fillText(name, x, y);
+          if (nameW + farW + 20 > w) y += lh;
           ctx.font = `400 ${T.body}px ${FONTS.mono}`;
           ctx.fillStyle = look.muted;
           ctx.textAlign = 'right';
-          ctx.fillText(Number.isFinite(o.dGeo) ? `${fmt(o.dGeo, 2)} AU` : `V ${fmt(o.mag, 1)}`, x + w, y);
+          ctx.fillText(far, x + w, y);
           ctx.textAlign = 'left';
           y += lh + 2;
         }
       }
+      y += 12;
+
+      // Hunter X, and what it is.
+      y = heading(ctx, x, y + T.heading * 0.4, tv('vr.hunt'));
+      ctx.font = body;
+      ctx.fillStyle = look.ink;
+      const h = st.hunt;
+      const say = h?.error ? t('hunt.failed', { why: h.error })
+        : h ? (h.list.length ? tv('vr.huntFound', { n: h.list.length, checked: h.checked }) : tv('vr.huntNone', { checked: h.checked }))
+          : st.hunting ? t('hunt.running')
+            : sky.visits.length < 3 ? (reading ? tv('vr.huntStarts') : tv('vr.tooFew', { n: sky.visits.length }))
+              : t('hunt.running');
+      y = wrapText(ctx, say, x, y, w, lh, 2);
+      ctx.fillStyle = look.neutral;
+      y = wrapText(ctx, tv('vr.huntHonest'), x, y + 4, w, lh, 5) + 12;
     });
   }
 
@@ -563,7 +687,6 @@ export function openFieldVR(target, env) {
   drawAll();
 
   /* ---- reading the field -------------------------------------------- */
-  let baked = null;
   async function load() {
     hostNear(ra, dec).then((h) => { if (!st.closed && h) { st.host = h; drawCard(); } });
     const bakedAsk = bakedAnswers(target.key, signal);
@@ -585,6 +708,7 @@ export function openFieldVR(target, env) {
     ensureTimeline();
     drawAll();
     baked = await bakedAsk;
+    if (baked?.depth && !st.depth) { depthView.setDepth(baked.depth.single); drawSide(); }
     askBodies(chosen);
     loadDepthData(chosen);
 
@@ -598,6 +722,7 @@ export function openFieldVR(target, env) {
         entry.status = 'ready';
         sky.addVisit(entry.frame, stamp);
         if (sky.visits.length === 2 && st.mode === 'blink') play(true);
+        if (sky.visits.length === 3) { measure(); hunt(); }
       } catch {
         if (!signal.aborted) entry.status = 'failed';
       } finally {
@@ -632,6 +757,8 @@ export function openFieldVR(target, env) {
 
   async function hunt() {
     if (!st.sectors) { drawSide(); return; }
+    // One search at a time; one asked for meanwhile runs when it ends, on the visits then in.
+    if (st.hunting) { st.huntAgain = true; return; }
     st.hunting = true;
     drawSide();
     try {
@@ -651,6 +778,7 @@ export function openFieldVR(target, env) {
     st.hunting = false;
     if (st.closed) return;
     drawSide();
+    if (st.huntAgain) { st.huntAgain = false; measure(); hunt(); return; }
     // Movers no catalogued body explains go on the far shell, as candidates.
     const unexplained = (st.hunt?.list ?? []).filter((c) => {
       const bodies = sky.knownObjects.get(c.obsId) ?? [];
@@ -725,7 +853,7 @@ export function openFieldVR(target, env) {
     const bjAsk = baked?.bj ? Promise.resolve(new Map(baked.bj.map(([id, r, lo, hi]) => [id, { r, lo, hi }])))
       : geometricDistances({ ra, dec, radiusDeg }, signal).catch(() => null);
     Promise.all([gaiaAsk, bjAsk])
-      .then(([g, bj]) => { if (!signal.aborted) depthView.setGaia(g.rows, { bj, epoch, detected }); })
+      .then(([g, bj]) => { if (!signal.aborted) depthView.setGaia(g.rows, { bj, epoch, detected, limit: g.reached }); })
       .catch((err) => { if (!signal.aborted) depthView.setGaia(err instanceof Error ? err : new Error(String(err))); });
     (baked?.galaxies ? Promise.resolve(baked.galaxies) : galaxiesWithRedshift({ ra, dec, radiusDeg }, signal))
       .then((list) => { if (!signal.aborted) depthView.setGalaxies(list); })
@@ -747,20 +875,20 @@ export function openFieldVR(target, env) {
       if (st.anim) {
         const k = Math.min(1, (now - st.anim.t0) / st.anim.ms);
         const e = 1 - (1 - k) ** 3;
-        // From the marker's direction, three metres out, to where everything stands.
+        // From the marker's direction, a little way out, to where everything stands.
         const s = 0.05 + 0.95 * e;
         for (const g of [screens, depthHolder]) g.scale.setScalar(s);
-        tmp.copy(st.anim.from).multiplyScalar(3 * (1 - e));
+        tmp.copy(st.anim.from).multiplyScalar(LAYOUT.dive.fromM * (1 - e));
         screens.position.copy(st.head).add(tmp);
         depthHolder.position.set(st.head.x + tmp.x, tmp.y, st.head.z + tmp.z);
         if (k >= 1) { st.anim = null; stand(); }
       }
+      // The flip: the view fades to dark, the two swap, and it fades back (main.js draws the veil).
       if (st.flipAnim) {
-        const k = Math.min(1, (now - st.flipAnim.t0) / 250);
-        const s = k < 0.5 ? 1 - k * 2 : (k - 0.5) * 2;
+        const k = Math.min(1, (now - st.flipAnim.t0) / 200);
+        st.veil = k < 0.5 ? k * 2 : 2 - k * 2;
         if (k >= 0.5 && !st.flipAnim.swapped) { st.flipAnim.swapped = true; st.flipped = !st.flipped; stand(); drawBar(); }
-        for (const g of [screens, depthHolder]) g.scale.setScalar(Math.max(0.02, s));
-        if (k >= 1) { st.flipAnim = null; for (const g of [screens, depthHolder]) g.scale.setScalar(1); }
+        if (k >= 1) { st.flipAnim = null; st.veil = 0; }
       }
       if (st.playing && !st.paused) {
         st.clock += dt;
@@ -773,6 +901,20 @@ export function openFieldVR(target, env) {
       if (st.mainDirty) { st.mainDirty = false; showOnMain(); }
       timeline?.tick(dt, gazeYaw - st.yaw - (st.flipped ? Math.PI : 0));
       depthView.tick(head);
+    },
+    /** The node the field in depth hangs from, for grabbing and scaling it. */
+    get depthNode() { return depthHolder; },
+    /** The depth scene was scaled by hand: the controls say what a metre is now. */
+    depthScaled(s) { depthView.setScale(s); },
+    /** What in the field's depth a world ray points at: { card, at, distance } or null. */
+    depthPick(origin, dir) { return depthView.pick(origin, dir); },
+    /** How dark the view should be (0–1): only during a flip. */
+    get veil() { return st.veil ?? 0; },
+    /** The world direction of the corridor's axis, for dimming the sky's markers along it. */
+    depthAxis() {
+      const yaw = st.yaw + (st.flipped ? 0 : Math.PI) + LAYOUT.depth.axisYawDeg * D2R;
+      const p = LAYOUT.depth.axisPitchDeg * D2R;
+      return new THREE.Vector3(-Math.sin(yaw) * Math.cos(p), Math.sin(p), -Math.cos(yaw) * Math.cos(p));
     },
     step,
     toggle() { setMode(st.mode === 'blink' ? 'single' : 'blink'); },
@@ -806,7 +948,8 @@ export function openFieldVR(target, env) {
       host.remove();
       root.removeFromParent();
       interactive.clear();
-      delete document.documentElement.dataset.band;
+      if (bandBefore) document.documentElement.dataset.band = bandBefore;
+      else delete document.documentElement.dataset.band;
     },
   };
 }

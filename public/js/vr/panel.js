@@ -178,6 +178,37 @@ export function wrapText(ctx, text, x, y, maxW, lineH, maxLines = 99) {
   return y;
 }
 
+let measureCtx = null;
+/**
+ * Text broken into at most `maxLines` lines no wider than `maxW` in `font`,
+ * without drawing it: for sizing a label to its words before it is made.
+ */
+export function wrapLines(font, text, maxW, maxLines = 99) {
+  measureCtx ??= document.createElement('canvas').getContext('2d');
+  measureCtx.font = font;
+  const words = String(text ?? '').split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = '';
+  for (const w of words) {
+    const next = line ? `${line} ${w}` : w;
+    if (measureCtx.measureText(next).width <= maxW || !line) line = next;
+    else { lines.push(line); line = w; }
+  }
+  if (line) lines.push(line);
+  if (lines.length > maxLines) {
+    const kept = lines.slice(0, maxLines);
+    kept[maxLines - 1] = fitText(measureCtx, `${kept[maxLines - 1]} ${lines.slice(maxLines).join(' ')}`, maxW);
+    return kept;
+  }
+  return lines;
+}
+
+/** How wide a chip must be for its word: the text and most of a height of room, never under `minPx`. */
+export function chipWidth(ctx, font, label, h, minPx) {
+  ctx.font = font;
+  return Math.max(minPx, Math.ceil(ctx.measureText(label).width + 0.9 * h));
+}
+
 /** One line cut to fit `maxW`, with an ellipsis if it had to be. */
 export function fitText(ctx, text, maxW) {
   let s = String(text ?? '');
@@ -204,7 +235,22 @@ export function button(ctx, hits, look, { x, y, w, h, label, id, on = false, hov
   ctx.font = font;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(fitText(ctx, label, w - h * 0.6), x + w / 2, y + h / 2 + 1);
+  // A control's word is never cut: one that does not fit goes on two lines,
+  // a size smaller if it must.
+  const room = w - h * 0.5;
+  if (ctx.measureText(label).width <= room) {
+    ctx.fillText(label, x + w / 2, y + h / 2 + 1);
+  } else {
+    const size = parseFloat(/(\d+(?:\.\d+)?)px/.exec(font)?.[1] ?? '30');
+    let px = size;
+    let lines = [];
+    for (; px >= size * 0.7; px -= 1) {
+      ctx.font = font.replace(/\d+(?:\.\d+)?px/, `${px}px`);
+      lines = wrapLines(ctx.font, label, room, 2);
+      if (lines.every((l) => ctx.measureText(l).width <= room) && lines.length <= 2 && px * 1.1 * lines.length <= h) break;
+    }
+    lines.forEach((l, k) => ctx.fillText(l, x + w / 2, y + h / 2 + 1 + (k - (lines.length - 1) / 2) * px * 1.05));
+  }
   ctx.textAlign = 'left';
   ctx.textBaseline = 'alphabetic';
   hits.push({ x, y, w, h, id, data });

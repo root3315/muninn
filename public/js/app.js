@@ -5692,15 +5692,65 @@ async function boot() {
   offerVR();
 }
 
-/** The headset's way in, offered only where the browser can run an immersive VR session. */
+/*
+ * The headset's way in, offered only where the browser can run an immersive
+ * VR session: on the sky, over a field, and once, in a headset's own browser,
+ * as a banner. The VR code is fetched while the page is idle, so a tap asks
+ * for the session at once, inside the tap, as a headset requires, and the
+ * scene opens over this page on what was on the screen: the field, or the sky.
+ */
+const VR_BANNER_KEY = 'muninn.vrBanner';
+const VR_FEATURES = ['local-floor', 'bounded-floor', 'hand-tracking'];
+let vrModule = null;
+let vrOpen = false;
+
 async function offerVR() {
-  const link = $('gate-vr');
-  if (!link || !navigator.xr?.isSessionSupported) return;
-  try {
-    link.hidden = !(await navigator.xr.isSessionSupported('immersive-vr'));
-  } catch {
-    link.hidden = true;
+  if (!navigator.xr?.isSessionSupported) return;
+  let ok = false;
+  try { ok = await navigator.xr.isSessionSupported('immersive-vr'); } catch { /* no headset */ }
+  if (!ok) return;
+  for (const id of ['gate-vr', 'mast-vr', 'banner-vr']) $(id)?.addEventListener('click', enterVR);
+  $('gate-vr').hidden = false;
+  $('mast-vr').hidden = false;
+  let seen = false;
+  try { seen = localStorage.getItem(VR_BANNER_KEY) === '1'; } catch { /* private window */ }
+  if (/OculusBrowser/.test(navigator.userAgent) && !seen) {
+    $('vr-banner').hidden = false;
+    $('banner-close').addEventListener('click', closeVrBanner);
   }
+  const idle = window.requestIdleCallback ?? ((f) => setTimeout(f, 1500));
+  idle(() => { vrModule ??= import('./vr/main.js'); });
+}
+
+function closeVrBanner() {
+  $('vr-banner').hidden = true;
+  try { localStorage.setItem(VR_BANNER_KEY, '1'); } catch { /* private window */ }
+}
+
+function enterVR() {
+  if (vrOpen) return;
+  // Asked for first, before anything is awaited: the session is granted only inside the tap.
+  const session = navigator.xr.requestSession('immersive-vr', { optionalFeatures: VR_FEATURES });
+  vrOpen = true;
+  closeVrBanner();
+  const onField = $('gate').hidden && state.ra != null;
+  const preset = onField ? presetAt(state.ra, state.dec) : null;
+  const context = !onField ? null : preset?.key
+    ? { key: preset.key }
+    : { ra: state.ra, dec: state.dec, fov: state.fov, band: state.band, name: state.label };
+  stopPlayback();
+  gate?.stop();
+  const back = () => {
+    vrOpen = false;
+    if (!$('gate').hidden) gate?.start();
+  };
+  (vrModule ??= import('./vr/main.js'))
+    .then((m) => m.mountVR({ session, context, lang: getLanguage(), onEnd: back }))
+    .catch((err) => {
+      session.then((s) => s.end()).catch(() => {});
+      back();
+      console.error('VR did not start', err);
+    });
 }
 
 boot();

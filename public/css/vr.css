@@ -134,4 +134,7 @@ body[data-xr="true"] .vr__hint { display: none; }
 @media (max-width: 40rem) {
   .vr__lede { display: none; }
   .vr__title h1 { font-size: var(--text-lg); }
+  /* The footer's words wrap to several lines on a phone: the hint stands clear above them. */
+  .vr__hint { bottom: 7.5rem; }
+  .vr__foot { flex-wrap: wrap; }
 }

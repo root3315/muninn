@@ -1604,3 +1604,33 @@ body { font-size: var(--text-base); line-height: 1.5; }
 @media (pointer: coarse) {
   .brand { min-block-size: 44px; }
 }
+/* The headset's way in (app.js offerVR): shown only where it can be taken,
+   and then plainly, as the one bright thing in its row. */
+.vr-go {
+  font: 600 var(--text-sm) var(--font-display);
+  color: var(--color-accent-ink);
+  background: var(--color-accent);
+  border: 0;
+  border-radius: var(--radius-round);
+  padding: 0.55rem 1.1rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.vr-go:hover { filter: brightness(1.08); }
+.vr-go:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 3px; }
+.vr-go--mast { padding: 0.4rem 0.9rem; }
+.vr-banner {
+  position: fixed;
+  inset: var(--space-md) var(--space-md) auto;
+  z-index: var(--z-toast);
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  justify-content: center;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-lg);
+  background: var(--gate-veil-deep);
+  color: var(--color-ink);
+  font: 500 var(--text-md) var(--font-body);
+}
+.vr-banner[hidden] { display: none; }

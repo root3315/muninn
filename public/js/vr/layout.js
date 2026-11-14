@@ -32,30 +32,44 @@ const at = (pitchDeg, dist) => Math.tan(pitchDeg * D2R) * dist;
  */
 export const LAYOUT = {
   screens: {
-    main: { yawDeg: 0, dist: 2.0, dy: at(2.5, 2.0), w: 1.4, h: 1.0 },
-    bar: { yawDeg: 0, dist: 1.95, dy: at(-17, 1.95), w: 1.4, h: 0.115, pxPerM: 760 },
-    card: { yawDeg: 38.5, dist: 1.8, dy: at(1.5, 1.8), w: 0.85, h: 1.1, pxPerM: 760 },
-    side: { yawDeg: -38.5, dist: 1.8, dy: at(1.5, 1.8), w: 0.85, h: 1.1, pxPerM: 760 },
+    main: { yawDeg: 0, dist: 2.0, dy: at(2.5, 2.0), w: 1.3, h: 0.93 },
+    // Two rows' room: the second is used only when the row is full ("More" open).
+    bar: { yawDeg: 0, dist: 1.95, dy: at(-18.6, 1.95), w: 1.65, h: 0.24, rowH: 0.115, pxPerM: 760 },
+    card: { yawDeg: 35, dist: 1.8, dy: at(1.5, 1.8), w: 0.85, h: 1.25, pxPerM: 760 },
+    side: { yawDeg: -35, dist: 1.8, dy: at(1.5, 1.8), w: 0.85, h: 1.25, pxPerM: 760 },
   },
   ring: {
-    radius: 2.2, pitchDeg: -23, tierDropM: 0.27, minSepDeg: 6.2,
-    frameW: 0.2, frameH: 0.15,
-    liftM: 0.13, liftMs: 150, hoverScale: 1.6, hoverMs: 120,
+    radius: 2.2, pitchDeg: -23, tierDropM: 0.36, minSepDeg: 8,
+    // The orbit is drawn on a short arc in front, not all round: its places
+    // in order, a fixed gap apart, the whole no wider than arcDeg.
+    arcDeg: 130, gapDeg: 9,
+    frameW: 0.24, frameH: 0.18,
+    liftM: 0.06, liftMs: 150, hoverScale: 1.3, hoverMs: 120,
     // Frames this far from where the head points are dimmed, to keep the eye on the front.
     gazeDeg: 70, gazeDim: 0.2,
     // A gap between visits longer than this is labelled as one.
     gapDays: 45,
   },
   depth: {
-    nearM: 1.0, farM: 8.5, unknownM: 10, minAU: 0.1, maxPc: 1e9,
-    coneDeg: 18, axisPitchDeg: 11, falloff: 0.6, faceWithinM: 4, maxLabels: 8,
+    // To the comoving horizon, about 14 Gpc.
+    nearM: 1.0, farM: 6, unknownM: 7, minAU: 0.1, maxPc: 2e10,
+    // Turned off straight-behind, so the corridor is seen three-quarter.
+    coneDeg: 18, axisPitchDeg: 11, axisYawDeg: 18, falloff: 0.6, faceWithinM: 4, maxLabels: 5,
+    // Sky markers this close to the corridor's axis are dimmed while it is open.
+    clearDeg: 35,
     plateW: 0.5,
   },
-  dive: { ms: 400, skyDim: 0.3, markerGrow: 3 },
+  dive: { ms: 600, fromM: 1.2, skyDim: 0.3, markerGrow: 3 },
+  /** The smallest a button is, in metres, whatever its word. */
+  minChipM: 0.09,
+  /** The Milky Way's brightness until the first choice, so the markers are what is seen. */
+  bandFirst: 0.6,
   blinkHz: 1.5,
-  first: { dist: 1.8, pitchDeg: -8, w: 0.9, h: 0.16, pxPerM: 760 },
+  first: { dist: 1.8, pitchDeg: -8, w: 1.0, h: 0.22, pxPerM: 760 },
   /** How far the main screen may be from the gaze, and for how long, before a chevron points to it. */
-  lost: { deg: 100, ms: 6000 },
+  lost: { deg: 100, ms: 2500 },
+  /** Moving about: walking and flying speeds (m/s), the snap turn, the vignette, and the depth scene's scale range. */
+  move: { walkMps: 1.4, flyMps: 2.0, snapDeg: 30, vignette: 0.85, minScale: 0.2, maxScale: 20 },
   /** Hold B/Y this long to bring the screens round to where the head points. */
   bringMs: 800,
 };
