@@ -282,10 +282,17 @@ function hashNow() {
 
 function writeHash() {
   if (state.ra == null) return;
+  // Back on the sky the address is the sky's: the field left behind is the
+  // page Forward goes to, not what this one says.
+  if (!$('gate').hidden && $('gate').dataset.entering !== 'true') return;
   const next = `#${hashNow()}`;
   // Playback moves the visit twice a second; the address bar is only touched
   // when what it says has actually changed.
-  if (location.hash !== next) history.replaceState(null, '', next);
+  if (location.hash === next) return;
+  // Going into a field from the sky is a step Back can undo: a new entry in
+  // the history, where every later change to the view replaces its own.
+  if (readHash().position) history.replaceState(null, '', next);
+  else history.pushState(null, '', next);
 }
 
 const readHash = () => decodeHash(location.hash);
@@ -4414,6 +4421,8 @@ const isGone = (v) => v.status === 'dropped' || v.status === 'failed';
 /** Back out to the sky, the same way, run backwards. */
 async function leaveToSky() {
   if (flying) return;
+  // The address follows: the sky has no field in it.
+  if (readHash().position) history.replaceState(null, '', location.pathname + location.search);
   // Opened from a link, the sky was not built while the field loaded.
   if (!gate) await ensureGate();
   if (flying || !gate) return;
@@ -5391,7 +5400,11 @@ function wire() {
     // The language is its own thing: a link that differs only in `lang` still has
     // to switch, so it is applied before the "did the field move" shortcut.
     if (next.lang && next.lang !== getLanguage()) { setLanguage(next.lang); relabel(); }
-    if (!next.position) return;
+    // Back from a field entered from the sky: the sky again, the way it came.
+    if (!next.position) {
+      if ($('gate').hidden && state.ra != null) leaveToSky();
+      return;
+    }
     if (next.survey !== state.survey) chooseSurvey(next.survey);
     if (next.mode && sky.mode !== next.mode) selectMode(next.mode);
     const moved = state.ra == null
@@ -5399,7 +5412,11 @@ function wire() {
       || Math.abs(next.position.dec - state.dec) > 1e-4
       || next.band !== state.band
       || (next.fov ?? state.fov) !== state.fov;
-    if (!moved) return;
+    // Forward to the field the sky was left from: it is still loaded underneath.
+    if (!moved) {
+      if (!$('gate').hidden && !flying) closeGate();
+      return;
+    }
     if (next.fov) { state.fov = nearestFov(next.fov); $('fov').value = String(state.fov); }
     $('find-note').textContent = '';
     // A link pasted into the address bar of a page that is still showing the
