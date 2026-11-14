@@ -1549,3 +1549,13 @@ body { font-size: var(--text-base); line-height: 1.5; }
   /* The plate is a screen high less the bar, so all of it is in view at once. */
   .mount { --plate-w: min(calc(100svh - 2 * var(--pad) - 2 * var(--space-xs) - 4rem), calc(58cqw * var(--aspect))); }
 }
+
+/* The five modes on one line each: "Один заход" broke in two at 390 and
+   under. The track shares its width by the words, and on the narrowest
+   phones the words step down a size before they would wrap. */
+@media (max-width: 40rem) {
+  .mount > .deck .segment { flex: 1 1 auto; min-inline-size: 0; white-space: nowrap; padding-inline: var(--space-3xs); }
+}
+@media (max-width: 22.5rem) {
+  .mount > .deck .segment { font-size: var(--text-2xs); }
+}
