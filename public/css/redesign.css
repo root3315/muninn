@@ -1252,3 +1252,41 @@ body { font-size: var(--text-base); line-height: 1.5; }
   .run, .run__head, .run__head .compare { min-inline-size: 0; max-inline-size: 100%; }
   .run__head .compare select { min-inline-size: 0; inline-size: 100%; }
 }
+
+/* A mark folds to its verdict and one line; unfolded, its evidence sits in
+   groups under small headings, so the verdict, the catalogues, the light and
+   the place read as four things rather than one paragraph. */
+.part__head:has(.marks-clear) { flex-wrap: wrap; row-gap: var(--space-2xs); }
+.mark__acts { display: flex; align-items: center; gap: 2px; }
+.mark__fold {
+  appearance: none; border: 0; background: none; cursor: pointer;
+  display: grid; place-items: center; inline-size: 28px; block-size: 28px;
+  border-radius: var(--radius-round); color: var(--color-neutral);
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-short) var(--ease-out);
+}
+.mark__fold svg {
+  inline-size: 16px; block-size: 16px; fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round; transition: transform var(--dur-short) var(--ease-out);
+}
+.mark__fold:hover { background: var(--color-paper-3); color: var(--color-ink); }
+.mark__fold:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.mark__fold[aria-expanded="false"] svg { transform: rotate(-90deg); }
+.mark__brief {
+  display: none; font-size: var(--text-xs); color: var(--color-neutral);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mark[data-open="false"] .mark__brief { display: block; }
+.mark[data-open="false"] .mark__body > :not(.mark__call, .mark__brief),
+.mark[data-open="false"] > :nth-child(n + 4) { display: none; }
+.mark[data-open="false"] .mark__call { font-size: var(--text-sm); }
+.mark__group {
+  display: grid; gap: var(--space-3xs);
+  margin-block-start: var(--space-2xs); padding-block-start: var(--space-xs);
+  border-block-start: var(--rule-hair) solid var(--color-rule-soft);
+}
+.mark__k {
+  font-family: var(--font-mono); font-size: 0.6875rem; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--color-neutral);
+}
+@media (pointer: coarse) { .mark__fold { inline-size: 40px; block-size: 40px; } }
+@media (prefers-reduced-motion: reduce) { .mark__fold svg { transition: none; } }
