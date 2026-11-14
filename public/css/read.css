@@ -414,7 +414,7 @@
 /* The bright case, 21.7, is a fainter extension of the main range. */
 .art-depth__bright { fill: color-mix(in oklch, var(--color-counter) 12%, transparent); stroke: var(--color-counter); stroke-width: 1; stroke-dasharray: 2 2; opacity: 0.8; }
 .art-depth__brightlabel { fill: color-mix(in oklch, var(--color-counter) 65%, var(--color-neutral)); }
-.art-depth__probe { transform-box: view-box; transform-origin: 0 0; transform: translateX(var(--mx, 166.8px)); pointer-events: none; }
+.art-depth__probe { transform-box: view-box; transform-origin: 0 0; transform: translateX(var(--mx, 127.2px)); pointer-events: none; }
 .art-depth__probe path { stroke: var(--color-ink); stroke-width: 1.2; fill: none; }
 .art-depth__probe .art-depth__nib { fill: var(--color-ink); stroke: none; }
 .art-depth__try { justify-self: stretch; display: block; padding-inline: 5%; }
