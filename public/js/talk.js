@@ -42,6 +42,8 @@ const WORDS = {
     'p.f1': 'The whole sky',
     'p.f1v': 'every six months',
     'p.f2': '102 channels',
+    'title': 'Muninn — the talk',
+    'band.d2': 'D2 · 1.10–1.65 µm · 9′ × 9′',
     'p.f2v': '0.75–5 µm, the near infrared',
     'p.f3': 'Since May 2025',
     'p.f3v': 'surveying, release after release',
@@ -89,11 +91,11 @@ const WORDS = {
     's5.head': 'Five targets named by the challenge',
     's5.visits': '{n} visits · {days} d',
     's6.claim': 'Even 200 visits added would leave SPHEREx 2.1 to 3.8 magnitudes short of Planet X.',
-    's6.say': 'Measured from delivered detector pixels: 17.61 AB for one visit, 5.0 to 6.7 magnitudes short. Two hundred visits, extrapolated as √N, reach 20.48: still short, and 1.2 short even of the bright 21.7 case.',
+    's6.say': 'Measured from delivered detector pixels: 17.61 AB for one visit, 5.0 to 6.7 magnitudes short. Two hundred visits, extrapolated as √N, reach 20.49: still short, and 1.2 short even of the bright 21.7 case.',
     's6.src': 'Prediction: Linder & Mordasini 2016, A&A 589, A134, V 22.6–24.3 near aphelion.',
     's6.assume': 'Assumed: the V-band prediction against SPHEREx AB depth at 1.1–1.6 µm, a fair best case for a sunlike reflector.',
     's6.head': 'Faintest point source at 5σ, AB magnitudes',
-    's6.alt': 'A scale from 14 to 26 magnitudes: SPHEREx reaches 17.61 in one visit and 20.48 for two hundred, extrapolated; Planet X is predicted between 22.6 and 24.3, and 21.7 in the bright case.',
+    's6.alt': 'A scale from 14 to 26 magnitudes: SPHEREx reaches 17.61 in one visit and 20.49 for two hundred, extrapolated; Planet X is predicted between 22.6 and 24.3, and 21.7 in the bright case.',
     's6.here': 'SPHEREx',
     's6.target': 'Planet X, predicted',
     's6.bright': '21.7, bright case',
@@ -153,14 +155,16 @@ const WORDS = {
     'ov.gaia': 'Gaia DR3 (ESA): moved to the date of this visit',
     'ov.wise': 'AllWISE (NASA WISE): where they were in 2010',
     'ov.head': 'Asked for a marked source',
-    'wise.claim': 'Fifteen years on, Barnard’s Star is not where WISE saw it.',
+    'wise.claim': 'Fifteen years on, Barnard’s Star has moved about 157″ from where WISE saw it.',
     'wise.say': 'B of the wipe can be the AllWISE picture at 3.4 or 4.6 µm, on the same grid as a SPHEREx visit. The idea is WiseView’s, the blink tool the challenge names.',
     'wise.src': 'AllWISE Atlas through NASA IRSA. Markers: the star’s peak on each picture.',
     'wise.tagA': 'SPHEREx 2025',
     'wise.tagB': 'WISE 2010',
     'wise.a': 'SPHEREx, D2, 21 Aug 2025',
     'wise.b': 'AllWISE W1, 3.4 µm, 2010–2011',
-    'wise.f1': 'WISE peak from the star’s 2016 place',
+    'wise.f0': 'Barnard’s Star since WISE, 10.4″ × 15.1 years',
+    'wise.f0v': '≈157″ in 15.1 years',
+    'wise.f1': 'from its 2016 place to the WISE peak',
     'wise.f1v': '56″',
     'wise.f2': 'from Gaia carried back to 2010',
     'wise.f2v': '2.5″',
@@ -210,6 +214,8 @@ const WORDS = {
     'p.f1': 'Всё небо',
     'p.f1v': 'каждые полгода',
     'p.f2': '102 спектральных канала',
+    'title': 'Muninn — доклад',
+    'band.d2': 'D2 · 1,10–1,65 мкм · 9′ × 9′',
     'p.f2v': '0,75–5 мкм, ближний инфракрасный',
     'p.f3': 'С мая 2025',
     'p.f3v': 'съёмка идёт, выпуск за выпуском',
@@ -257,11 +263,11 @@ const WORDS = {
     's5.head': 'Пять целей из задания',
     's5.visits': '{n} зах. · {days} дн.',
     's6.claim': 'Даже 200 сложенных заходов не дотянут до Планеты X: не хватит 2,1–3,8 величины.',
-    's6.say': 'Измерено по настоящим пикселям детектора: 17,61 AB за один заход, не хватает 5,0–6,7 величины. Двести заходов, пересчитанные как √N, дают 20,48: всё ещё мало, и даже до яркого случая 21,7 не хватает 1,2.',
+    's6.say': 'Измерено по настоящим пикселям детектора: 17,61 AB за один заход, не хватает 5,0–6,7 величины. Двести заходов, пересчитанные как √N, дают 20,49: всё ещё мало, и даже до яркого случая 21,7 не хватает 1,2.',
     's6.src': 'Предсказание: Linder, Mordasini, 2016, A&A 589, A134, V 22,6–24,3 вблизи афелия.',
     's6.assume': 'Допущение: предсказание в полосе V против глубины SPHEREx в AB на 1,1–1,6 мкм — честный лучший случай для отражателя солнечного типа.',
     's6.head': 'Слабейший точечный источник при 5σ, величины AB',
-    's6.alt': 'Шкала от 14 до 26 величин: SPHEREx достаёт до 17,61 за заход и до 20,48 за двести по пересчёту; Планета X предсказана между 22,6 и 24,3, в ярком случае 21,7.',
+    's6.alt': 'Шкала от 14 до 26 величин: SPHEREx достаёт до 17,61 за заход и до 20,49 за двести по пересчёту; Планета X предсказана между 22,6 и 24,3, в ярком случае 21,7.',
     's6.here': 'SPHEREx',
     's6.target': 'Планета X, предсказание',
     's6.bright': '21,7, яркий случай',
@@ -321,14 +327,16 @@ const WORDS = {
     'ov.gaia': 'Gaia DR3 (ESA): на дату захода',
     'ov.wise': 'AllWISE (NASA WISE): где были в 2010 году',
     'ov.head': 'Кого спрашивают об отмеченном источнике',
-    'wise.claim': 'Через пятнадцать лет звезда Барнарда не там, где её видел WISE.',
+    'wise.claim': 'Через пятнадцать лет звезда Барнарда сместилась примерно на 157″ от места, где её видел WISE.',
     'wise.say': 'Вместо второго захода под шторку можно поставить снимок AllWISE на 3,4 или 4,6 мкм, на той же сетке, что и заход SPHEREx. Идея взята у WiseView — мигалки, которую называет задание.',
     'wise.src': 'Атлас AllWISE через NASA IRSA. Метки — пик звезды на каждом снимке.',
     'wise.tagA': 'SPHEREx 2025',
     'wise.tagB': 'WISE 2010',
     'wise.a': 'SPHEREx, D2, 21 августа 2025',
     'wise.b': 'AllWISE W1, 3,4 мкм, 2010–2011',
-    'wise.f1': 'Пик WISE от места звезды в 2016 году',
+    'wise.f0': 'Звезда Барнарда с эпохи WISE, 10,4″ × 15,1 года',
+    'wise.f0v': '≈157″ за 15,1 года',
+    'wise.f1': 'от её места в 2016 году до пика WISE',
     'wise.f1v': '56″',
     'wise.f2': 'от Gaia, перенесённой назад на 2010 год',
     'wise.f2v': '2,5″',
@@ -388,6 +396,7 @@ function startLanguage() {
 
 function relabel() {
   document.documentElement.lang = lang;
+  document.title = t('title');
   for (const el of document.querySelectorAll('[data-t]')) el.textContent = t(el.dataset.t);
   for (const el of document.querySelectorAll('[data-t-label]')) el.setAttribute('aria-label', t(el.dataset.tLabel));
   for (const el of document.querySelectorAll('[data-n]')) el.textContent = num(Number(el.dataset.n), Number(el.dataset.digits));
@@ -554,6 +563,9 @@ function wire() {
   $('lang').addEventListener('click', () => {
     lang = lang === 'en' ? 'ru' : 'en';
     try { localStorage.setItem('muninn.lang', lang); } catch { /* private window */ }
+    const url = new URL(location.href);
+    url.searchParams.set('lang', lang);
+    history.replaceState(null, '', url);
     relabel();
   });
   // An address typed or pasted with another #N turns to that slide.
@@ -913,7 +925,7 @@ async function loadTargets() {
  * prediction is in V: Linder & Mordasini 2016 near aphelion, and their bright
  * case.
  */
-const REACH = [['s6.one', 17.61], ['s6.deep', 20.48]];
+const REACH = [['s6.one', 17.61], ['s6.deep', 20.49]];
 const PLANET_NINE = [22.6, 24.3];
 const PLANET_NINE_BRIGHT = 21.7;
 const AXIS = [14, 26];
