@@ -1,0 +1,519 @@
+/* How to read this, and the tour of the field screen.
+ *   Loaded after redesign.css and drawn in its tokens: the band hue lights
+ *   the accent, panels are the record's, figures are mono. The cards follow
+ *   the talk: a picture first, most of them the talk's own real frames, a
+ *   one-line claim, then a sentence or two.
+ *   A picture moves only while its card is on screen (read.js sets .is-on),
+ *   with transforms, opacity and a clip, and not at all for a visitor who
+ *   asked for less motion: then each shows a still, finished frame.
+ */
+
+/* ================================================================= sheet */
+
+.read {
+  inline-size: min(60rem, calc(100vw - 2 * var(--space-md)));
+  max-inline-size: none;
+  max-block-size: min(92dvh, 70rem);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.read__bar {
+  position: sticky; inset-block-start: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-md);
+  padding: var(--space-sm) var(--space-md) var(--space-sm) var(--space-xl);
+  background: var(--rec-panel);
+  border-block-end: var(--rule-hair) solid var(--color-rule-soft);
+}
+.read__title { font-size: clamp(1.375rem, 1rem + 1.4vw, 1.875rem); }
+.read__x {
+  flex: none; display: grid; place-items: center;
+  inline-size: 44px; block-size: 44px; border: 0; border-radius: var(--radius-round);
+  background: var(--color-paper-3); color: var(--color-ink); cursor: pointer;
+  transition: background-color var(--dur-short) var(--ease-out);
+}
+.read__x:hover { background: var(--color-paper-4); }
+.read__x svg { inline-size: 16px; block-size: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
+
+.read__body { gap: var(--space-lg); padding-block-start: var(--space-lg); }
+.sheet__body .read__lede { color: var(--color-neutral); font-size: var(--text-sm); }
+
+.read__steps { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-md); }
+.read__step {
+  display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: var(--space-lg); align-items: center;
+  padding: var(--space-md); border-radius: var(--radius-lg);
+  background: var(--color-paper-2);
+}
+.read__text { display: grid; gap: var(--space-xs); align-content: center; padding-inline-end: var(--space-xs); }
+.sheet__body .read__text p { max-inline-size: 44ch; font-size: var(--text-sm); }
+.read__n { font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: 0.08em; color: var(--color-accent); }
+.read__h {
+  font-family: var(--font-display); font-weight: 600; color: var(--color-ink);
+  font-size: clamp(1.125rem, 0.95rem + 0.6vw, 1.375rem); line-height: 1.2; letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+.sheet__body .read__src { font-size: var(--text-xs); color: var(--color-neutral); line-height: 1.5; }
+
+/* Each card's words arrive once, the first time it is scrolled to. */
+.read__text { transition: opacity var(--dur-long) var(--ease-out), transform var(--dur-long) var(--ease-out); }
+.read.is-watching .read__step:not(.is-seen) .read__text { opacity: 0; transform: translateY(10px); }
+
+.read__end { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); margin-block: var(--space-xs); }
+.read__end .btn { min-block-size: 44px; padding-inline: var(--space-lg); }
+.read__body .read__end .link { color: var(--color-accent); }
+
+/* ============================================================ pictures */
+
+.read__art {
+  margin: 0; position: relative; display: grid; gap: var(--space-xs); align-content: center;
+  padding: var(--space-sm); border-radius: var(--radius-sm);
+  background: var(--color-well); color: var(--color-ink);
+  min-block-size: 100%;
+}
+.read__art > svg { display: block; inline-size: 100%; block-size: auto; overflow: visible; }
+.read__art svg * { transform-box: fill-box; transform-origin: center; }
+
+.art__line { fill: none; stroke: var(--color-rule-strong); stroke-width: 1; }
+.art__faint { fill: none; stroke: var(--color-rule); stroke-width: 1; stroke-dasharray: 2 3; }
+.art__num { font-family: var(--font-mono); font-size: 9px; fill: var(--color-neutral); }
+.art__num--hi { fill: var(--color-accent); font-weight: 600; }
+
+/* A real frame, cropped by zoom and focus. */
+.art__plate { position: relative; aspect-ratio: 16 / 10; border-radius: 10px; overflow: hidden; background: oklch(8% 0.02 285); }
+.art__img {
+  position: absolute; inset: 0; background-repeat: no-repeat;
+  background-size: var(--zoom, 220%) auto; background-position: var(--focus, 50% 50%);
+}
+.art__img--atala-a { background-image: url("../img/talk/atala-a.png"); }
+.art__img--atala-b { background-image: url("../img/talk/atala-b.png"); }
+.art__img--atala-diff { background-image: url("../img/talk/atala-diff.png"); }
+.art__img--atala-stack { background-image: url("../img/talk/atala-stack.png"); }
+.art__img--mark { background-image: url("../img/talk/mark-plate.png"); }
+.art__img--barnard { background-image: url("../img/talk/barnard-spherex.png"); }
+.art__img--barnard-ov { background-image: url("../img/talk/barnard-overlay.png"); }
+.art__img--wise { background-image: url("../img/talk/barnard-wise.png"); }
+
+.art__tags { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-2xs) var(--space-xs); margin: 0; font-size: var(--text-2xs); }
+.art__tag--a { color: var(--color-accent); }
+.art__tag--b { color: var(--color-counter); }
+
+.art__chips { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
+.art__chips li {
+  font-size: var(--text-2xs); line-height: 1.6; padding: 1px var(--space-xs);
+  border-radius: var(--radius-round); background: var(--color-paper-2); color: var(--color-muted);
+}
+
+.hue-d1 { stop-color: oklch(var(--acc-l) var(--acc-c) var(--hue-d1)); }
+.hue-d2 { stop-color: oklch(var(--acc-l) var(--acc-c) var(--hue-d2)); }
+.hue-d3 { stop-color: oklch(var(--acc-l) var(--acc-c) var(--hue-d3)); }
+.hue-d4 { stop-color: oklch(var(--acc-l) var(--acc-c) var(--hue-d4)); }
+.hue-d5 { stop-color: oklch(var(--acc-l) var(--acc-c) var(--hue-d5)); }
+.hue-d6 { stop-color: oklch(var(--acc-l) var(--acc-c) var(--hue-d6)); }
+.hue-fill-d1 { fill: oklch(var(--acc-l) var(--acc-c) var(--hue-d1)); }
+.hue-fill-d2 { fill: oklch(var(--acc-l) var(--acc-c) var(--hue-d2)); }
+.hue-fill-d3 { fill: oklch(var(--acc-l) var(--acc-c) var(--hue-d3)); }
+.hue-fill-d4 { fill: oklch(var(--acc-l) var(--acc-c) var(--hue-d4)); }
+.hue-fill-d5 { fill: oklch(var(--acc-l) var(--acc-c) var(--hue-d5)); }
+.hue-fill-d6 { fill: oklch(var(--acc-l) var(--acc-c) var(--hue-d6)); }
+
+/* 01 · the sky filled by one sweeping beam, and the 102 channels under it. */
+.art-sky__done { fill: var(--color-accent-wash); transform-origin: left center; }
+.art-sky__beam { fill: var(--color-accent); opacity: 0; }
+.is-on .art-sky__done { animation: art-sky-fill 7s var(--ease-in-out) infinite; }
+.is-on .art-sky__beam { animation: art-sky-beam 7s var(--ease-in-out) infinite; }
+@keyframes art-sky-fill {
+  0% { transform: scaleX(0); opacity: 1; }
+  70%, 86% { transform: scaleX(1); opacity: 1; }
+  100% { transform: scaleX(1); opacity: 0; }
+}
+@keyframes art-sky-beam {
+  0% { transform: translateX(0); opacity: 0.9; }
+  70% { transform: translateX(206px); opacity: 0.9; }
+  76%, 100% { transform: translateX(206px); opacity: 0; }
+}
+
+/* 02 · two real visits, blinked. */
+.art-blink { --zoom: 175%; }
+.art-blink__b { opacity: 0; }
+.art-blink__tb { opacity: 0.4; }
+.is-on .art-blink__b { animation: art-blink 2s steps(1, end) infinite; }
+.is-on .art-blink__tb { animation: art-blink-on 2s steps(1, end) infinite; }
+.is-on .art-blink__ta { animation: art-blink-off 2s steps(1, end) infinite; }
+@keyframes art-blink { 0% { opacity: 0; } 50% { opacity: 1; } }
+@keyframes art-blink-on { 0% { opacity: 0.4; } 50% { opacity: 1; } }
+@keyframes art-blink-off { 0% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* 03 · the five modes in turn, three seconds each, on the same frames. */
+.art-modes { --zoom: 200%; }
+.art-modes__b, .art-modes__wipe, .art-modes__diff, .art-modes__stack, .art-modes__divider { opacity: 0; }
+.art-modes__wipe { clip-path: inset(0 0 0 50%); }
+.art-modes__divider {
+  position: absolute; inset: 0; pointer-events: none;
+  border-inline-start: 2px solid var(--color-ink); transform: translateX(50%);
+}
+.is-on .art-modes__b { animation: art-modes-b 15s steps(1, end) infinite; }
+.is-on .art-modes__wipe { animation: art-modes-wipe 15s var(--ease-in-out) infinite; }
+.is-on .art-modes__divider { animation: art-modes-divider 15s var(--ease-in-out) infinite; }
+.is-on .art-modes__diff { animation: art-modes-diff 15s steps(1, end) infinite; }
+.is-on .art-modes__stack { animation: art-modes-stack 15s steps(1, end) infinite; }
+.is-on .art-modes__chips li { animation: art-chip 15s steps(1, end) infinite; }
+.is-on .art-modes__chips li:nth-child(2) { animation-delay: 3s; }
+.is-on .art-modes__chips li:nth-child(3) { animation-delay: 6s; }
+.is-on .art-modes__chips li:nth-child(4) { animation-delay: 9s; }
+.is-on .art-modes__chips li:nth-child(5) { animation-delay: 12s; }
+@keyframes art-modes-b {
+  0% { opacity: 0; } 5% { opacity: 1; } 10% { opacity: 0; } 15% { opacity: 1; } 20%, 100% { opacity: 0; }
+}
+@keyframes art-modes-wipe {
+  0%, 19.9% { opacity: 0; clip-path: inset(0 0 0 72%); }
+  20% { opacity: 1; clip-path: inset(0 0 0 72%); }
+  30% { clip-path: inset(0 0 0 28%); }
+  39.8% { opacity: 1; clip-path: inset(0 0 0 56%); }
+  40%, 100% { opacity: 0; clip-path: inset(0 0 0 56%); }
+}
+@keyframes art-modes-divider {
+  0%, 19.9% { opacity: 0; transform: translateX(72%); }
+  20% { opacity: 1; transform: translateX(72%); }
+  30% { transform: translateX(28%); }
+  39.8% { opacity: 1; transform: translateX(56%); }
+  40%, 100% { opacity: 0; transform: translateX(56%); }
+}
+@keyframes art-modes-diff { 0% { opacity: 0; } 40% { opacity: 1; } 60%, 100% { opacity: 0; } }
+@keyframes art-modes-stack { 0% { opacity: 0; } 80% { opacity: 1; } }
+@keyframes art-chip {
+  0% { background: var(--color-accent); color: var(--color-accent-ink); }
+  20%, 100% { background: var(--color-paper-2); color: var(--color-muted); }
+}
+
+/* 04 · a frame as the detector saw it, turned onto the sky's grid. */
+.art-north__stage { position: relative; aspect-ratio: 16 / 10; display: grid; place-items: center; }
+.art-north__ghost, .art-north__frame {
+  grid-area: 1 / 1; inline-size: auto; block-size: 72%; aspect-ratio: 1; border-radius: 6px;
+}
+.art-north__ghost { border: 1px dashed var(--color-rule-strong); transform: rotate(22deg); }
+.art-north__frame { overflow: hidden; border: 1px solid var(--color-accent); }
+.art-north__img {
+  display: block; inline-size: 100%; block-size: 100%;
+  background: url("../img/talk/atala-a.png") 50% 50% / 330% auto no-repeat;
+}
+.art-north__rose { position: absolute; inset-block-start: 10px; inset-inline-end: 10px; inline-size: 34px; block-size: 34px; overflow: visible; }
+.art-north__rose path { fill: none; stroke: var(--color-ink); stroke-width: 1.2; }
+.art-north__rose text { font-family: var(--font-mono); font-size: 9px; fill: var(--color-ink); }
+.is-on .art-north__frame { animation: art-north 6s var(--ease-out) infinite; }
+@keyframes art-north {
+  0%, 22% { transform: rotate(22deg); opacity: 1; }
+  48%, 90% { transform: rotate(0deg); opacity: 1; }
+  95% { transform: rotate(0deg); opacity: 0; }
+  96% { transform: rotate(22deg); opacity: 0; }
+  100% { transform: rotate(22deg); opacity: 1; }
+}
+
+/* 05 · the run: a frame per visit, its 5 × 4 sectors under it, a playhead. */
+.art-run__frames rect { fill: var(--color-paper-3); }
+.art-run__head { fill: none; stroke: var(--color-accent); stroke-width: 1.5; transform-box: view-box; transform-origin: 0 0; }
+.art-run__grid { fill: var(--color-paper-2); }
+.art-run__hot { fill: var(--color-counter); }
+.art-run__warm { fill: var(--color-counter-dim); opacity: 0.55; }
+.art-run__ramp-q { fill: var(--color-paper-2); }
+.art-run__ramp-l { fill: var(--color-counter); }
+.is-on .art-run__head { animation: art-run-head 6s steps(1, end) infinite; }
+.is-on .art-run__hot { animation: art-run-hot 6s var(--ease-out) infinite; }
+@keyframes art-run-head {
+  0% { transform: translateX(0); } 16.66% { transform: translateX(38px); } 33.33% { transform: translateX(76px); }
+  50% { transform: translateX(114px); } 66.66% { transform: translateX(152px); } 83.33% { transform: translateX(190px); }
+}
+@keyframes art-run-hot {
+  0%, 50% { opacity: 0.35; transform: scale(1); }
+  56% { opacity: 1; transform: scale(1.6); }
+  66%, 100% { opacity: 1; transform: scale(1); }
+}
+
+/* 06 · SNR 140 without the flags, 1.2 with them. */
+.art-flags { align-content: center; gap: var(--space-sm); padding: var(--space-md); }
+.art-flags__pair { display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; gap: var(--space-sm); }
+.art-flags__k { font-size: var(--text-2xs); color: var(--color-neutral); }
+.art-flags__v { font-family: var(--font-display); font-weight: 600; font-size: clamp(2rem, 1.2rem + 3vw, 3rem); line-height: 1; }
+.art-flags__one--alarm .art-flags__v { color: var(--color-counter); }
+.art-flags__one--calm .art-flags__v { color: var(--color-accent); }
+.art-flags__arrow { inline-size: 22px; block-size: 22px; margin-block-end: 0.5rem; fill: none; stroke: var(--color-neutral); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.art-flags__bits { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px var(--space-sm); margin: 0; font-size: var(--text-2xs); }
+.art-flags__bits div { display: flex; justify-content: space-between; gap: var(--space-xs); padding-block: 2px; border-block-start: var(--rule-hair) solid var(--color-rule-soft); }
+.art-flags__bits dt { color: var(--color-neutral); }
+.art-flags__bits dd { margin: 0; color: var(--color-muted); }
+.is-on .art-flags__one--alarm { animation: art-flags-alarm 6s var(--ease-in-out) infinite; }
+.is-on .art-flags__one--calm, .is-on .art-flags__arrow { animation: art-flags-calm 6s var(--ease-out) infinite; }
+.is-on .art-flags__bits div { animation: art-flags-bit 6s var(--ease-out) infinite; }
+.is-on .art-flags__bits div:nth-child(2) { animation-delay: 0.12s; }
+.is-on .art-flags__bits div:nth-child(3) { animation-delay: 0.24s; }
+.is-on .art-flags__bits div:nth-child(4) { animation-delay: 0.36s; }
+@keyframes art-flags-alarm {
+  0% { opacity: 0; transform: scale(0.9); }
+  8%, 30% { opacity: 1; transform: scale(1); }
+  45%, 92% { opacity: 0.45; transform: scale(1); }
+  100% { opacity: 0; }
+}
+@keyframes art-flags-calm {
+  0%, 34% { opacity: 0; transform: translateX(-8px); }
+  46%, 92% { opacity: 1; transform: none; }
+  100% { opacity: 0; }
+}
+@keyframes art-flags-bit { 0%, 14% { opacity: 0; } 24%, 92% { opacity: 1; } 100% { opacity: 0; } }
+
+/* 07 · a mark on a real frame, and the card it makes. */
+.art-mark__pair { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: var(--space-xs); align-items: stretch; }
+.art-mark__plate { aspect-ratio: auto; min-block-size: 9rem; --zoom: 260%; --focus: 76.5% 47%; }
+.art-mark__plate::after {
+  content: ""; position: absolute; inset-inline-start: 76.5%; inset-block-start: 47%;
+  inline-size: 3rem; block-size: 3rem; margin: -1.5rem 0 0 -1.5rem; border-radius: 50%;
+  border: 1.5px solid var(--color-accent); opacity: 0;
+}
+.is-on .art-mark__plate::after { animation: art-mark-ring 4s var(--ease-out) infinite; }
+@keyframes art-mark-ring {
+  0% { transform: scale(2.4); opacity: 0; }
+  30%, 80% { transform: scale(1); opacity: 1; }
+  100% { transform: scale(1); opacity: 0; }
+}
+.art-mark__card { position: relative; border-radius: 10px; overflow: hidden; background: var(--color-paper-2); min-block-size: 9rem; }
+.art-mark__card-img { position: absolute; inset: 0; background: url("../img/talk/mark-card.en.png") 50% 0 / 100% auto no-repeat; }
+:root:lang(ru) .art-mark__card-img { background-image: url("../img/talk/mark-card.ru.png"); }
+.art-mark__card::after { content: ""; position: absolute; inset: auto 0 0; block-size: 2.5rem; background: linear-gradient(transparent, var(--color-paper-2)); }
+.is-on .art-mark__card-img { animation: art-mark-card 4s var(--ease-out) infinite; }
+@keyframes art-mark-card { 0%, 22% { opacity: 0; transform: translateY(8px); } 38%, 92% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+
+/* 08 · the words a mark can end in, one lit at a time. */
+.art-verdicts { padding: var(--space-sm) var(--space-md); }
+.art-verdicts__list { display: grid; gap: 3px; margin: 0; }
+.art-verdicts__list div {
+  display: grid; grid-template-columns: minmax(0, 9.5rem) minmax(0, 1fr); gap: var(--space-xs); align-items: center;
+  padding: 3px var(--space-xs); border-radius: var(--radius-sm);
+}
+.art-verdicts__list dt {
+  justify-self: start; font-size: var(--text-2xs); font-weight: 600; line-height: 1.5;
+  padding: 1px var(--space-xs); border-radius: var(--radius-round);
+  background: var(--color-accent-wash); color: var(--color-accent);
+}
+.art-verdicts__list dd { margin: 0; font-size: var(--text-2xs); color: var(--color-muted); line-height: 1.4; }
+.is-on .art-verdicts__list div { animation: art-verdict 14s steps(1, end) infinite; }
+.is-on .art-verdicts__list div:nth-child(2) { animation-delay: 2s; }
+.is-on .art-verdicts__list div:nth-child(3) { animation-delay: 4s; }
+.is-on .art-verdicts__list div:nth-child(4) { animation-delay: 6s; }
+.is-on .art-verdicts__list div:nth-child(5) { animation-delay: 8s; }
+.is-on .art-verdicts__list div:nth-child(6) { animation-delay: 10s; }
+.is-on .art-verdicts__list div:nth-child(7) { animation-delay: 12s; }
+@keyframes art-verdict {
+  0% { background: var(--color-paper-3); }
+  14.28%, 100% { background: transparent; }
+}
+
+/* 09 · the ring on 25 Dec, the empty place on 1 Jan. */
+.art-ring { --zoom: 330%; --focus: 53% 50%; }
+.art-ring__b { opacity: 0; }
+.is-on .art-ring__b { animation: art-ring 4s var(--ease-in-out) infinite; }
+@keyframes art-ring { 0%, 40% { opacity: 0; } 50%, 90% { opacity: 1; } 100% { opacity: 0; } }
+
+/* 10 · one exposure, one wavelength: a probe steps along the bands. */
+.art-spec__pts circle:nth-child(1) { fill: oklch(var(--acc-l) var(--acc-c) var(--hue-d1)); }
+.art-spec__pts circle:nth-child(2) { fill: oklch(var(--acc-l) var(--acc-c) var(--hue-d2)); }
+.art-spec__pts circle:nth-child(3) { fill: oklch(var(--acc-l) var(--acc-c) var(--hue-d3)); }
+.art-spec__pts circle:nth-child(4) { fill: oklch(var(--acc-l) var(--acc-c) var(--hue-d4)); }
+.art-spec__pts circle:nth-child(5) { fill: oklch(var(--acc-l) var(--acc-c) var(--hue-d5)); }
+.art-spec__pts circle:nth-child(6) { fill: oklch(var(--acc-l) var(--acc-c) var(--hue-d6)); }
+.art-spec__probe { stroke: var(--color-ink); stroke-width: 1; stroke-dasharray: 2 2; opacity: 0; }
+.read__art .art-spec__probe { transform-box: view-box; transform-origin: 0 0; }
+.art-spec__labels { font-size: 8.5px; }
+.is-on .art-spec__pts circle { animation: art-spec-pt 7.2s var(--ease-out) infinite backwards; }
+.is-on .art-spec__pts circle:nth-child(2) { animation-delay: 0.9s; }
+.is-on .art-spec__pts circle:nth-child(3) { animation-delay: 1.8s; }
+.is-on .art-spec__pts circle:nth-child(4) { animation-delay: 2.7s; }
+.is-on .art-spec__pts circle:nth-child(5) { animation-delay: 3.6s; }
+.is-on .art-spec__pts circle:nth-child(6) { animation-delay: 4.5s; }
+.is-on .art-spec__probe { animation: art-spec-probe 7.2s var(--ease-in-out) infinite; }
+@keyframes art-spec-pt {
+  0% { opacity: 0; transform: scale(0.2); }
+  6% { opacity: 1; transform: scale(1.35); }
+  12% { transform: scale(1); }
+  84% { opacity: 1; transform: scale(1); }
+  92%, 100% { opacity: 0; transform: scale(1); }
+}
+@keyframes art-spec-probe {
+  0% { transform: translateX(27px); opacity: 0.8; }
+  12.5% { transform: translateX(52px); }
+  25% { transform: translateX(88px); }
+  37.5% { transform: translateX(132px); }
+  50% { transform: translateX(191px); }
+  62.5%, 74% { transform: translateX(212px); opacity: 0.8; }
+  80%, 100% { transform: translateX(212px); opacity: 0; }
+}
+
+/* 11 · the catalogues of Gaia and WISE, laid over a real frame. */
+.art-ov { --zoom: 190%; --focus: 50% 50%; }
+.art-ov__on { opacity: 1; }
+.art-ov__gaia { color: var(--color-counter); }
+.art-ov__wise { color: var(--color-muted); }
+.is-on .art-ov__on { animation: art-ov 5s var(--ease-in-out) infinite; }
+@keyframes art-ov { 0%, 15% { opacity: 0; } 35%, 85% { opacity: 1; } 100% { opacity: 0; } }
+
+/* 12 · Barnard's Star: SPHEREx 2025 wiped over WISE 2010. */
+.art-wise { --zoom: 100%; --focus: 50% 50%; }
+.art-wise .art__plate { aspect-ratio: 900 / 676; }
+.art-wise__marks { position: absolute; inset: 0; inline-size: 100%; block-size: 100%; pointer-events: none; }
+.art-wise__at { fill: none; stroke-width: 5; }
+.art-wise__at--a { stroke: var(--color-accent); }
+.art-wise__at--b { stroke: var(--color-counter); }
+.art-wise__path { fill: none; stroke: var(--color-ink); stroke-width: 3; stroke-dasharray: 1; stroke-dashoffset: 0; }
+.is-on .art-wise__path { animation: art-wise-path 6s var(--ease-out) infinite; }
+@keyframes art-wise-path { 0%, 20% { stroke-dashoffset: 1; } 55%, 100% { stroke-dashoffset: 0; } }
+.art-wise__a { clip-path: inset(0 50% 0 0); }
+.art-wise__divider { position: absolute; inset: 0; pointer-events: none; border-inline-start: 2px solid var(--color-ink); transform: translateX(50%); }
+.is-on .art-wise__a { animation: art-wise-clip 6s var(--ease-in-out) infinite alternate; }
+.is-on .art-wise__divider { animation: art-wise-div 6s var(--ease-in-out) infinite alternate; }
+@keyframes art-wise-clip { 0%, 10% { clip-path: inset(0 82% 0 0); } 90%, 100% { clip-path: inset(0 18% 0 0); } }
+@keyframes art-wise-div { 0%, 10% { transform: translateX(18%); } 90%, 100% { transform: translateX(82%); } }
+
+/* 13 · how deep one visit reaches, and how far below Planet X lies. */
+.art-depth__track { fill: var(--color-paper-3); }
+.art-depth__fill { fill: var(--color-accent); transform-origin: left center; }
+.art-depth__px { fill: color-mix(in oklch, var(--color-counter) 30%, transparent); stroke: var(--color-counter); stroke-width: 1; }
+.art-depth__pxlabel { fill: var(--color-counter); }
+.art-depth__gap { stroke: var(--color-neutral); stroke-width: 1; stroke-dasharray: 3 3; fill: none; }
+.art-depth__gaplabel { fill: var(--color-muted); }
+.is-on .art-depth__fill { animation: art-depth-fill 6s var(--ease-out) infinite; }
+.is-on .art-depth__gap, .is-on .art-depth__gaplabel { animation: art-depth-gap 6s var(--ease-out) infinite; }
+@keyframes art-depth-fill { 0% { transform: scaleX(0); } 35%, 92% { transform: scaleX(1); opacity: 1; } 100% { transform: scaleX(1); opacity: 0; } }
+@keyframes art-depth-gap { 0%, 38% { opacity: 0; } 55%, 92% { opacity: 1; } 100% { opacity: 0; } }
+
+/* 14 · Hunter X's list: what moves, slowest first, a known body below. */
+.art-hunt { padding: var(--space-md); gap: var(--space-sm); }
+.art-hunt__list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-xs); }
+.art-hunt__row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-sm);
+  padding: var(--space-xs) var(--space-sm); border-radius: var(--radius-sm); background: var(--color-paper-2);
+  font-size: var(--text-xs); color: var(--color-ink);
+}
+.art-hunt__row--known { color: var(--color-neutral); }
+.art-hunt__bar { display: block; block-size: 6px; inline-size: var(--w); border-radius: 3px; background: var(--color-accent); transform-origin: left center; }
+.art-hunt__row--known .art-hunt__bar { background: var(--color-rule-strong); }
+.art-hunt__axis { display: flex; justify-content: space-between; margin: 0; font-size: var(--text-2xs); color: var(--color-neutral); }
+.is-on .art-hunt__row { animation: art-hunt-row 6s var(--ease-out) infinite backwards; }
+.is-on .art-hunt__row--2 { animation-delay: 0.25s; }
+.is-on .art-hunt__row--3 { animation-delay: 0.5s; }
+.is-on .art-hunt__bar { animation: art-hunt-bar 6s var(--ease-out) infinite backwards; }
+.is-on .art-hunt__row--2 .art-hunt__bar { animation-delay: 0.25s; }
+.is-on .art-hunt__row--3 .art-hunt__bar { animation-delay: 0.5s; }
+@keyframes art-hunt-row { 0% { opacity: 0; transform: translateY(8px); } 12%, 90% { opacity: 1; transform: none; } 100% { opacity: 0; } }
+@keyframes art-hunt-bar { 0%, 8% { transform: scaleX(0); } 30%, 100% { transform: scaleX(1); } }
+
+/* 15 · a 70 MB file and the thin slice that is read; flagged pixels go dark. */
+.art-bytes__file { fill: var(--color-paper-3); }
+.art-bytes__rows { stroke: var(--color-paper-4); stroke-width: 1; }
+.art-bytes__read { fill: var(--color-accent); }
+.art-bytes__px rect { fill: var(--color-paper-4); }
+.art-bytes__px rect:nth-child(3n + 1) { fill: var(--color-rule-strong); }
+.art-bytes__px .art-bytes__flag { fill: var(--color-well); stroke: var(--color-counter); stroke-width: 1; stroke-dasharray: 2 2; }
+.is-on .art-bytes__read { animation: art-bytes-read 5s var(--ease-in-out) infinite; }
+.is-on .art-bytes__label { animation: art-bytes-label 5s var(--ease-in-out) infinite; }
+.is-on .art-bytes__flag { animation: art-bytes-flag 5s steps(1, end) infinite; }
+.is-on .art-bytes__flag--late { animation-delay: 0.4s; }
+@keyframes art-bytes-read {
+  0% { transform: scaleY(0); opacity: 1; }
+  20%, 86% { transform: scaleY(1); opacity: 1; }
+  100% { transform: scaleY(1); opacity: 0.3; }
+}
+@keyframes art-bytes-label { 0%, 14% { opacity: 0; } 30%, 100% { opacity: 1; } }
+@keyframes art-bytes-flag {
+  0% { fill: var(--color-ink); stroke: transparent; }
+  45% { fill: var(--color-well); stroke: var(--color-counter); }
+}
+
+/* ===================================================== first-visit cue */
+
+/* Until How to read this has been opened once, its buttons are an accent
+   pill that glows, with a tag under them saying where to begin. */
+.link[data-cue] {
+  position: relative; isolation: isolate;
+  background-color: var(--color-accent); color: var(--color-accent-ink); font-weight: 600;
+  text-shadow: none;
+}
+.link[data-cue]:hover { background-color: var(--color-focus); color: var(--color-accent-ink); }
+.link[data-cue]::before {
+  content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit;
+  background: var(--color-accent); pointer-events: none;
+  animation: cue-glow 2.2s var(--ease-out) infinite;
+}
+.link[data-cue]::after {
+  content: attr(data-cue); position: absolute; inset-block-start: calc(100% + 6px); inset-inline-end: 0;
+  padding: 2px var(--space-xs); border-radius: var(--radius-round);
+  background: var(--color-accent-wash); color: var(--color-accent);
+  font-size: var(--text-2xs); font-weight: 600; white-space: nowrap; pointer-events: none;
+  backdrop-filter: blur(6px);
+}
+@keyframes cue-glow {
+  0% { transform: scale(1); opacity: 0.75; }
+  70%, 100% { transform: scale(1.35, 1.8); opacity: 0; }
+}
+
+/* ================================================================== tour */
+
+.tour { position: fixed; inset: 0; z-index: var(--z-modal); }
+.tour[hidden] { display: none; }
+.tour__hole {
+  position: absolute; inset-block-start: 0; inset-inline-start: 0;
+  inline-size: 0; block-size: 0; border-radius: var(--radius-sm);
+  box-shadow: 0 0 0 2px var(--color-accent), 0 0 0 200vmax var(--color-backdrop);
+  pointer-events: none;
+  transition: transform var(--dur-long) var(--ease-out), inline-size var(--dur-long) var(--ease-out), block-size var(--dur-long) var(--ease-out);
+}
+.tour__card {
+  position: absolute; inset-block-start: 0; inset-inline-start: 0;
+  inline-size: min(23rem, calc(100vw - 2 * var(--space-sm)));
+  max-block-size: calc(100dvh - 2 * var(--space-sm)); overflow-y: auto;
+  display: grid; gap: var(--space-xs);
+  padding: var(--space-md) var(--space-lg);
+  border-radius: var(--radius-lg); background: var(--rec-panel); color: var(--color-ink);
+  box-shadow: var(--shade-pop), 0 0 0 1px var(--color-rule-soft);
+  transition: transform var(--dur-long) var(--ease-out);
+}
+.tour__card:focus-visible { outline: none; }
+.tour__head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); }
+.tour__count { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-accent); letter-spacing: 0.06em; }
+.tour .tour__skip { font-size: var(--text-xs); margin-inline-end: calc(-1 * var(--space-xs)); padding-inline: var(--space-xs); min-block-size: 32px; }
+.tour__body { display: grid; gap: var(--space-xs); }
+.tour__title { font-family: var(--font-display); font-weight: 600; font-size: 1.125rem; line-height: 1.25; }
+.tour__say { color: var(--color-muted); line-height: 1.55; font-size: var(--text-sm); }
+.tour__more { display: grid; gap: var(--space-xs); color: var(--color-muted); line-height: 1.55; font-size: var(--text-sm); }
+.tour__more[hidden], .tour__clip[hidden] { display: none; }
+.tour__clip { inline-size: 100%; border-radius: var(--radius-sm); background: var(--color-well); }
+.tour .tour__read { justify-self: start; color: var(--color-accent); margin-inline-start: calc(-1 * var(--space-xs)); padding-inline: var(--space-xs); }
+.tour__acts { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-block-start: var(--space-2xs); }
+.tour__acts .btn { min-block-size: 40px; padding-inline: var(--space-md); }
+.tour__pips { display: flex; gap: 4px; }
+.tour__pips span { inline-size: 12px; block-size: 3px; border-radius: 2px; background: var(--color-paper-4); transition: background-color var(--dur-short) var(--ease-out); }
+.tour__pips span.is-done { background: var(--color-accent); }
+.tour.is-entering .tour__hole, .tour.is-entering .tour__card { transition: none; }
+.tour__card.is-fresh .tour__body { animation: tour-in var(--dur-long) var(--ease-out); }
+@keyframes tour-in { from { opacity: 0; transform: translateY(6px); } }
+
+/* ============================================================== phones */
+
+@media (max-width: 720px) {
+  .read { inline-size: calc(100vw - 2 * var(--space-xs)); max-block-size: calc(100dvh - 2 * var(--space-xs)); }
+  .read__bar { padding: var(--space-xs) var(--space-xs) var(--space-xs) var(--space-md); }
+  .read__body.sheet__body { padding: var(--space-md) var(--space-sm) var(--space-lg); }
+  .read__step { grid-template-columns: minmax(0, 1fr); gap: var(--space-sm); padding: var(--space-sm); }
+  .read__text { padding-inline: var(--space-2xs); }
+  .art-verdicts__list div { grid-template-columns: minmax(0, 8rem) minmax(0, 1fr); }
+  .tour__card {
+    inset-block-start: auto; inset-inline: var(--space-xs); inset-block-end: calc(var(--space-xs) + env(safe-area-inset-bottom, 0px));
+    inline-size: auto; max-block-size: 55dvh; transform: none !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .read__art *, .read__art *::after, .link[data-cue]::before { animation: none !important; }
+  .read__text, .tour__hole, .tour__card { transition: none; }
+  .read.is-watching .read__step:not(.is-seen) .read__text { opacity: 1; transform: none; }
+  .tour__card.is-fresh .tour__body { animation: none; }
+  .art-mark__plate::after { opacity: 1; }
+  .art-hunt__row, .art-flags__one, .art-flags__arrow { opacity: 1; }
+}

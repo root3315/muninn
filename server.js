@@ -79,6 +79,7 @@ const TYPES = {
   '.ico': 'image/x-icon',
   '.webmanifest': 'application/manifest+json',
   '.pdf': 'application/pdf',
+  '.webm': 'video/webm',
 };
 
 /**
