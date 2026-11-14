@@ -41,13 +41,14 @@ import {
 import { loadWise, WISE_BANDS } from './wise.js';
 import { planetHostNear, systemUrl } from './exovision.js';
 import { drawGaiaSky, psfFor } from './gaiasky.js';
-import { fieldArchives, CADC_SEARCH } from './archives.js';
+import { fieldArchives, cadcSearchUrl } from './archives.js';
+import { markFacts } from './markfacts.js';
 import {
-  searchFrames, searchAhead, NoRelayError, UpstreamError, groupVisits, findHeldVisit, bandsPresent, bandRange, parseCoordinates,
+  searchFrames, searchAhead, askMissingFrames, NoRelayError, UpstreamError, groupVisits, findHeldVisit, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, fieldObjects, toS3, surveySources,
 } from './catalog.js';
 import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP } from './overlay.js';
-import { spread, nextVisits, VISITS_PER_BATCH } from './visits.js';
+import { spread, nextVisits, mergeFrames, mergeVisits, VISITS_PER_BATCH } from './visits.js';
 import { encodeHash, decodeHash, FOV_CHOICES } from './hash.js';
 import { buildIndex, suggest } from './suggest.js';
 import { attachSuggest } from './suggest-box.js';
@@ -460,6 +461,7 @@ function updateIdentity() {
 function renderFacts() {
   const f = state.facts;
   const box = $('stat-line');
+  const heldRow = box.contains(document.activeElement) ? document.activeElement.dataset.row : null;
   box.replaceChildren();
   if (!f) return;
   // The archive's count beside the count read, everywhere a count is said:
@@ -480,8 +482,9 @@ function renderFacts() {
   // "nothing moved" would be said about visits nobody was shown.
   if (state.partial && !state.loading) {
     rows.push([t('facts.list'), t('facts.listPartial'), null, {
-      label: t('epochs.retry'),
-      run: () => openField({ ra: state.ra, dec: state.dec, label: state.label }),
+      label: t(listRetry.busy ? 'facts.listAsking' : 'epochs.retry'),
+      run: retryPartialList,
+      busy: listRetry.busy,
     }]);
   }
   const unread = state.visits.filter((v) => v.status === 'failed').length;
@@ -499,7 +502,11 @@ function renderFacts() {
   // Past the cap it stops saying "checking" and names the visits that were
   // not answered, which is the part someone can act on.
   const bodies = bodiesLine();
-  if (bodies) rows.push([t('facts.bodies'), bodies]);
+  // Visits SkyBoT failed on can be asked about again, here, where they are named.
+  const retryBodies = sky && skybotOn() && skybotFailedVisits().length
+    ? { label: t(skybot.retrying ? 'skybot.retrying' : 'skybot.retry'), run: retrySkybot, busy: Boolean(skybot.retrying) }
+    : null;
+  if (bodies) rows.push([t('facts.bodies'), bodies, null, retryBodies]);
   for (const [name, value, tone, action] of rows) {
     const row = document.createElement('div');
     const dt = document.createElement('dt');
@@ -511,13 +518,18 @@ function renderFacts() {
       const go = document.createElement('button');
       go.type = 'button';
       go.className = 'link facts__go';
+      go.dataset.row = name;
       go.textContent = action.label;
-      go.addEventListener('click', action.run);
+      // Busy, it says so and waits; still focusable, so the keyboard keeps its place.
+      if (action.busy) go.setAttribute('aria-disabled', 'true');
+      go.addEventListener('click', () => { if (!action.busy) action.run(); });
       dd.append(' · ', go);
     }
     row.append(dt, dd);
     box.append(row);
   }
+  // The rows are rebuilt as answers come in; a press that had the keyboard keeps it.
+  if (heldRow) [...box.querySelectorAll('.facts__go')].find((b) => b.dataset.row === heldRow)?.focus({ preventScroll: true });
 }
 
 /** The visits row: value, tone and the action offered beside it. */
@@ -764,6 +776,7 @@ function renderHunt() {
     const id = document.createElement('p');
     id.className = 'cand__id';
     id.textContent = skybotLine(c.catalog, { none: 'hunt.unknown' });
+    withSkybotRetry(id, c.catalog, `mover ${c.ra} ${c.dec}`);
 
     const go = document.createElement('button');
     go.type = 'button';
@@ -852,6 +865,47 @@ function caughtAsteroids() {
  * of "probably nothing" drowned the one that mattered; they share one card,
  * one explanation, and a date to go and look at each.
  */
+/** Whether the known bodies past the first three are unfolded; kept while the list is rebuilt. */
+let flashesOpen = false;
+let foldSeq = 0;
+
+/**
+ * Rows past the first few, folded under a press that says how many: "3 more
+ * ▾" opens them with the height easing open, "Show less ▴" folds them again.
+ * `outer` is the element that sits in the list ('li' in a list, 'div'
+ * beside a dl), `inner` the list the rows go into, with `innerClass`.
+ */
+function foldBlock(items, { outer = 'li', inner = 'ul', innerClass = '', more, less, open = false, onToggle }) {
+  const box = document.createElement(outer);
+  box.className = 'fold';
+  const body = document.createElement('div');
+  body.className = 'fold__body';
+  body.id = `fold-${++foldSeq}`;
+  const list = document.createElement(inner);
+  list.className = `fold__inner ${innerClass}`.trim();
+  list.append(...items);
+  body.append(list);
+  const press = document.createElement('button');
+  press.type = 'button';
+  press.className = 'link fold__toggle';
+  press.setAttribute('aria-controls', body.id);
+  const set = (on) => {
+    box.dataset.open = String(on);
+    press.setAttribute('aria-expanded', String(on));
+    press.textContent = on ? less : more;
+    // Folded rows are out of the tab order and out of a screen reader's way.
+    list.inert = !on;
+  };
+  set(open);
+  press.addEventListener('click', () => {
+    const on = box.dataset.open !== 'true';
+    set(on);
+    onToggle?.(on);
+  });
+  box.append(body, press);
+  return box;
+}
+
 function renderFlashes(found) {
   const list = $('flash-list');
   const head = $('flash-head');
@@ -880,65 +934,48 @@ function renderFlashes(found) {
     return v ? dateLabel(v.frame.iso) : '';
   };
 
-  // The brightest few get a card; a busy field can catch a dozen, and a
-  // dozen cards push everything else off the panel.
-  const CARDS = 4;
-  for (const c of caught.slice(0, CARDS)) {
+  // One compact row each, the brightest three in view and the rest folded
+  // under "N more": a busy field catches a dozen, and a dozen tall cards
+  // pushed everything else off the panel.
+  const SHOWN = 3;
+  const row = (c) => {
     const v = sky.visits.find((x) => x.frame.obsId === c.obsId);
     const o = c.object;
     const li = document.createElement('li');
-    li.className = 'cand';
+    li.className = 'cand cand--row';
 
     const title = document.createElement('p');
     title.className = 'cand__where';
     title.dataset.known = 'true';
     title.textContent = c.catalog.name;
 
-    // When and in what light; how bright SkyBoT expects it; and how fast it
-    // was going, which is why it is gone by the next visit.
-    const when = document.createElement('p');
-    when.className = 'cand__rate num';
-    const bits = [dateOf(c), v?.frame.band ?? ''];
-    if (Number.isFinite(o.mag)) bits.push(`V ${fmt(o.mag, 1)}ᵐ`);
-    const speed = Math.hypot(o.dRA, o.dDec);
-    if (Number.isFinite(speed) && speed > 0) bits.push(t('overlay.rate', { rate: fmt(speed, speed < 10 ? 1 : 0) }));
-    bits.push(`${fmt(c.snr, 0)}σ`);
-    when.textContent = bits.filter(Boolean).join(' · ');
-
     const go = document.createElement('button');
     go.type = 'button';
     go.className = 'link cand__go';
     go.textContent = t('hunt.flashShow');
-    // Four buttons all called "Show" are one name to a screen reader.
+    // Buttons all called "Show" are one name to a screen reader.
     go.setAttribute('aria-label', `${t('hunt.flashShow')}: ${c.catalog.name}`);
     go.addEventListener('click', () => showFlash(c));
 
-    li.append(title, when, go);
-    list.append(li);
-  }
+    // When and in what light; how bright SkyBoT expects it; and how fast it
+    // was going, which is why it is gone by the next visit.
+    const bits = [dateOf(c), v?.frame.band ?? ''].filter(Boolean).map((text) => ({ text }));
+    if (Number.isFinite(o.mag)) bits.push({ text: `V ${fmt(o.mag, 1)}ᵐ` });
+    const speed = Math.hypot(o.dRA, o.dDec);
+    if (Number.isFinite(speed) && speed > 0) bits.push({ text: t('overlay.rate', { rate: fmt(speed, speed < 10 ? 1 : 0) }) });
+    bits.push({ text: `${fmt(c.snr, 0)}σ`, key: true });
 
-  const rest = caught.slice(CARDS);
-  if (rest.length) {
-    const li = document.createElement('li');
-    li.className = 'cand';
-    const title = document.createElement('p');
-    title.className = 'cand__where';
-    title.dataset.known = 'true';
-    title.textContent = t('hunt.caughtMore', { n: rest.length });
-    const names = document.createElement('p');
-    names.className = 'cand__dates';
-    for (const c of rest) {
-      const go = document.createElement('button');
-      go.type = 'button';
-      go.className = 'link cand__go';
-      go.textContent = c.catalog.name;
-      go.title = dateOf(c);
-      go.addEventListener('click', () => showFlash(c));
-      names.append(go);
-    }
-    li.append(title, names);
-    list.append(li);
-  }
+    li.append(title, go, factsLine(bits, 'cand__rate'));
+    return li;
+  };
+  for (const c of caught.slice(0, SHOWN)) list.append(row(c));
+
+  const rest = caught.slice(SHOWN);
+  if (rest.length) list.append(foldBlock(rest.map(row), {
+    innerClass: 'cands',
+    more: t('hunt.caughtMore', { n: rest.length }), less: t('fold.less'), open: flashesOpen,
+    onToggle: (open) => { flashesOpen = open; },
+  }));
 
   if (unnamed.length) {
     const li = document.createElement('li');
@@ -953,9 +990,9 @@ function renderFlashes(found) {
     const states = new Set(unnamed.map((c) => c.catalog.state));
     const id = document.createElement('p');
     id.className = 'cand__id';
-    id.textContent = states.size === 1 && states.has('none')
-      ? t('hunt.flashNone')
-      : skybotLine({ state: [...states].find((s) => s !== 'none') });
+    const said = { state: states.size === 1 && states.has('none') ? 'none' : [...states].find((s) => s !== 'none') };
+    id.textContent = said.state === 'none' ? t('hunt.flashNone') : skybotLine(said);
+    withSkybotRetry(id, said, 'flashes');
 
     const dates = document.createElement('p');
     dates.className = 'cand__dates';
@@ -1198,12 +1235,17 @@ function renderDepth() {
     $('depth-band').textContent = t('depth.singleShort', { band: d.band });
     $('depth-said').textContent = t('depth.said');
 
+    // One sentence in view: how far short of Planet X one visit falls, and
+    // what stacking them all would reach. The reasoning folds under "More".
     const s = shortfall(d.single);
-    const reach = s && s.magnitudes > 0
-      ? t('depth.reach', { gap: fmt(s.magnitudes, 1), factor: Math.round(s.fluxFactor) })
-      : '';
-    const stack = d.n > 1 ? t('depth.stackNote', { n: d.n, band: d.band, mag: fmt(d.stacked, 1) }) : '';
-    $('depth-reach').textContent = [reach, stack].filter(Boolean).join(' ');
+    const short = s && s.magnitudes > 0;
+    const stacked = d.n > 1 ? { n: d.n, mag: fmt(d.stacked, 1) } : null;
+    $('depth-reach').textContent = short
+      ? t(stacked ? 'depth.short' : 'depth.shortOne', { gap: fmt(s.magnitudes, 1), ...stacked })
+      : stacked ? t('depth.shortStack', stacked) : '';
+    const reach = short ? t('depth.reach', { gap: fmt(s.magnitudes, 1), factor: Math.round(s.fluxFactor) }) : '';
+    const stack = stacked ? t('depth.stackNote', { n: d.n, band: d.band, mag: fmt(d.stacked, 1) }) : '';
+    $('depth-detail').textContent = [reach, stack].filter(Boolean).join(' ');
     drawDepthScale($('depth-scale'), d.single);
     renderCovered();
   }
@@ -1888,6 +1930,69 @@ async function prefetchKnownObjects(signal) {
   await pool(pending, SKYBOT_CONCURRENCY, (v) => (signal?.aborted ? null : askSkybot(v, signal)));
 }
 
+/** The visits of this field whose SkyBoT question failed. */
+const skybotFailedVisits = () => plannedVisits().filter((v) => skybot.failed.has(v.frame.obsId));
+
+/**
+ * Ask again, on a press, about every visit whose question failed: only those,
+ * and only once at a time. The minute's wait after a failure is for the
+ * automatic askers; a person asking again is let through. JPL, asked alongside,
+ * still waits its turn in its own queue.
+ */
+async function retrySkybot() {
+  const asked = skybot;
+  if (asked.retrying || !skybotOn()) return;
+  const failed = skybotFailedVisits();
+  if (!failed.length) return;
+  asked.retrying = true;
+  for (const v of failed) asked.failedAt?.delete(v.frame.obsId);
+  catalogChanged();
+  try {
+    await pool(failed, SKYBOT_CONCURRENCY, (v) => askSkybot(v, state.abort?.signal));
+  } finally {
+    asked.retrying = false;
+    if (asked === skybot) catalogChanged();
+  }
+}
+
+/**
+ * Which "Try again" had the keyboard, so the one built in its place takes it
+ * back. Let go when the person moves elsewhere: a blur would not do, since
+ * the rebuild that removes the press blurs it too.
+ */
+let skybotRetryHeld = null;
+const letGoOfRetry = (e) => { if (!e.target.closest?.('.skybot-retry')) skybotRetryHeld = null; };
+document.addEventListener('focusin', letGoOfRetry);
+document.addEventListener('pointerdown', letGoOfRetry);
+
+/**
+ * "Try again", beside a line that says SkyBoT did not answer. `place` names
+ * the line. While the question is out it says so and does nothing; it stays
+ * focusable, so the keyboard keeps its place while the lists are rebuilt.
+ */
+function skybotRetryButton(place) {
+  const busy = Boolean(skybot.retrying);
+  const again = document.createElement('button');
+  again.type = 'button';
+  again.className = 'link skybot-retry';
+  again.textContent = t(busy ? 'skybot.retrying' : 'skybot.retry');
+  again.setAttribute('aria-disabled', String(busy));
+  if (busy) again.setAttribute('aria-busy', 'true');
+  again.addEventListener('click', () => { if (!busy) retrySkybot(); });
+  again.addEventListener('focus', () => { skybotRetryHeld = place; });
+  if (skybotRetryHeld === place) queueMicrotask(() => { if (again.isConnected) again.focus({ preventScroll: true }); });
+  return again;
+}
+
+/** A line about SkyBoT, with "Try again" after it when it says SkyBoT failed. */
+function withSkybotRetry(line, verdict, place) {
+  // While the question asked again is out, the line is "waiting" and keeps
+  // its press, busy, so the keyboard is not dropped mid-question.
+  const asking = skybot.retrying && verdict?.state === 'waiting';
+  if ((verdict?.state === 'failed' || asking) && skybotOn()) line.append(' ', skybotRetryButton(place));
+  return line;
+}
+
 async function refreshKnownObjects() {
   if (!skybotOn()) { reportKnownObjects(); return; }
   const v = sky.current;
@@ -2308,6 +2413,24 @@ function markCurve(analysis) {
   return svg;
 }
 
+/**
+ * A line of figures, "25 Dec · D2 · 403σ": each bit kept whole when the line
+ * wraps, the dot staying with the bit before it, and the bits marked `key`
+ * set in ink and weight, the number the reader came for.
+ */
+function factsLine(bits, className) {
+  const p = document.createElement('p');
+  p.className = `${className} num`;
+  bits.forEach((bit, k) => {
+    if (k) p.append(' · ');
+    const span = document.createElement('span');
+    span.className = bit.key ? 'facts-bit facts-bit--key' : 'facts-bit';
+    span.textContent = bit.text;
+    p.append(span);
+  });
+  return p;
+}
+
 function renderMarks() {
   const ul = $('marks');
   // A spectrum's button outlives the rebuild; so must the focus resting on it.
@@ -2374,6 +2497,7 @@ function renderMarks() {
     id.className = 'mark__id';
     id.dataset.known = skybotTone(m.catalog);
     id.textContent = skybotLine(m.catalog);
+    withSkybotRetry(id, m.catalog, `mark ${m.ra} ${m.dec}`);
 
     // A mark dropped on a SkyBoT ring where SPHEREx measured nothing is not
     // "nothing here" next to "in the catalogue" — read together those sound
@@ -2392,14 +2516,18 @@ function renderMarks() {
     pos.className = 'mark__pos';
     pos.textContent = `${formatRA(m.ra)} ${formatDec(m.dec)}`;
 
-    // A source that sits still in every visit is not a solar-system body, and
-    // "no match in SkyBoT" under it only raised the question of why anyone
-    // asked. What it is comes from the star catalogues instead.
-    // Folded, a mark is its verdict and one line: what the catalogues call it,
-    // or else what was measured.
-    const brief = document.createElement('p');
-    brief.className = 'mark__brief';
-    brief.textContent = m.tag && m.tag !== call.textContent ? m.tag : detail.textContent;
+    // The head reads at a glance, folded or not, like a known body's card in
+    // Hunter X: the verdict, a figures line under it, and what the catalogues
+    // call it. The sentences and the evidence are the unfolded part.
+    const facts = factsLine(markFacts(m.analysis, {
+      band: m.analysis?.brightness?.band ?? m.analysis?.track?.[0]?.band ?? (state.band !== 'all' ? state.band : null),
+      ra: m.ra, dec: m.dec,
+    }, { t, fmt, day: dateLabel }), 'mark__facts');
+    const tag = m.tag && m.tag !== call.textContent ? document.createElement('p') : null;
+    if (tag) {
+      tag.className = 'mark__tag';
+      tag.textContent = m.tag;
+    }
 
     // Unfolded, the evidence in groups, each under a small heading, so the
     // verdict, the catalogues, the light and the place do not run together.
@@ -2444,7 +2572,7 @@ function renderMarks() {
     // The verdict's own sentence reads as its subtitle: a heading "Verdict"
     // over it only repeated the title.
     for (const node of verdictNodes) node.classList.add('mark__lead');
-    body.append(call, brief, ...verdictNodes, ...[
+    body.append(...verdictNodes, ...[
       group('mark.kWho', ...whoNodes),
       group('mark.kLight', ...lightNodes),
       group('mark.kWhere', pos),
@@ -2470,29 +2598,34 @@ function renderMarks() {
       writeHash();
     });
 
-    const fold = document.createElement('button');
-    fold.type = 'button';
-    fold.className = 'mark__fold';
-    fold.setAttribute('aria-expanded', String(m.open !== false));
-    fold.setAttribute('aria-label', `${t(m.open !== false ? 'mark.fold' : 'mark.unfold')} ${i + 1}`);
-    fold.title = t(m.open !== false ? 'mark.fold' : 'mark.unfold');
-    const SVG_NS = 'http://www.w3.org/2000/svg';
-    const chevron = document.createElementNS(SVG_NS, 'svg');
-    chevron.setAttribute('viewBox', '0 0 24 24');
-    chevron.setAttribute('aria-hidden', 'true');
-    const stroke = document.createElementNS(SVG_NS, 'path');
-    stroke.setAttribute('d', 'M6 9l6 6 6-6');
-    chevron.append(stroke);
-    fold.append(chevron);
-    fold.addEventListener('click', () => {
+    // The card itself folds and unfolds: its head is the press for the
+    // keyboard and for a screen reader, and a tap anywhere on the card that
+    // is not one of its own controls does the same.
+    const head = document.createElement('div');
+    head.className = 'mark__head';
+    head.setAttribute('role', 'button');
+    head.tabIndex = 0;
+    head.setAttribute('aria-expanded', String(m.open !== false));
+    head.title = t(m.open !== false ? 'mark.fold' : 'mark.unfold');
+    head.append(call, facts, ...(tag ? [tag] : []));
+    const toggle = () => {
       m.open = m.open === false;
       renderMarks();
+      $('marks').children[i]?.querySelector('.mark__head')?.focus({ preventScroll: true });
+    };
+    head.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      toggle();
     });
-    const acts = document.createElement('div');
-    acts.className = 'mark__acts';
-    acts.append(fold, kill);
+    li.addEventListener('click', (e) => {
+      if (e.target.closest('a, button, input, select, summary, details, label, .spectrum, .curve')) return;
+      // Selecting a figure to copy it is not a press.
+      if (String(getSelection?.() ?? '')) return;
+      toggle();
+    });
 
-    li.append(n, body, acts);
+    li.append(n, head, kill, body);
     // The numbers behind the verdict, to check or to take elsewhere.
     if (m.track?.length || measuredExposures(m).length) {
       const csv = document.createElement('button');
@@ -3124,6 +3257,70 @@ async function fillVisits(limit) {
   fillRefresh({ final: true });
 }
 
+/*
+ * Part of the archive did not answer, so the frame list is short. Asking
+ * again asks only for the list: what it adds is merged in, the visits in
+ * hand stay the same objects (mergeVisits), and the background reading picks
+ * up the new ones as it would any other. Nothing already read, on screen or
+ * chosen is touched. Failing again changes nothing but the count of tries:
+ * the page asks again by itself after 5, 15 and 45 seconds, and after that
+ * only on a press.
+ */
+const LIST_RETRY_MS = [5000, 15000, 45000];
+let listRetry = { busy: false, tries: 0, timer: 0 };
+
+function resetListRetry() {
+  clearTimeout(listRetry.timer);
+  listRetry = { busy: false, tries: 0, timer: 0 };
+}
+
+async function retryPartialList() {
+  if (listRetry.busy || !state.partial || state.ra == null) return;
+  const asked = listRetry;
+  clearTimeout(asked.timer);
+  asked.busy = true;
+  renderFacts();
+  const gen = fieldSeq;
+  const { ra, dec } = state;
+  // Only the collections that did not answer are asked again, when the relay
+  // has said which; never an error on screen, whatever comes back.
+  let answer = null;
+  try {
+    answer = await askMissingFrames({ ra, dec, collections: state.missing ?? [] }, { signal: state.abort?.signal });
+  } catch {
+    // Aborted: the field has changed.
+  }
+  if (gen !== fieldSeq || asked !== listRetry) return;
+  asked.busy = false;
+  if (answer?.busy) {
+    // The relay asks to be asked later: that is not a failure, and not counted as one.
+    asked.timer = setTimeout(() => { if (asked === listRetry) retryPartialList(); }, answer.retryAfterS * 1000);
+    renderFacts();
+    return;
+  }
+  if (answer && !answer.failed) {
+    const want = state.allVisits[state.wantVisit];
+    state.frames = mergeFrames(state.frames ?? [], answer.frames);
+    state.allVisits = mergeVisits(state.allVisits, groupVisits(state.frames, { ra, dec, band: state.band }));
+    if (want) state.wantVisit = state.allVisits.indexOf(want);
+    state.truncated = state.truncated || Boolean(answer.truncated);
+    state.partial = answer.partial;
+    state.missing = answer.missing;
+    populateBands();
+    // The new visits are read the way the rest are, in the background.
+    if (!state.filling && !state.loading) fillVisits(Math.max(state.visitGoal, fillCap()));
+  } else if (answer?.missing?.length) {
+    state.missing = answer.missing;
+  }
+  asked.tries = state.partial ? asked.tries + 1 : 0;
+  if (state.partial && asked.tries <= LIST_RETRY_MS.length) {
+    asked.timer = setTimeout(() => { if (asked === listRetry) retryPartialList(); }, LIST_RETRY_MS[asked.tries - 1]);
+  }
+  updateIdentity();
+  drawAxis();
+  renderFacts();
+}
+
 /** Ask again, by hand, for the visits that were not read. */
 function retryUnread() {
   fillVisits(Math.max(state.visitGoal, state.visits.length));
@@ -3151,6 +3348,8 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.abChosen = false;
   state.truncated = false;
   state.partial = false;
+  state.missing = [];
+  resetListRetry();
   // What the last field measured goes with it: the reading is now built up as
   // this field's visits land, and must not start from someone else's numbers.
   state.loading = true;
@@ -3181,6 +3380,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   archives = null;
   archivesNeossat = null;
   renderArchives();
+  showFieldPlanets();
   showTip(null);
   clearTimeout(skybot.clock);
   skybot = newSkybot();
@@ -3206,8 +3406,9 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   let frames;
   let truncated = false;
   let partial = false;
+  let missing = [];
   try {
-    ({ frames, truncated, partial = false } = await searchFrames({ ra, dec }, { signal: ctrl.signal }));
+    ({ frames, truncated, partial = false, missing = [] } = await searchFrames({ ra, dec }, { signal: ctrl.signal }));
   } catch (err) {
     if (ctrl.signal.aborted) return;
     state.loading = false;
@@ -3227,6 +3428,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.searched = true;
   state.truncated = truncated;
   state.partial = partial;
+  state.missing = missing;
   populateBands();
 
   state.allVisits = groupVisits(frames, { ra, dec, band: state.band });
@@ -3758,17 +3960,39 @@ async function showPlanets(hit) {
   const at = preset?.target ?? hit;
   const host = await planetHostNear(at.ra, at.dec);
   if (cardHit !== hit || !host) return;
+  offerSystem(link, host, hit.label, 'card.planets');
+}
+
+/**
+ * The open field, when its target or its centre is a star with known planets,
+ * offers the system in ExoVision under the field's facts, the same way in as
+ * from the sky's card. A field on no such star shows nothing.
+ */
+async function showFieldPlanets() {
+  const link = $('field-planets');
+  link.hidden = true;
+  const gen = fieldSeq;
+  const at = state.target ?? { ra: state.ra, dec: state.dec };
+  if (!Number.isFinite(at?.ra) || !Number.isFinite(at?.dec)) return;
+  const host = await planetHostNear(at.ra, at.dec);
+  if (gen !== fieldSeq || !host) return;
+  offerSystem(link, host, state.label ? state.label.split(' · ')[0] : null, 'field.planets');
+}
+
+/** Point `link` at a host's system in ExoVision, entered by the flight in. */
+function offerSystem(link, host, label, key) {
   const [, , n, name] = host;
-  const url = { href: systemUrl(host, hit.label ?? name, getLanguage()) };
-  link.href = url.href;
-  link.textContent = t('card.planets', { n });
+  const shown = label ?? name;
+  const href = systemUrl(host, shown, getLanguage());
+  link.href = href;
+  link.textContent = t(key, { n });
   link.title = t('card.planetsTitle');
   link.hidden = false;
   link.onclick = (e) => {
     // A press with a modifier, or another button, opens a tab as usual.
     if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
     e.preventDefault();
-    jumpToSystem(url.href, link.getBoundingClientRect(), hit.label ?? name);
+    jumpToSystem(href, link.getBoundingClientRect(), shown);
   };
 }
 
@@ -4565,14 +4789,17 @@ function syncLambda() {
 let archives = null;
 /** The newest NEOSSat frame of the field, when CADC has one. */
 let archivesNeossat = null;
+/** The circle CADC was asked about, which every link to its search opens on. */
+let archivesCircle = null;
 
 async function loadArchives(signal) {
   const at = { ra: state.ra, dec: state.dec };
+  archivesCircle = { ...at, radiusDeg: Math.min(0.3, sky.grid.spanDeg / 2) };
   archives = 'asking';
   archivesAll = false;
   renderArchives();
   try {
-    const list = await fieldArchives({ ...at, radiusDeg: Math.min(0.3, sky.grid.spanDeg / 2) }, { signal });
+    const list = await fieldArchives(archivesCircle, { signal });
     if (signal?.aborted || state.ra !== at.ra || state.dec !== at.dec) return;
     archives = list.list;
     archivesNeossat = list.neossat;
@@ -4584,44 +4811,49 @@ async function loadArchives(signal) {
 }
 
 /** Eight archives by size at first, each with its count and its years; the rest one press away. */
+const ARCHIVES_SHOWN = 8;
 let archivesAll = false;
 function renderArchives() {
   const box = $('archives');
   if (!box) return;
   box.hidden = archives === null;
   const list = Array.isArray(archives) ? archives : [];
-  // The list shows eight; the count says how many there are, and that.
-  const cut = list.length > 8 && !archivesAll;
-  $('archives-count').textContent = !list.length ? ''
-    : cut ? t('archives.of', { shown: 8, n: list.length }) : String(list.length);
+  $('archives-count').textContent = list.length ? String(list.length) : '';
   $('archives-note').textContent = archives === 'asking' ? t('archives.asking')
     : archives === 'failed' ? t('archives.failed')
       : list.length ? t('archives.lede') : t('archives.none');
-  const rows = (cut ? list.slice(0, 8) : list).map((a) => {
+  const rows = list.map((a) => {
     const row = document.createElement('div');
     const dt = document.createElement('dt');
-    dt.textContent = a.name;
+    // Each name opens that collection's observations of this field at CADC.
+    const go = document.createElement('a');
+    go.className = 'link facts__go archives__go';
+    go.href = cadcSearchUrl(archivesCircle, a.name);
+    go.target = '_blank';
+    go.rel = 'noopener';
+    go.textContent = a.name;
+    go.setAttribute('aria-label', t('archives.go', { name: a.name }));
+    dt.append(go);
     const dd = document.createElement('dd');
     const years = a.from && a.to ? (a.from === a.to ? ` · ${a.from}` : ` · ${a.from}–${a.to}`) : '';
     dd.textContent = `${fmt(a.n, 0)}${years}`;
     row.append(dt, dd);
     return row;
   });
-  if (cut) {
-    // The ones left out, named by how many, and shown on a press.
-    const more = document.createElement('button');
-    more.type = 'button';
-    more.className = 'link archives__more';
-    more.textContent = t('archives.more', { n: list.length - 8 });
-    more.addEventListener('click', () => { archivesAll = true; renderArchives(); });
-    const row = document.createElement('div');
-    row.append(more);
-    rows.push(row);
+  // Eight in view; the rest fold under a press that says how many, and fold
+  // away again under "Show less".
+  $('archives-list').replaceChildren(...rows.slice(0, ARCHIVES_SHOWN));
+  box.querySelector('.archives__list > .fold')?.remove();
+  if (rows.length > ARCHIVES_SHOWN) {
+    $('archives-list').after(foldBlock(rows.slice(ARCHIVES_SHOWN), {
+      outer: 'div', inner: 'dl', innerClass: 'facts',
+      more: t('archives.more', { n: rows.length - ARCHIVES_SHOWN }), less: t('fold.less'),
+      open: archivesAll, onToggle: (open) => { archivesAll = open; },
+    }));
   }
-  $('archives-list').replaceChildren(...rows);
   const link = $('archives-link');
   link.hidden = !list.length;
-  link.href = CADC_SEARCH;
+  if (archivesCircle) link.href = cadcSearchUrl(archivesCircle);
   renderNeossat(Array.isArray(archives) ? archivesNeossat : null);
 }
 
@@ -5125,6 +5357,7 @@ function relabel() {
   $('mark-help').textContent = t($('mark-help').dataset.i18n);
   renderPresets();
   renderArchives();
+  if (state.ra != null) showFieldPlanets();
   // Where the sky in the entry screen comes from, with the other credits.
   const skyCredit = [
     state.skyLayers.stars && t('credit.stars'), state.skyLayers.deep && t('credit.deep'), t('gate.modelled'),

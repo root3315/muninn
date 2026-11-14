@@ -31,6 +31,7 @@
 <link rel="modulepreload" href="js/app.js">
 <link rel="modulepreload" href="js/catalog.js">
 <link rel="modulepreload" href="js/depth.js">
+<link rel="modulepreload" href="js/markfacts.js">
 <link rel="modulepreload" href="js/ephemeris.js">
 <link rel="modulepreload" href="js/fits.js">
 <link rel="modulepreload" href="js/gate.js">
@@ -402,6 +403,8 @@
     <section class="verdict" aria-label="This field" data-i18n-label="aria.field">
       <h2 class="verdict__line" id="verdict" aria-live="polite"></h2>
       <dl class="facts" id="stat-line"></dl>
+      <!-- A field on a star with known planets: its system, one press away. -->
+      <a class="link field-planets" id="field-planets" rel="noopener" hidden></a>
       <p class="verdict__cue note note--dim" id="field-cue" data-i18n="app.lede"></p>
       <p class="vh" id="skybot-note"></p>
     </section>
@@ -433,8 +436,13 @@
       <p class="depth__figure"><span class="depth__mag num" id="depth-mag"></span><span class="depth__unit num">AB</span></p>
       <p class="depth__said" id="depth-said"></p>
       <svg class="depth__scale" id="depth-scale" role="img"></svg>
-      <p class="depth__reach note note--dim" id="depth-reach"></p>
-      <p class="depth__covered note note--dim" id="depth-covered" hidden></p>
+      <p class="depth__reach" id="depth-reach"></p>
+      <!-- The reasoning, for whoever wants it; the panel itself says one thing. -->
+      <details class="depth__more" id="depth-more">
+        <summary data-i18n="depth.more"></summary>
+        <p class="note note--dim" id="depth-detail"></p>
+        <p class="note note--dim" id="depth-covered" hidden></p>
+      </details>
     </section>
 
     <section class="part">
@@ -461,7 +469,7 @@
         <span class="part__count num" id="archives-count"></span>
       </header>
       <p class="note note--dim" id="archives-note"></p>
-      <dl class="facts" id="archives-list"></dl>
+      <div class="archives__list"><dl class="facts" id="archives-list"></dl></div>
       <figure class="neossat" id="archives-neossat" hidden>
         <img id="archives-neossat-img" alt="" loading="lazy" referrerpolicy="no-referrer">
         <figcaption class="note note--dim"><span id="archives-neossat-cap"></span> <a class="link" id="archives-neossat-fits" target="_blank" rel="noopener" data-i18n="neossat.fits"></a></figcaption>

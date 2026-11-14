@@ -302,12 +302,47 @@ async function askFrames({ ra, dec, radius }, signal) {
 
   const body = await res.json();
   if (!body.ok) throw new UpstreamError(body.error ?? 'search failed');
-  // `partial`: one of the archive's collections did not answer, so the list
-  // is shorter than the sky's. The page says so beside the count.
+  return { ...readPartial(body), truncated: Boolean(body.truncated), source: 'live' };
+}
+
+/**
+ * `partial`: one of the archive's collections did not answer, so the list is
+ * shorter than the sky's; `missing` names them when the relay says which.
+ * Read from the body: the relay sends its status before the archive answers.
+ */
+export function readPartial(body) {
+  const missing = Array.isArray(body?.missing) ? body.missing.filter((c) => typeof c === 'string' && c) : [];
+  const warned = Array.isArray(body?.warnings) && body.warnings.length > 0;
   return {
-    frames: body.frames, truncated: Boolean(body.truncated),
-    partial: Array.isArray(body.warnings) && body.warnings.length > 0, source: 'live',
+    frames: Array.isArray(body?.frames) ? body.frames : [],
+    partial: body?.partial === true || missing.length > 0 || warned,
+    missing,
   };
+}
+
+/**
+ * Ask the relay again for only the collections a partial list was missing.
+ * Never throws for the archive's sake: `{ busy, retryAfterS }` when the
+ * relay asks to be asked later, `{ failed }` when it could not answer, and
+ * otherwise the frames it found, still `partial` if some are still missing.
+ */
+export async function askMissingFrames({ ra, dec, radius = 0.006, collections }, { signal } = {}) {
+  const only = collections.filter((c) => /^[\w.-]+$/.test(c)).join(',');
+  const q = `api/search?ra=${ra.toFixed(6)}&dec=${dec.toFixed(6)}&radius=${radius}${only ? `&collections=${encodeURIComponent(only)}` : ''}`;
+  let body;
+  try {
+    const res = await fetch(q, { signal: deadline(signal, SEARCH_DEADLINE_MS) });
+    body = (res.headers.get('content-type') ?? '').includes('json') ? await res.json() : null;
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    return { failed: true, frames: [], partial: true, missing: collections };
+  }
+  if (body?.busy) return { busy: true, retryAfterS: Number(body.retryAfterS) || 5, frames: [], partial: true, missing: collections };
+  if (!body?.ok) {
+    const { missing } = readPartial(body);
+    return { failed: true, frames: [], partial: true, missing: missing.length ? missing : collections };
+  }
+  return readPartial(body);
 }
 
 /** Shape a raw SIA row into the fields the app actually uses. */
