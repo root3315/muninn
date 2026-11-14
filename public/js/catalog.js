@@ -33,6 +33,8 @@ import {
 } from './overlay.js';
 import { parseCsv } from './csv.js';
 import { mergeBodies } from './sbident.js';
+import { normaliseName } from './names.js';
+import { smallBodyQuery } from './smallbody.js';
 import { parseVOTable } from './votable.js';
 import { deltaRA } from './wcs.js';
 
@@ -123,7 +125,13 @@ async function askSesame(base, name, signal) {
   return res.text();
 }
 
-export async function resolveName(name, { signal } = {}) {
+/**
+ * A name as SIMBAD, NED or VizieR knows it, through Sesame: `{ ra, dec, name,
+ * otype, pm? }`, or null when none of the three knows it. The name is put in
+ * the form Sesame reads first ("Gaia 4472…" as "Gaia DR3 4472…").
+ */
+export async function resolveSesame(raw, { signal } = {}) {
+  const name = normaliseName(raw);
   let body;
   try {
     body = await Promise.any(SESAME.map((base) => askSesame(base, name, signal)));
@@ -133,12 +141,55 @@ export async function resolveName(name, { signal } = {}) {
   const m = /^%J\s+([\d.+-]+)\s+([\d.+-]+)/m.exec(body);
   if (!m) return null;
   // SIMBAD pads designations for column alignment ("M  51"); collapse that.
-  const label = /^%I\.0\s+(.+)$/m.exec(body) ?? /^#\s*(\S.*?)\t/m.exec(body);
-  const resolved = (label ? label[1] : name).trim().replace(/\s+/g, ' ');
+  // VizieR names the catalogue in braces ("{HIP} 71683").
+  const label = /^%I\.0\s+(.+)$/m.exec(body) ?? /^#\s*(\S.*?)	/m.exec(body);
+  const resolved = (label ? label[1] : name).trim().replace(/[{}]/g, '').replace(/^NAME /, '').replace(/\s+/g, ' ');
+  const otype = /^%C\.0\s+(\S+)/m.exec(body)?.[1] ?? '';
   // SIMBAD's proper motion in mas a year, when it has one: the %J position is
   // for J2000, and a fast star has left it since.
   const pm = /^%P\s+([\d.+-]+)\s+([\d.+-]+)/m.exec(body);
-  return { ra: +m[1], dec: +m[2], name: resolved, ...(pm ? { pm: [+pm[1], +pm[2]] } : {}) };
+  return { ra: +m[1], dec: +m[2], name: resolved, otype, ...(pm ? { pm: [+pm[1], +pm[2]] } : {}) };
+}
+
+/**
+ * Asteroids and comets by name or designation, from JPL through the relay:
+ * `{ bodies: [{ des, name, comet, ra, dec }], day }`, each where it stands on
+ * `day` (UTC, today). A body moves; the position is that day's only.
+ */
+export async function resolveSmallBody(text, { signal } = {}) {
+  const body = await fromRelay(`api/smallbody?name=${encodeURIComponent(String(text).trim())}`, signal, CATALOG_DEADLINE_MS);
+  return { bodies: body.bodies ?? [], day: body.day };
+}
+
+/**
+ * What a typed name is, for the search form: SIMBAD, NED or VizieR first,
+ * and JPL for an asteroid or comet. A text that has a small body's own
+ * shape ("433 Eros", "2024 YR4") takes JPL's answer before Sesame's; a
+ * plain word ("Ceres") takes Sesame's first. A small body is labelled with
+ * the day its position is for.
+ */
+export async function resolveName(name, { signal } = {}) {
+  const small = smallBodyQuery(name);
+  const fromJpl = small
+    ? resolveSmallBody(name, { signal }).then(({ bodies, day }) => (bodies[0]
+      ? { ra: bodies[0].ra, dec: bodies[0].dec, name: `${bodies[0].name} · ${day}`, smallBody: { ...bodies[0], day } }
+      : null)).catch(() => null)
+    : Promise.resolve(null);
+  const fromSesame = resolveSesame(name, { signal });
+  if (small?.sure) {
+    const hit = await fromJpl;
+    if (hit) { fromSesame.catch(() => {}); return hit; }
+    return fromSesame;
+  }
+  let sesame;
+  try {
+    sesame = await fromSesame;
+  } catch (err) {
+    const hit = await fromJpl;
+    if (hit) return hit;
+    throw err;
+  }
+  return sesame ?? fromJpl;
 }
 
 /* -------------------------------------------------------------- SPHEREx index */
