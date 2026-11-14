@@ -460,6 +460,7 @@ function updateIdentity() {
 function renderFacts() {
   const f = state.facts;
   const box = $('stat-line');
+  const heldRow = box.contains(document.activeElement) ? document.activeElement.dataset.row : null;
   box.replaceChildren();
   if (!f) return;
   // The archive's count beside the count read, everywhere a count is said:
@@ -499,7 +500,11 @@ function renderFacts() {
   // Past the cap it stops saying "checking" and names the visits that were
   // not answered, which is the part someone can act on.
   const bodies = bodiesLine();
-  if (bodies) rows.push([t('facts.bodies'), bodies]);
+  // Visits SkyBoT failed on can be asked about again, here, where they are named.
+  const retryBodies = sky && skybotOn() && skybotFailedVisits().length
+    ? { label: t(skybot.retrying ? 'skybot.retrying' : 'skybot.retry'), run: retrySkybot, busy: Boolean(skybot.retrying) }
+    : null;
+  if (bodies) rows.push([t('facts.bodies'), bodies, null, retryBodies]);
   for (const [name, value, tone, action] of rows) {
     const row = document.createElement('div');
     const dt = document.createElement('dt');
@@ -511,13 +516,18 @@ function renderFacts() {
       const go = document.createElement('button');
       go.type = 'button';
       go.className = 'link facts__go';
+      go.dataset.row = name;
       go.textContent = action.label;
-      go.addEventListener('click', action.run);
+      // Busy, it says so and waits; still focusable, so the keyboard keeps its place.
+      if (action.busy) go.setAttribute('aria-disabled', 'true');
+      go.addEventListener('click', () => { if (!action.busy) action.run(); });
       dd.append(' · ', go);
     }
     row.append(dt, dd);
     box.append(row);
   }
+  // The rows are rebuilt as answers come in; a press that had the keyboard keeps it.
+  if (heldRow) [...box.querySelectorAll('.facts__go')].find((b) => b.dataset.row === heldRow)?.focus({ preventScroll: true });
 }
 
 /** The visits row: value, tone and the action offered beside it. */
@@ -764,6 +774,7 @@ function renderHunt() {
     const id = document.createElement('p');
     id.className = 'cand__id';
     id.textContent = skybotLine(c.catalog, { none: 'hunt.unknown' });
+    withSkybotRetry(id, c.catalog, `mover ${c.ra} ${c.dec}`);
 
     const go = document.createElement('button');
     go.type = 'button';
@@ -953,9 +964,9 @@ function renderFlashes(found) {
     const states = new Set(unnamed.map((c) => c.catalog.state));
     const id = document.createElement('p');
     id.className = 'cand__id';
-    id.textContent = states.size === 1 && states.has('none')
-      ? t('hunt.flashNone')
-      : skybotLine({ state: [...states].find((s) => s !== 'none') });
+    const said = { state: states.size === 1 && states.has('none') ? 'none' : [...states].find((s) => s !== 'none') };
+    id.textContent = said.state === 'none' ? t('hunt.flashNone') : skybotLine(said);
+    withSkybotRetry(id, said, 'flashes');
 
     const dates = document.createElement('p');
     dates.className = 'cand__dates';
@@ -1888,6 +1899,69 @@ async function prefetchKnownObjects(signal) {
   await pool(pending, SKYBOT_CONCURRENCY, (v) => (signal?.aborted ? null : askSkybot(v, signal)));
 }
 
+/** The visits of this field whose SkyBoT question failed. */
+const skybotFailedVisits = () => plannedVisits().filter((v) => skybot.failed.has(v.frame.obsId));
+
+/**
+ * Ask again, on a press, about every visit whose question failed: only those,
+ * and only once at a time. The minute's wait after a failure is for the
+ * automatic askers; a person asking again is let through. JPL, asked alongside,
+ * still waits its turn in its own queue.
+ */
+async function retrySkybot() {
+  const asked = skybot;
+  if (asked.retrying || !skybotOn()) return;
+  const failed = skybotFailedVisits();
+  if (!failed.length) return;
+  asked.retrying = true;
+  for (const v of failed) asked.failedAt?.delete(v.frame.obsId);
+  catalogChanged();
+  try {
+    await pool(failed, SKYBOT_CONCURRENCY, (v) => askSkybot(v, state.abort?.signal));
+  } finally {
+    asked.retrying = false;
+    if (asked === skybot) catalogChanged();
+  }
+}
+
+/**
+ * Which "Try again" had the keyboard, so the one built in its place takes it
+ * back. Let go when the person moves elsewhere: a blur would not do, since
+ * the rebuild that removes the press blurs it too.
+ */
+let skybotRetryHeld = null;
+const letGoOfRetry = (e) => { if (!e.target.closest?.('.skybot-retry')) skybotRetryHeld = null; };
+document.addEventListener('focusin', letGoOfRetry);
+document.addEventListener('pointerdown', letGoOfRetry);
+
+/**
+ * "Try again", beside a line that says SkyBoT did not answer. `place` names
+ * the line. While the question is out it says so and does nothing; it stays
+ * focusable, so the keyboard keeps its place while the lists are rebuilt.
+ */
+function skybotRetryButton(place) {
+  const busy = Boolean(skybot.retrying);
+  const again = document.createElement('button');
+  again.type = 'button';
+  again.className = 'link skybot-retry';
+  again.textContent = t(busy ? 'skybot.retrying' : 'skybot.retry');
+  again.setAttribute('aria-disabled', String(busy));
+  if (busy) again.setAttribute('aria-busy', 'true');
+  again.addEventListener('click', () => { if (!busy) retrySkybot(); });
+  again.addEventListener('focus', () => { skybotRetryHeld = place; });
+  if (skybotRetryHeld === place) queueMicrotask(() => { if (again.isConnected) again.focus({ preventScroll: true }); });
+  return again;
+}
+
+/** A line about SkyBoT, with "Try again" after it when it says SkyBoT failed. */
+function withSkybotRetry(line, verdict, place) {
+  // While the question asked again is out, the line is "waiting" and keeps
+  // its press, busy, so the keyboard is not dropped mid-question.
+  const asking = skybot.retrying && verdict?.state === 'waiting';
+  if ((verdict?.state === 'failed' || asking) && skybotOn()) line.append(' ', skybotRetryButton(place));
+  return line;
+}
+
 async function refreshKnownObjects() {
   if (!skybotOn()) { reportKnownObjects(); return; }
   const v = sky.current;
@@ -2374,6 +2448,7 @@ function renderMarks() {
     id.className = 'mark__id';
     id.dataset.known = skybotTone(m.catalog);
     id.textContent = skybotLine(m.catalog);
+    withSkybotRetry(id, m.catalog, `mark ${m.ra} ${m.dec}`);
 
     // A mark dropped on a SkyBoT ring where SPHEREx measured nothing is not
     // "nothing here" next to "in the catalogue" — read together those sound

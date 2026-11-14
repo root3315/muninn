@@ -255,6 +255,10 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .facts__go, .sheet .link { padding-inline: var(--space-xs); color: var(--color-accent); }
 /* A collection named in the archives list keeps the edge of its column. */
 .archives__go { margin-inline-start: calc(-1 * var(--space-xs)); }
+/* Asking SkyBoT again, inside the line that says it failed. */
+.skybot-retry { padding-inline: var(--space-xs); color: var(--color-accent); font-size: inherit; min-block-size: 0; }
+.skybot-retry[aria-disabled="true"] { color: var(--color-neutral); cursor: progress; }
+.facts__go[aria-disabled="true"] { color: var(--color-neutral); cursor: progress; }
 /* At rest the pill is invisible, so the words keep the edge of their column. */
 .part > .link, .cand__go, .tools__acts > .link:first-child { margin-inline-start: calc(-1 * var(--space-sm)); }
 .sheet__fine > .link { margin-inline-start: calc(-1 * var(--space-xs)); }
