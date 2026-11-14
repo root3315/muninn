@@ -87,7 +87,7 @@
 }
 .read__art svg { display: block; inline-size: 100%; block-size: auto; overflow: visible; }
 .read__art svg * { transform-box: fill-box; transform-origin: center; }
-.read .visually-hidden { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.read .visually-hidden, .read__art .visually-hidden { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 .art__line { fill: none; stroke: var(--color-rule-strong); stroke-width: 1; }
 .art__faint { fill: none; stroke: var(--color-rule); stroke-width: 1; stroke-dasharray: 2 3; }
@@ -179,7 +179,7 @@
 /* 01 · six detectors, a ruler of 102 channels, a cursor you drag. */
 .art-sky { --h: var(--hue-d3); background: color-mix(in oklch, var(--color-well) 90%, oklch(var(--acc-l) var(--acc-c) var(--h))); transition: background-color var(--dur-long) var(--ease-out); }
 .art-sky__ruler { touch-action: pan-y; cursor: ew-resize; border-radius: var(--radius-sm); }
-.art-sky__det { opacity: 0.32; cursor: pointer; transition: opacity var(--dur-short) var(--ease-out); }
+.art-sky__det { opacity: 0.5; cursor: pointer; transition: opacity var(--dur-short) var(--ease-out); }
 .art-sky__det:hover { opacity: 0.55; }
 .art-sky[data-d="1"] .art-sky__det[data-d="1"], .art-sky[data-d="2"] .art-sky__det[data-d="2"],
 .art-sky[data-d="3"] .art-sky__det[data-d="3"], .art-sky[data-d="4"] .art-sky__det[data-d="4"],
@@ -560,7 +560,7 @@
 .tour .tour__skip { font-size: var(--text-xs); margin-inline-end: calc(-1 * var(--space-xs)); padding-inline: var(--space-xs); min-block-size: 32px; }
 .tour__body { display: grid; gap: var(--space-xs); }
 .tour__title { font-family: var(--font-display); font-weight: 600; font-size: 1.125rem; line-height: 1.25; }
-.tour__say { color: var(--color-muted); line-height: 1.55; font-size: var(--text-sm); }
+.tour__say { white-space: pre-line; color: var(--color-muted); line-height: 1.55; font-size: var(--text-sm); }
 .tour__more { display: grid; gap: var(--space-xs); color: var(--color-muted); line-height: 1.55; font-size: var(--text-sm); }
 .tour__more[hidden], .tour__clip[hidden], .tour__demo[hidden] { display: none; }
 .tour__more:not([hidden]) { animation: tour-more-in 260ms var(--ease-out); transform-origin: 50% 0; }

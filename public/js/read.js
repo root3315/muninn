@@ -129,7 +129,7 @@ function initSky(fig) {
     const a = rulerX(lo) + 0.4;
     const b = rulerX(hi) - 0.4;
     return `<g data-d="${i + 1}"><path d="M${a.toFixed(1)} 112v-4h${(b - a).toFixed(1)}v4"/>`
-      + `<text x="${((a + b) / 2).toFixed(1)}" y="104" text-anchor="middle">D${i + 1}</text></g>`;
+      + `<text x="${((a + b) / 2).toFixed(1)}" y="99" text-anchor="middle">D${i + 1}</text></g>`;
   }).join('');
   let ticks = '';
   for (let n = 1; n <= BANDS.length * PER; n++) ticks += `M${rulerX(channel(n).lambda).toFixed(2)} 116v8`;
@@ -535,11 +535,36 @@ const INIT = {
  * @param {HTMLElement} into
  * @returns {{ relabel: () => void } | null}
  */
+/**
+ * Give a copied picture ids of its own. A copy that kept the sheet's ids
+ * painted its detectors with the sheet's gradients, which are not painted at
+ * all while their card is off screen: the tour's tiles came out black.
+ */
+function ownIds(fig, suffix) {
+  const renamed = new Map();
+  for (const el of fig.querySelectorAll('[id]')) {
+    renamed.set(el.id, `${el.id}-${suffix}`);
+    el.id = `${el.id}-${suffix}`;
+  }
+  if (!renamed.size) return;
+  const point = (value) => value.replace(/url\(#([^)]+)\)/g, (all, ref) => (renamed.has(ref) ? `url(#${renamed.get(ref)})` : all))
+    .replace(/^#(.+)$/, (all, ref) => (renamed.has(ref) ? `#${renamed.get(ref)}` : all));
+  for (const el of fig.querySelectorAll('*')) {
+    for (const attr of ['fill', 'stroke', 'clip-path', 'mask', 'href', 'xlink:href', 'filter']) {
+      const value = el.getAttribute(attr);
+      if (value?.includes('#')) el.setAttribute(attr, point(value));
+    }
+  }
+}
+
+let demoCount = 0;
+
 export function mountDemo(id, into, { mode } = {}) {
   into.replaceChildren();
   const source = $(id)?.querySelector('.read__art');
   if (!source) return null;
   const fig = source.cloneNode(true);
+  ownIds(fig, `demo${++demoCount}`);
   fig.classList.remove('is-touched');
   for (const radio of fig.querySelectorAll('input[type="radio"]')) radio.name = `${radio.name}-demo`;
   for (const img of fig.querySelectorAll('img[loading="lazy"]')) img.loading = 'eager';

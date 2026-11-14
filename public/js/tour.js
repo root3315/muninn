@@ -24,9 +24,6 @@ function modes() {
   return deck?.getClientRects().length ? deck : deck?.querySelector('.segments');
 }
 
-/** One of the five mode switches, by its value. */
-const segment = (mode) => () => document.querySelector(`input[name="mode"][value="${mode}"]`)?.closest('.segment');
-
 /** "Link across seasons" on the first mark that offers it, else on a Hunter X row. */
 function linkButton() {
   const words = [t('link.run'), t('link.again')];
@@ -45,10 +42,8 @@ const STEPS = [
   { key: 'plate', find: () => $('plate'), read: 'read-blink' },
   { key: 'rings', find: () => $('plate'), read: 'read-ring' },
   { key: 'bands', find: () => document.querySelector('.bands'), read: 'read-spectrum', demo: 'read-sky' },
-  { key: 'modes', find: modes, read: 'read-modes', mode: 'blink' },
-  { key: 'wipe', find: segment('wipe'), read: 'read-modes', demo: 'read-wise' },
-  { key: 'diff', find: segment('difference'), read: 'read-modes', mode: 'diff' },
-  { key: 'stack', find: segment('stack'), read: 'read-modes', mode: 'stack' },
+  // The five modes are one bar on screen, so they are one step: a line each.
+  { key: 'modes', find: modes, read: 'read-modes', mode: 'wipe' },
   { key: 'run', find: () => $('run-scroll'), read: 'read-run' },
   { key: 'marks', find: () => $('marks')?.closest('.part'), read: 'read-mark' },
   { key: 'spectrum', find: () => document.querySelector('#marks .spectrum'), read: 'read-spectrum' },
