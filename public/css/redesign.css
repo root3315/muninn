@@ -1090,7 +1090,10 @@ body { font-size: var(--text-base); line-height: 1.5; }
    evidence; a found link takes the accent, the controls sit on one row. */
 .mark__link[data-tone="counter"] { color: var(--color-accent); }
 .mark__link[data-tone="wait"], .mark__link[data-tone="quiet"] { color: var(--color-neutral); }
-.mark__link-acts { display: flex; flex-wrap: wrap; gap: 0 var(--space-xs); }
+.mark__link-acts { display: flex; flex-wrap: wrap; gap: var(--space-2xs) var(--space-xs); }
+/* A mark's actions stack in its column: each its own row, never touching the next. */
+.mark > .spectrum { margin-block-start: var(--space-sm); }
+.mark__body > .mark__csv + .mark__csv { margin-block-start: var(--space-2xs); }
 .mark__link-acts > .mark__csv[aria-pressed="false"] { color: var(--color-neutral); }
 
 /* NEOSSat's newest frame in the other-archives panel: shown as delivered. */
