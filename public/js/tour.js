@@ -33,7 +33,11 @@ const STEPS = [
   { key: 'depth', find: () => $('depth'), read: 'read-depth' },
   { key: 'hunt', find: () => $('hunt'), read: 'read-hunt' },
   { key: 'view', find: () => $('tools-toggle'), read: 'read-overlay' },
-  { key: 'link', find: () => $('copy-link'), read: null },
+  // On a phone the link is folded under "⋯"; the tour points at the fold and says so.
+  {
+    key: 'link', find: () => (shown($('copy-link')) ? $('copy-link') : $('more-key')), read: null,
+    words: (el) => (el?.id === 'more-key' ? 'linkFold' : 'link'),
+  },
 ];
 
 const PAD = 8;
@@ -164,9 +168,10 @@ function render() {
     return pip;
   }));
   ui.skip.textContent = t('tour.skip');
-  ui.title.textContent = t(`tour.${step.key}H`);
-  ui.say.textContent = t(`tour.${step.key}P`);
-  ui.moreText.textContent = t(`tour.${step.key}More`);
+  const words = step.words?.(step.el) ?? step.key;
+  ui.title.textContent = t(`tour.${words}H`);
+  ui.say.textContent = t(`tour.${words}P`);
+  ui.moreText.textContent = t(`tour.${words}More`);
   ui.read.hidden = !step.read;
   ui.read.textContent = t('tour.read');
   ui.next.textContent = t(last ? 'tour.finish' : 'tour.next');
@@ -204,7 +209,15 @@ function place() {
   else if (x >= cw + 2 * GAP) { cx = x - cw - GAP; cy = clampY(y); }
   else if (vh - (y + h) >= ch + 2 * GAP) { cx = clampX(x); cy = y + h + GAP; }
   else if (y >= ch + 2 * GAP) { cx = clampX(x); cy = y - ch - GAP; }
-  else { cx = clampX(x + w - cw - GAP); cy = clampY(y + h - ch - GAP); }
+  else {
+    // No side has the room (a phone on its side): the corner of the screen
+    // where the card covers least of the part.
+    const covers = ([px, py]) => Math.max(0, Math.min(px + cw, x + w) - Math.max(px, x))
+      * Math.max(0, Math.min(py + ch, y + h) - Math.max(py, y));
+    const corners = [[vw - cw - GAP, GAP], [vw - cw - GAP, vh - ch - GAP], [GAP, GAP], [GAP, vh - ch - GAP]]
+      .map(([px, py]) => [clampX(px), clampY(py)]);
+    [cx, cy] = corners.reduce((best, c) => (covers(c) < covers(best) ? c : best));
+  }
   ui.card.style.transform = `translate(${Math.round(cx)}px, ${Math.round(cy)}px)`;
 }
 

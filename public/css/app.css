@@ -699,7 +699,10 @@ li { list-style: none; }
 /* Out of flow: see the note at the head of this file. */
 #sky {
   position: absolute; inset: 0;
-  display: block; cursor: crosshair; touch-action: none;
+  /* A finger drawn up or down the picture scrolls the page; across it, it
+     moves the wipe. Held at none, the plate was a third of a phone that
+     would not scroll. */
+  display: block; cursor: crosshair; touch-action: pan-y pinch-zoom;
 }
 .plate[data-mode="wipe"] #sky { cursor: ew-resize; }
 
@@ -811,7 +814,10 @@ li { list-style: none; }
   opacity: 0; pointer-events: none;
   transition: opacity var(--dur-micro) var(--ease-out);
 }
-.plate:hover .scan, .scan:has(.hint[hidden]) { opacity: 1; }
+.scan:has(.hint[hidden]) { opacity: 1; }
+/* A finger leaves no reading behind: a touch screen keeps its hover after a
+   tap, and the strip stayed up saying "Cursor –, Brightness –". */
+@media (hover: hover) { .plate:hover .scan { opacity: 1; } }
 .readout { display: flex; flex-wrap: wrap; gap: var(--space-2xs) var(--space-lg); min-inline-size: 0; }
 .readout > div { display: flex; align-items: baseline; gap: var(--space-2xs); min-inline-size: 0; }
 .readout dt { font-size: var(--text-xs); color: var(--color-neutral); white-space: nowrap; }

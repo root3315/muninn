@@ -328,6 +328,7 @@ function renderPlateLog() {
 
 function setPlateState(message, { progress = null, hidden = false, retry = false } = {}) {
   $('plate-state').hidden = hidden;
+  if (hidden) $('plate-nudge').hidden = true;
   $('plate-message').textContent = message ?? '';
   // A failure someone else can fix by waiting gets a way to ask again in
   // place, rather than a sentence telling them to retype the field.
@@ -336,6 +337,22 @@ function setPlateState(message, { progress = null, hidden = false, retry = false
   meter.hidden = progress == null;
   if (progress != null) $('plate-meter-fill').style.transform = `scaleX(${clamp(progress, 0, 1)})`;
   renderPlateLog();
+}
+
+/**
+ * A tap on the picture while its visits are still being read used to do
+ * nothing and say nothing; it now says when a mark can be placed.
+ */
+function wireNudge() {
+  let clock = 0;
+  $('plate-state').addEventListener('click', (e) => {
+    if (!state.loading || e.target.closest('button')) return;
+    const nudge = $('plate-nudge');
+    nudge.textContent = t('plate.markWait');
+    nudge.hidden = false;
+    clearTimeout(clock);
+    clock = setTimeout(() => { nudge.hidden = true; }, 3500);
+  });
 }
 
 /**
@@ -3963,6 +3980,31 @@ function savePNG() {
   link.click();
 }
 
+/**
+ * "⋯" on a phone's bar: saving and sharing, folded so the bar keeps one row.
+ * A press anywhere else or Escape folds it again; a copied link stays in view
+ * long enough to read "Copied".
+ */
+function setMore(open) {
+  $('more-key').setAttribute('aria-expanded', String(open));
+  $('more').dataset.open = String(open);
+}
+
+function wireMore() {
+  const key = $('more-key');
+  key.addEventListener('click', () => setMore(key.getAttribute('aria-expanded') !== 'true'));
+  $('copy-link').addEventListener('click', (e) => {
+    const btn = e.currentTarget;
+    setTimeout(() => { if (btn.dataset.state === 'done') setMore(false); }, 1500);
+  });
+  document.addEventListener('pointerdown', (e) => {
+    if (key.getAttribute('aria-expanded') === 'true' && !e.target.closest('#more, #more-key')) setMore(false);
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && key.getAttribute('aria-expanded') === 'true') { setMore(false); key.focus(); }
+  });
+}
+
 async function copyLink(btn) {
   writeHash();
   // The language travels in the fragment; a `?lang=` the page was opened with
@@ -5419,8 +5461,10 @@ function wire() {
     addMark(state.ra, state.dec);
     retrackMarks();
   });
-  $('save-png').addEventListener('click', savePNG);
+  $('save-png').addEventListener('click', () => { setMore(false); savePNG(); });
   $('copy-link').addEventListener('click', (e) => copyLink(e.currentTarget));
+  wireMore();
+  wireNudge();
 
   const record = $('record');
   if (typeof MediaRecorder !== 'undefined' && sky.canvas.captureStream) {

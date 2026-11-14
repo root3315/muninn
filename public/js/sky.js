@@ -550,10 +550,13 @@ export class SkyView {
     if (this.grid) {
       if (this.overlays.grid) this.drawGrid(ctx);
       if (this.overlays.compass) this.taken.push(this.compassBox(ctx));
+      // The field's own target and the user's crosses first: the names drawn
+      // after them step around them ("(8270) 37″/h" sat on "Atala").
+      if (this.overlays.marks && this.target) this.drawTarget(ctx);
+      if (this.overlays.marks) this.reserveMarks();
       // SkyBoT's rings are positions at one exposure's moment; on a season's
       // sum they would pin a body to a place it held for one of the visits.
       if (this.overlays.skybot && this.mode !== 'stack') this.drawKnownObjects(ctx);
-      if (this.overlays.marks && this.target) this.drawTarget(ctx);
       if (this.overlays.catalog) this.drawCatalog(ctx);
       this.drawSurveys(ctx);
       if (this.overlays.sectors || this.sector) this.drawSectors(ctx);
@@ -698,6 +701,54 @@ export class SkyView {
   }
 
   /**
+   * Where a label of width w goes: the first of its spots that lies on the
+   * picture and clear of everything already written there; failing that, the
+   * first on the picture; failing that, the first, pulled in from the edges.
+   * A spot is { x, y, align } as the label would be drawn (textBaseline
+   * middle). The room it takes is booked in this.taken. Returns the spot.
+   */
+  labelSpot(w, spots) {
+    const { scale, offX, offY, gw, gh } = this.view;
+    const edge = {
+      x0: Math.max(0, offX) + 3, x1: Math.min(this.cssW, offX + gw * scale) - 3,
+      y0: Math.max(0, offY) + 3, y1: Math.min(this.cssH, offY + gh * scale) - 3,
+    };
+    const boxOf = (s) => {
+      const left = s.align === 'left' ? s.x : s.align === 'right' ? s.x - w : s.x - w / 2;
+      return { x0: left - 2, x1: left + w + 2, y0: s.y - 8, y1: s.y + 8 };
+    };
+    const onPlate = (b) => b.x0 >= edge.x0 && b.x1 <= edge.x1 && b.y0 >= edge.y0 && b.y1 <= edge.y1;
+    const crowd = (b) => this.taken.reduce((sum, t) => sum
+      + Math.max(0, Math.min(b.x1, t.x1) - Math.max(b.x0, t.x0)) * Math.max(0, Math.min(b.y1, t.y1) - Math.max(b.y0, t.y0)), 0);
+    const boxes = spots.map(boxOf);
+    let k = boxes.findIndex((b) => onPlate(b) && crowd(b) === 0);
+    // Nowhere clear: the spot on the picture that covers the least.
+    if (k < 0) {
+      let least = Infinity;
+      boxes.forEach((b, i) => { const c = onPlate(b) ? crowd(b) : Infinity; if (c < least) { least = c; k = i; } });
+    }
+    let spot = spots[Math.max(0, k)];
+    let box = boxes[Math.max(0, k)];
+    if (k < 0) {
+      const dx = Math.max(0, edge.x0 - box.x0) - Math.max(0, box.x1 - edge.x1);
+      const dy = Math.max(0, edge.y0 - box.y0) - Math.max(0, box.y1 - edge.y1);
+      spot = { ...spot, x: spot.x + dx, y: spot.y + dy };
+      box = { x0: box.x0 + dx, x1: box.x1 + dx, y0: box.y0 + dy, y1: box.y1 + dy };
+    }
+    this.taken.push(box);
+    return spot;
+  }
+
+  /** A label put by labelSpot, drawn. */
+  placeLabel(ctx, text, spots, color) {
+    const spot = this.labelSpot(ctx.measureText(text).width, spots);
+    ctx.textAlign = spot.align;
+    this.label(ctx, text, spot.x, spot.y, color);
+    ctx.textAlign = 'left';
+    return spot;
+  }
+
+  /**
    * SIMBAD's notable objects in the field: a small square each, quiet, so it
    * reads as a note on the sky and not as a source in it. Squares because the
    * ring already means "SkyBoT says a body is here" and the cross means "you
@@ -707,7 +758,6 @@ export class SkyView {
   drawCatalog(ctx) {
     if (!this.catalog.length) return;
     const LABELLED = 12;
-    const placed = [];
     // At the date of the visit on screen: SIMBAD gives J2000, and Barnard's
     // Star had moved four arcminutes from its square by 2025.
     const epoch = this.current ? epochOfMjd(this.current.frame.mjd) : null;
@@ -740,8 +790,8 @@ export class SkyView {
       const right = x + 9 + w <= this.cssW - 4;
       const box = { x0: right ? x + 8 : x - 9 - w, x1: right ? x + 9 + w : x - 8, y0: y - 7, y1: y + 7 };
       const hit = (b) => b.x0 < box.x1 && box.x0 < b.x1 && b.y0 < box.y1 && box.y0 < b.y1;
-      if (placed.some(hit) || this.taken.some(hit)) return;
-      placed.push(box);
+      if (this.taken.some(hit)) return;
+      this.taken.push(box);
       ctx.textAlign = right ? 'left' : 'right';
       this.label(ctx, text, right ? x + 9 : x - 9, y, this.colors.muted);
     });
@@ -868,16 +918,17 @@ export class SkyView {
       this.hits.push({ kind: 'skybot', x, y, item: o });
       const name = o.num ? `(${o.num})` : o.name;
       const text = rate > 0 ? `${name} ${this.labels.rate(rate)}` : name;
-      // Near the right edge the label goes on the ring's left, or it is cut off.
-      const w = ctx.measureText(text).width;
-      const right = x + 16 + w <= this.cssW - 4;
-      this.taken.push(
-        { x0: x - 13, x1: x + 13, y0: y - 13, y1: y + 13 },
-        { x0: right ? x + 15 : x - 17 - w, x1: right ? x + 17 + w : x - 15, y0: y - 7, y1: y + 8 },
-      );
-      ctx.textAlign = right ? 'left' : 'right';
-      this.label(ctx, text, right ? x + 16 : x - 16, y + 1, this.colors.accent);
-      ctx.textAlign = 'left';
+      // Beside the ring, or under or over it where the side is taken or would
+      // run off the picture; at the very edge it is pulled back on.
+      this.taken.push({ x0: x - 13, x1: x + 13, y0: y - 13, y1: y + 13 });
+      this.placeLabel(ctx, text, [
+        { x: x + 16, y: y + 1, align: 'left' },
+        { x: x - 16, y: y + 1, align: 'right' },
+        { x, y: y + 22, align: 'center' },
+        { x, y: y - 21, align: 'center' },
+        { x: x + 12, y: y + 22, align: 'left' },
+        { x: x - 12, y: y - 21, align: 'right' },
+      ], this.colors.accent);
     }
     ctx.restore();
   }
@@ -921,16 +972,25 @@ export class SkyView {
     if (text) {
       ctx.font = this.fonts.mark;
       ctx.textBaseline = 'middle';
-      const w = ctx.measureText(text).width;
-      // Under the ring, or over it at the bottom edge; never on the star.
-      const below = y + r + 14 <= this.cssH - 4;
-      const ty = below ? y + r + 9 : y - r - 9;
-      const tx = Math.min(Math.max(x, 4 + w / 2), this.cssW - 4 - w / 2);
-      ctx.textAlign = 'center';
-      this.label(ctx, text, tx, ty, this.colors.ink);
-      this.taken.push({ x0: tx - w / 2 - 2, x1: tx + w / 2 + 2, y0: ty - 8, y1: ty + 8 });
+      // Under the ring, or over it at the bottom edge or the compass; never on the star.
+      this.placeLabel(ctx, text, [
+        { x, y: y + r + 11, align: 'center' },
+        { x, y: y - r - 11, align: 'center' },
+        { x: x + r + 6, y, align: 'left' },
+        { x: x - r - 6, y, align: 'right' },
+      ], this.colors.ink);
     }
     ctx.restore();
+  }
+
+  /** The user's crosses, booked before any name is placed, so none lands on one. */
+  reserveMarks() {
+    for (const m of this.marks) {
+      const g = this.grid.worldToIndex(m.ra, m.dec);
+      if (!g) continue;
+      const [x, y] = this.toCanvas(g[0], g[1]);
+      this.taken.push({ x0: x - 14, x1: x + 14, y0: y - 14, y1: y + 14 });
+    }
   }
 
   drawMarks(ctx) {
@@ -951,11 +1011,23 @@ export class SkyView {
       ctx.stroke();
       this.hits.push({ kind: 'mark', x, y, item: m, n: n + 1 });
       const num = String(n + 1);
-      this.label(ctx, num, x + 16, y - 12, m.known ? this.colors.neutral : this.colors.ink);
       // What the mark turned out to be, in a word or a name, beside its number —
       // unless it is a body whose SkyBoT ring right there already carries the name.
       const ringSays = m.known && this.overlays.skybot;
-      if (m.tag && !ringSays) this.label(ctx, m.tag, x + 16 + ctx.measureText(num).width + 6, y - 12, this.colors.muted);
+      const tag = m.tag && !ringSays ? m.tag : '';
+      const numW = ctx.measureText(num).width;
+      const w = tag ? numW + 6 + ctx.measureText(tag).width : numW;
+      // Up and to the right of the cross, or round its other corners when a
+      // name or the picture's edge is there.
+      const spot = this.labelSpot(w, [
+        { x: x + 16, y: y - 12, align: 'left' },
+        { x: x - 16, y: y - 12, align: 'right' },
+        { x: x + 16, y: y + 12, align: 'left' },
+        { x: x - 16, y: y + 12, align: 'right' },
+      ]);
+      const left = spot.align === 'right' ? spot.x - w : spot.x;
+      this.label(ctx, num, left, spot.y, m.known ? this.colors.neutral : this.colors.ink);
+      if (tag) this.label(ctx, tag, left + numW + 6, spot.y, this.colors.muted);
 
       if (m.track?.length > 1) {
         ctx.strokeStyle = this.colors.counter;
