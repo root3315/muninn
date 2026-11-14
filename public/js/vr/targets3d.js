@@ -136,7 +136,7 @@ export function createMarkers({ fields, planets, look, lang }) {
       const covered = (b) => placedBoxes.some((o) => Math.abs(((o.x - b.x + 540) % 360) - 180) < o.w + b.w && Math.abs(o.y - b.y) < o.h + b.h);
       let b = box();
       for (let k = 0; k < 2 && covered(b); k++) { drop += nameH; b = box(); }
-      if (covered(b)) { m.label.mesh.visible = false; continue; }
+      if (covered(b)) { m.label.mesh.visible = false; m.label.placed = false; continue; }
       if (drop) m.label.mesh.position.y -= atR(drop);
       placedBoxes.push(b);
     }
@@ -158,6 +158,7 @@ export function createMarkers({ fields, planets, look, lang }) {
       ctx.fillText(fitText(ctx, text, W - 8), W / 2, H / 2);
     });
     panel.mesh.position.fromArray(radecToVec(ra, dec).map((x) => x * MARKER_RADIUS * 1.01));
+    panel.dir = radecToVec(ra, dec);
     panel.mesh.lookAt(0, 0, 0);
     panel.mesh.renderOrder = 6;
     group.add(panel.mesh);
@@ -231,13 +232,19 @@ export function createMarkers({ fields, planets, look, lang }) {
      * along `axis` (a direction in the sky's own frame), quieter still, so the
      * names on the sky do not stand in the field's corridor.
      */
-    setDim(k, axis = null, clearDeg = 35, kAxis = 0.12) {
+    setDim(k, axis = null, clearDeg = 35, kAxis = 0.12, screens = null) {
+      // A name behind the field's screens or in its corridor is not shown at
+      // all: half-seen through a gap, it reads as part of what is in front.
+      const hiddenAt = (v) => (axis && angleBetween([axis.x, axis.y, axis.z], v) < clearDeg)
+        || (screens && angleBetween([screens.x, screens.y, screens.z], v) < 62);
       for (const m of markers) {
         const along = axis && angleBetween([axis.x, axis.y, axis.z], m.v) < clearDeg;
         const f = along ? Math.min(k, kAxis) : k;
         m.ring.material.userData.dimmed = (m.ring.material.userData.base ?? 0.95) * f;
         m.label.mesh.material.opacity = f;
+        m.label.mesh.visible = !(k < 1 && hiddenAt(m.v)) && m.label.placed !== false;
       }
+      for (const c of captions) c.mesh.visible = !(k < 1 && hiddenAt(c.dir));
     },
     dispose() {
       for (const m of markers) m.label.dispose();

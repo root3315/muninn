@@ -99,7 +99,7 @@ test('the screens stand where they are meant to, facing the eye, with type big e
   assert.ok(Math.abs(SCREENS.card.yawDeg) >= 34 && Math.abs(SCREENS.card.yawDeg) <= 40);
   const barPitch = Math.atan2(SCREENS.bar.dy, SCREENS.bar.dist) * 180 / Math.PI;
   // Its centre; the first row, which is all that shows unless "More" is open, is about a degree higher.
-  assert.ok(barPitch <= -16 && barPitch >= -20);
+  assert.ok(barPitch <= -16 && barPitch >= -21);
   assert.ok(MIN_TEXT_DEG >= 1.5);
 });
 

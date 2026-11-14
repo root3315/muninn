@@ -329,6 +329,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       onBack: () => closeField(true),
       onBring: returnToScreens,
       onFlipped: (flipped) => { view = flipped ? 'depth' : 'field'; },
+      onReopen: (next) => openTarget({ ...marker, target: next }),
     });
     dimTo(LAYOUT.dive.skyDim);
     markers.setDim(0.45);
@@ -751,7 +752,10 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     const dark = Math.max(field?.veil ?? 0, home?.veil ?? 0);
     veil.visible = dark > 0.001;
     veil.material.opacity = dark;
-    if (field) markers.setDim(0.45, toSky(field.depthAxis()), LAYOUT.depth.clearDeg);
+    if (field) {
+      const y = field.mainYaw();
+      markers.setDim(0.45, toSky(field.depthAxis()), LAYOUT.depth.clearDeg, 0.12, toSky(new THREE.Vector3(-Math.sin(y), 0, -Math.cos(y))));
+    }
     markers.tick(now, { growMs: LAYOUT.dive.ms, grow: LAYOUT.dive.markerGrow });
 
     locomote(dt);

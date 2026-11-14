@@ -21,7 +21,8 @@
 
 import * as THREE from '../vendor/three.module.js';
 import { t, fmt } from '../i18n.js';
-import { searchFrames, groupVisits, toS3, skybotCone, knownBodies, surveySources, nearestHost, formatRA, formatDec } from '../catalog.js';
+import { seasonChunks, chunkAt, forStack } from '../stack.js';
+import { searchFrames, groupVisits, bandsPresent, toS3, skybotCone, knownBodies, surveySources, nearestHost, formatRA, formatDec } from '../catalog.js';
 import { spread, VISITS_PER_BATCH } from '../visits.js';
 import { TangentGrid, deltaRA } from '../wcs.js';
 import { SkyView } from '../sky.js';
@@ -37,6 +38,7 @@ import { LAYOUT, SCREENS, screenPose, typeFor, minTextPx } from './layout.js';
 import { eclipticLatitude, PLANET_X_V, PLANET_X_MAX_BETA } from './depth3d.js';
 import { createTimeline } from './timeline.js';
 import { createDepthView } from './depthview.js';
+import { createSpectrumPanel } from './spectrumpanel.js';
 import { geometricDistances, galaxiesWithRedshift, bakedAnswers } from './distances.js';
 import { tv } from './strings.js';
 
@@ -53,6 +55,8 @@ const SKYBOT_AT_ONCE = 2;
 /** SkyBoT's position and SPHEREx's agree within two detector pixels for the same body. */
 const SAME_BODY_ARCSEC = 12.3;
 const SEASON_DAYS = 45;
+/** The field sizes offered in the headset, from the site's own (hash.js FOV_CHOICES). */
+const FOV_SIZES = [0.15, 0.3, 0.6];
 
 /* The grid as the site cuts it: ~2.5 samples per 6.15″ detector pixel. */
 const gridHeightFor = (fovDeg) => Math.min(768, Math.max(360, Math.round(((fovDeg * 3600) / 6.15) * 2.5)));
@@ -220,6 +224,13 @@ export function openFieldVR(target, env) {
   }
   disposers.push(main, notice, bar, card, side);
 
+  // A mark's spectrum, over the field: shown when a mark is made.
+  const spectrum = createSpectrumPanel({ look });
+  placePanel({ mesh: spectrum.mesh }, pose(SCREENS.spectrum));
+  screens.add(spectrum.mesh);
+  interactive.add(spectrum.mesh);
+  disposers.push(spectrum);
+
   /* ---- the visits on the Earth's orbit ------------------------------ */
   const slots = () => st.entries.map((e) => ({
     frame: e.frame, status: e.status, visit: sky.visits.find((v) => v.frame === e.frame) ?? null,
@@ -293,6 +304,9 @@ export function openFieldVR(target, env) {
     else if (id === 'flip') flip();
     else if (id === 'bring') env.onBring?.();
     else if (id === 'wise') showWise();
+    // Another band or another size is another field: opened again, the site's way.
+    else if (id === 'band' && data !== band) env.onReopen?.({ ...target, band: data });
+    else if (id === 'fov' && Number(data) !== fov) env.onReopen?.({ ...target, fov: Number(data) });
   }
 
   function setMode(mode) {
@@ -300,7 +314,49 @@ export function openFieldVR(target, env) {
     st.mode = mode;
     sky.setMode(mode);
     play(mode === 'blink');
+    if (mode === 'stack') refreshStack();
     afterVisitChange(true);
+  }
+
+  /*
+   * Stack: the season of the visit on the screen, in its band, added up as
+   * the site adds it (stack.js): the visits nearest it in that season, those
+   * not read yet read now, for the stack alone.
+   */
+  const stackAsked = new Set();
+  function refreshStack() {
+    const v = sky.current;
+    if (!v || st.mode !== 'stack') return;
+    const chunks = seasonChunks(groupVisits(st.frames, { ra, dec, band: v.frame.band }));
+    const at = chunkAt(chunks, v.frame.mjd);
+    const planned = at >= 0 ? forStack(chunks[at], v.frame) : [v.frame];
+    sky.setStack(planned.map((f) => f.url));
+    st.stackN = planned.length;
+    const have = new Set([...sky.visits, ...sky.extra.values()].map((x) => x.frame.url));
+    const missing = planned.filter((f) => !have.has(f.url) && !stackAsked.has(f.url));
+    for (const f of missing) stackAsked.add(f.url);
+    inPool(missing, 2, async (frame) => {
+      if (signal.aborted) return;
+      try {
+        const stamp = await readStamp(toS3(frame.url), grid, { signal });
+        if (stamp && !signal.aborted) sky.addExtra(frame, stamp);
+      } catch { /* one visit fewer is still a stack */ }
+      if (!signal.aborted && st.mode === 'stack') { sky.draw(); drawSide(); }
+    });
+    drawSide();
+  }
+
+  /** In the stack a step is a season: the first read visit of the next season each way. */
+  function stackStep(d) {
+    const v = sky.current;
+    if (!v) return sky.index;
+    const chunks = seasonChunks(groupVisits(st.frames, { ra, dec, band: v.frame.band }));
+    const at = chunkAt(chunks, v.frame.mjd);
+    for (let c = at + d; at >= 0 && c >= 0 && c < chunks.length; c += d) {
+      const k = sky.visits.findIndex((x) => x.frame.band === v.frame.band && chunkAt(chunks, x.frame.mjd) === c);
+      if (k >= 0) return k;
+    }
+    return sky.index;
   }
 
   function play(on) {
@@ -312,6 +368,9 @@ export function openFieldVR(target, env) {
     if (!sky.visits.length) return;
     if (st.mode === 'wipe' || st.mode === 'difference') {
       sky.setAB(null, ((sky.b + d) % sky.visits.length + sky.visits.length) % sky.visits.length);
+    } else if (st.mode === 'stack') {
+      sky.setIndex(stackStep(d));
+      refreshStack();
     } else {
       if (st.mode === 'blink') { st.mode = 'single'; sky.setMode('single'); play(false); }
       sky.setIndex(sky.index + d);
@@ -366,6 +425,7 @@ export function openFieldVR(target, env) {
     sky.marks.push({ ra: mra, dec: mdec, obsId: v?.frame.obsId ?? null, track: a.track, analysis: a, known: null });
     while (sky.marks.length > 5) sky.marks.shift();
     sky.draw();
+    spectrum.show({ ra: mra, dec: mdec, visits: sky.visits.slice(), sky, signal });
     const lines = [];
     if (a.kind === 'saturated') lines.push({ text: tv('vr.markSat'), tone: 'counter' });
     else if (!a.seen) lines.push({ text: tv('vr.markNone'), tone: 'neutral' });
@@ -447,17 +507,25 @@ export function openFieldVR(target, env) {
         ['mode', t('mode.single'), { data: 'single', on: st.mode === 'single' }],
         ['prev', '‹', {}],
         ['next', '›', {}],
+        ...(st.more ? [] : [['more', tv('vr.more'), {}]]),
+        ['flip', st.flipped ? tv('vr.screensFront') : tv('vr.depthFront'), {}],
+        // "More": the other modes on a second row, the band and the field's size on a third.
         ...(st.more ? [
+          ['break'],
           ['mode', t('mode.wipe'), { data: 'wipe', on: st.mode === 'wipe' && !sky.useRef }],
           ['mode', t('mode.diff'), { data: 'difference', on: st.mode === 'difference' }],
+          ['mode', t('mode.stack'), { data: 'stack', on: st.mode === 'stack' }],
           ...(target.target?.pmRA != null ? [['wise', tv('vr.wise'), { on: st.mode === 'wipe' && sky.useRef }]] : []),
           ['more', tv('vr.less'), {}],
-        ] : [['more', tv('vr.more'), {}]]),
-        ['flip', st.flipped ? tv('vr.screensFront') : tv('vr.depthFront'), {}],
-      ].map(([id, label, opts]) => ({ id, label, opts, w: size(label) }));
+          ['break'],
+          ...['all', ...bandsPresent(st.frames)].map((b) => ['band', b === 'all' ? t('field.bandAll') : b, { data: b, on: band === b }]),
+          ...FOV_SIZES.map((f) => ['fov', `${fmt(f * 60, 0)}′`, { data: String(f), on: Math.abs(fov - f) < 1e-6 }]),
+        ] : []),
+      ].map(([id, label, opts]) => ({ id, label, opts: opts ?? {}, w: id === 'break' ? 0 : size(label) }));
       const rows = [[]];
       let used = pad;
       for (const c of chips) {
+        if (c.id === 'break') { if (rows.at(-1).length) rows.push([]); used = pad; continue; }
         if (used + c.w + pad > W && rows.at(-1).length) { rows.push([]); used = pad; }
         rows.at(-1).push(c);
         used += c.w + 10;
@@ -596,6 +664,15 @@ export function openFieldVR(target, env) {
       }
       y += 12;
 
+      // The stack: how many visits of the season are added.
+      if (st.mode === 'stack') {
+        ctx.font = body;
+        ctx.fillStyle = look.accent;
+        const v = sky.current;
+        const n = sky.stackMembers().length;
+        y = wrapText(ctx, t('mode.stackHintNoDepth', { n, band: v?.frame.band ?? '' }), x, y, w, lh, 4) + 12;
+      }
+
       // The AllWISE comparison, when it is on the screen.
       if (st.wise && target.target?.pmRA != null) {
         ctx.font = body;
@@ -701,6 +778,7 @@ export function openFieldVR(target, env) {
       return;
     }
     if (signal.aborted) return;
+    st.frames = frames;
     st.all = groupVisits(frames, { ra, dec, band });
     const chosen = spread(st.all, VISITS).sort((p, q) => p.mjd - q.mjd);
     st.entries = chosen.map((frame) => ({ frame, status: 'pending' }));
