@@ -481,11 +481,28 @@ body { font-size: var(--text-base); line-height: 1.5; }
 
 .cand {
   border-inline-start: 0; border-radius: var(--radius-md);
-  padding: var(--space-xs) var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
   background: var(--color-paper-2);
 }
 .cand:has(.cand__where[data-known="false"]) { background: var(--color-accent-wash); }
 .cand__where, .mark__call { font-family: var(--font-body); font-weight: 600; }
+/* A known body caught in one visit: its name and "Show" on one row, the
+   figures under them, each figure kept whole when the line wraps. */
+.cand--row { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; column-gap: var(--space-sm); }
+.cand--row .cand__where { grid-column: 1; grid-row: 1; font-size: var(--text-base); }
+.cand--row .cand__go { grid-column: 2; grid-row: 1; justify-self: end; margin-inline: 0 calc(-1 * var(--space-xs)); padding-inline: var(--space-xs); }
+.cand--row .cand__rate { grid-column: 1 / -1; margin: 0; font-family: var(--font-mono); color: var(--color-neutral); }
+/* Rows folded under "N more": the height eases open and shut. */
+.fold { --fold-gap: var(--space-2xs); list-style: none; display: grid; justify-items: start; }
+.fold__body { display: grid; grid-template-rows: 0fr; justify-self: stretch; transition: grid-template-rows var(--dur-short) var(--ease-out); }
+.fold[data-open="true"] > .fold__body { grid-template-rows: 1fr; }
+.fold__inner { min-block-size: 0; overflow: hidden; margin: 0; }
+/* The rows unfold one list-gap below the rows above them, and are clipped while folded. */
+.fold__inner > :first-child { margin-block-start: var(--fold-gap); }
+.fold__toggle { margin-block-start: var(--space-2xs); margin-inline-start: calc(-1 * var(--space-xs)); padding-inline: var(--space-xs); color: var(--color-accent); font-size: var(--text-sm); }
+.cands > .fold { --fold-gap: 0px; }
+.archives__list { display: grid; }
+@media (prefers-reduced-motion: reduce) { .fold__body { transition: none; } }
 .cands__head { font-family: var(--font-body); font-weight: 600; }
 .mark__n { border: 0; background: var(--color-paper-3); color: var(--color-ink); }
 

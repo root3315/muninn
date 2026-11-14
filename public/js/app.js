@@ -865,6 +865,47 @@ function caughtAsteroids() {
  * of "probably nothing" drowned the one that mattered; they share one card,
  * one explanation, and a date to go and look at each.
  */
+/** Whether the known bodies past the first three are unfolded; kept while the list is rebuilt. */
+let flashesOpen = false;
+let foldSeq = 0;
+
+/**
+ * Rows past the first few, folded under a press that says how many: "3 more
+ * ▾" opens them with the height easing open, "Show less ▴" folds them again.
+ * `outer` is the element that sits in the list ('li' in a list, 'div'
+ * beside a dl), `inner` the list the rows go into, with `innerClass`.
+ */
+function foldBlock(items, { outer = 'li', inner = 'ul', innerClass = '', more, less, open = false, onToggle }) {
+  const box = document.createElement(outer);
+  box.className = 'fold';
+  const body = document.createElement('div');
+  body.className = 'fold__body';
+  body.id = `fold-${++foldSeq}`;
+  const list = document.createElement(inner);
+  list.className = `fold__inner ${innerClass}`.trim();
+  list.append(...items);
+  body.append(list);
+  const press = document.createElement('button');
+  press.type = 'button';
+  press.className = 'link fold__toggle';
+  press.setAttribute('aria-controls', body.id);
+  const set = (on) => {
+    box.dataset.open = String(on);
+    press.setAttribute('aria-expanded', String(on));
+    press.textContent = on ? less : more;
+    // Folded rows are out of the tab order and out of a screen reader's way.
+    list.inert = !on;
+  };
+  set(open);
+  press.addEventListener('click', () => {
+    const on = box.dataset.open !== 'true';
+    set(on);
+    onToggle?.(on);
+  });
+  box.append(body, press);
+  return box;
+}
+
 function renderFlashes(found) {
   const list = $('flash-list');
   const head = $('flash-head');
@@ -893,65 +934,48 @@ function renderFlashes(found) {
     return v ? dateLabel(v.frame.iso) : '';
   };
 
-  // The brightest few get a card; a busy field can catch a dozen, and a
-  // dozen cards push everything else off the panel.
-  const CARDS = 4;
-  for (const c of caught.slice(0, CARDS)) {
+  // One compact row each, the brightest three in view and the rest folded
+  // under "N more": a busy field catches a dozen, and a dozen tall cards
+  // pushed everything else off the panel.
+  const SHOWN = 3;
+  const row = (c) => {
     const v = sky.visits.find((x) => x.frame.obsId === c.obsId);
     const o = c.object;
     const li = document.createElement('li');
-    li.className = 'cand';
+    li.className = 'cand cand--row';
 
     const title = document.createElement('p');
     title.className = 'cand__where';
     title.dataset.known = 'true';
     title.textContent = c.catalog.name;
 
-    // When and in what light; how bright SkyBoT expects it; and how fast it
-    // was going, which is why it is gone by the next visit.
-    const when = document.createElement('p');
-    when.className = 'cand__rate num';
-    const bits = [dateOf(c), v?.frame.band ?? ''];
-    if (Number.isFinite(o.mag)) bits.push(`V ${fmt(o.mag, 1)}ᵐ`);
-    const speed = Math.hypot(o.dRA, o.dDec);
-    if (Number.isFinite(speed) && speed > 0) bits.push(t('overlay.rate', { rate: fmt(speed, speed < 10 ? 1 : 0) }));
-    bits.push(`${fmt(c.snr, 0)}σ`);
-    when.textContent = bits.filter(Boolean).join(' · ');
-
     const go = document.createElement('button');
     go.type = 'button';
     go.className = 'link cand__go';
     go.textContent = t('hunt.flashShow');
-    // Four buttons all called "Show" are one name to a screen reader.
+    // Buttons all called "Show" are one name to a screen reader.
     go.setAttribute('aria-label', `${t('hunt.flashShow')}: ${c.catalog.name}`);
     go.addEventListener('click', () => showFlash(c));
 
-    li.append(title, when, go);
-    list.append(li);
-  }
+    // When and in what light; how bright SkyBoT expects it; and how fast it
+    // was going, which is why it is gone by the next visit.
+    const bits = [dateOf(c), v?.frame.band ?? ''].filter(Boolean).map((text) => ({ text }));
+    if (Number.isFinite(o.mag)) bits.push({ text: `V ${fmt(o.mag, 1)}ᵐ` });
+    const speed = Math.hypot(o.dRA, o.dDec);
+    if (Number.isFinite(speed) && speed > 0) bits.push({ text: t('overlay.rate', { rate: fmt(speed, speed < 10 ? 1 : 0) }) });
+    bits.push({ text: `${fmt(c.snr, 0)}σ`, key: true });
 
-  const rest = caught.slice(CARDS);
-  if (rest.length) {
-    const li = document.createElement('li');
-    li.className = 'cand';
-    const title = document.createElement('p');
-    title.className = 'cand__where';
-    title.dataset.known = 'true';
-    title.textContent = t('hunt.caughtMore', { n: rest.length });
-    const names = document.createElement('p');
-    names.className = 'cand__dates';
-    for (const c of rest) {
-      const go = document.createElement('button');
-      go.type = 'button';
-      go.className = 'link cand__go';
-      go.textContent = c.catalog.name;
-      go.title = dateOf(c);
-      go.addEventListener('click', () => showFlash(c));
-      names.append(go);
-    }
-    li.append(title, names);
-    list.append(li);
-  }
+    li.append(title, go, factsLine(bits, 'cand__rate'));
+    return li;
+  };
+  for (const c of caught.slice(0, SHOWN)) list.append(row(c));
+
+  const rest = caught.slice(SHOWN);
+  if (rest.length) list.append(foldBlock(rest.map(row), {
+    innerClass: 'cands',
+    more: t('hunt.caughtMore', { n: rest.length }), less: t('fold.less'), open: flashesOpen,
+    onToggle: (open) => { flashesOpen = open; },
+  }));
 
   if (unnamed.length) {
     const li = document.createElement('li');
@@ -4745,20 +4769,18 @@ async function loadArchives(signal) {
 }
 
 /** Eight archives by size at first, each with its count and its years; the rest one press away. */
+const ARCHIVES_SHOWN = 8;
 let archivesAll = false;
 function renderArchives() {
   const box = $('archives');
   if (!box) return;
   box.hidden = archives === null;
   const list = Array.isArray(archives) ? archives : [];
-  // The list shows eight; the count says how many there are, and that.
-  const cut = list.length > 8 && !archivesAll;
-  $('archives-count').textContent = !list.length ? ''
-    : cut ? t('archives.of', { shown: 8, n: list.length }) : String(list.length);
+  $('archives-count').textContent = list.length ? String(list.length) : '';
   $('archives-note').textContent = archives === 'asking' ? t('archives.asking')
     : archives === 'failed' ? t('archives.failed')
       : list.length ? t('archives.lede') : t('archives.none');
-  const rows = (cut ? list.slice(0, 8) : list).map((a) => {
+  const rows = list.map((a) => {
     const row = document.createElement('div');
     const dt = document.createElement('dt');
     // Each name opens that collection's observations of this field at CADC.
@@ -4776,23 +4798,17 @@ function renderArchives() {
     row.append(dt, dd);
     return row;
   });
-  if (cut) {
-    // The ones left out, named by how many, and shown on a press.
-    const more = document.createElement('button');
-    more.type = 'button';
-    more.className = 'link archives__more';
-    more.textContent = t('archives.more', { n: list.length - 8 });
-    more.addEventListener('click', () => {
-      archivesAll = true;
-      renderArchives();
-      // The button is gone: the keyboard goes on to the first archive it showed.
-      $('archives-list').querySelectorAll('.archives__go')[8]?.focus();
-    });
-    const row = document.createElement('div');
-    row.append(more);
-    rows.push(row);
+  // Eight in view; the rest fold under a press that says how many, and fold
+  // away again under "Show less".
+  $('archives-list').replaceChildren(...rows.slice(0, ARCHIVES_SHOWN));
+  box.querySelector('.archives__list > .fold')?.remove();
+  if (rows.length > ARCHIVES_SHOWN) {
+    $('archives-list').after(foldBlock(rows.slice(ARCHIVES_SHOWN), {
+      outer: 'div', inner: 'dl', innerClass: 'facts',
+      more: t('archives.more', { n: rows.length - ARCHIVES_SHOWN }), less: t('fold.less'),
+      open: archivesAll, onToggle: (open) => { archivesAll = open; },
+    }));
   }
-  $('archives-list').replaceChildren(...rows);
   const link = $('archives-link');
   link.hidden = !list.length;
   if (archivesCircle) link.href = cadcSearchUrl(archivesCircle);
