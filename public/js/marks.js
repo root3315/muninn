@@ -646,8 +646,12 @@ export function peaksOf(analysis) {
   return new Map((analysis?.track ?? []).map((d) => [d.obsId, Math.max(d.flux ?? 0, 0)]));
 }
 
-/** The brightness range of a mark seen more than once, in words, or null. */
+/**
+ * The brightness range of a mark seen more than once, in words, or null. A
+ * saturated star has none: its verdict already says no brightness is quoted,
+ * and the clipped peak would read as a number ("6.9–6.9 AB").
+ */
 export function brightnessWords(a) {
-  if (!a?.brightness || !(a.seen > 1)) return null;
+  if (!a?.brightness || !(a.seen > 1) || a.kind === 'saturated') return null;
   return t('mark.brightness', { bright: fmt(a.brightness.brightest, 1), faint: fmt(a.brightness.faintest, 1), band: a.brightness.band });
 }
