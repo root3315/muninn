@@ -26,6 +26,10 @@ import { groupVisits, skybotCone, simbadFamily } from '../public/js/catalog.js';
 import { spread, VISITS_PER_BATCH } from '../public/js/visits.js';
 import { parseGaiaRow, cutToCap, magLimit, searchRadius, ROW_CAP } from '../public/js/overlay.js';
 import { parseVOTable } from '../public/js/votable.js';
+import { loadStamp } from '../public/js/stamp.js';
+import { TangentGrid } from '../public/js/wcs.js';
+import { toS3 } from '../public/js/catalog.js';
+import { stackDepth } from '../public/js/depth.js';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const BASE = process.env.BASE || 'http://127.0.0.1:5173';
@@ -62,6 +66,23 @@ async function bake(key) {
   const radiusDeg = searchRadius(g.widthDeg, g.heightDeg);
   const out = { key, ra, dec, made: new Date().toISOString().slice(0, 10), radiusDeg };
 
+  // How deep one visit goes, from the detector's own noise in the same
+  // visits the headset reads (field.js measure), so the number is there
+  // before the headset has read a frame.
+  try {
+    const gh = Math.min(768, Math.max(360, Math.round((((target.fov ?? 0.3) * 3600) / 6.15) * 2.5)));
+    const gw = Math.round(gh * ASPECT);
+    const grid = new TangentGrid(ra, dec, ((target.fov ?? 0.3) * gw) / gh, gw, gh);
+    const per = [];
+    for (const f of chosen) {
+      const stamp = await loadStamp(toS3(f.url), grid).catch(() => null);
+      const sigma = stamp?.meta?.detectorSigma;
+      if (sigma > 0) per.push({ band: f.band, sigma });
+    }
+    const d = per.length ? stackDepth(per) : null;
+    if (d) out.depth = { single: Number(d.single.toFixed(3)), band: d.band, n: d.n };
+  } catch (err) { console.warn(`  ${key}: depth: ${err.message}`); }
+
   try {
     const limit = magLimit(g.heightDeg);
     const body = await json(`${BASE}/api/tap?cat=gaia&ra=${ra.toFixed(6)}&dec=${dec.toFixed(6)}&r=${radiusDeg.toFixed(6)}&top=${ROW_CAP + 1}&mag=${limit.toFixed(2)}`);
@@ -72,6 +93,8 @@ async function bake(key) {
     const q = new URLSearchParams({
       '-source': 'I/352/gedr3dis', '-c': `${ra.toFixed(6)} ${dec >= 0 ? '+' : ''}${dec.toFixed(6)}`,
       '-c.rd': radiusDeg.toFixed(4), '-out': 'Source,rgeo,b_rgeo,B_rgeo', '-out.max': '2000',
+      // Nearest the field's centre first, so a cut list loses its edge and not its middle.
+      '-out.add': '_r', '-sort': '_r',
     });
     const res = await fetch(`https://vizier.cfa.harvard.edu/viz-bin/votable?${q}`, { headers: UA, signal: AbortSignal.timeout(90_000) });
     const { status, message, rows } = parseVOTable(await res.text());
@@ -104,7 +127,7 @@ async function bake(key) {
   const dir = join(ROOT, 'public/data/vr');
   await mkdir(dir, { recursive: true });
   await writeFile(join(dir, `${key}.json`), `${JSON.stringify(out)}\n`);
-  console.log(`  ${key}: gaia ${out.gaia?.rows.length ?? '—'}, bj ${out.bj?.length ?? '—'}, galaxies ${out.galaxies?.length ?? '—'}, bodies at ${Object.keys(out.bodies).length} of ${chosen.length} visits`);
+  console.log(`  ${key}: depth ${out.depth?.single ?? '—'}, gaia ${out.gaia?.rows.length ?? '—'}, bj ${out.bj?.length ?? '—'}, galaxies ${out.galaxies?.length ?? '—'}, bodies at ${Object.keys(out.bodies).length} of ${chosen.length} visits`);
 }
 
 for (const key of keys) {

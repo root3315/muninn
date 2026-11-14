@@ -12,6 +12,7 @@
  */
 
 import { LAYOUT } from './layout.js';
+import { propagate, GAIA_EPOCH } from '../overlay.js';
 
 const D2R = Math.PI / 180;
 
@@ -91,8 +92,11 @@ export function redshiftDistanceMpc(z, { h0 = 67.7, omegaM = 0.31 } = {}) {
   return (C_KMS / h0) * (step / 3) * sum;
 }
 
-/** Below this redshift a galaxy's own motion swamps the expansion: no distance from z. */
-export const MIN_REDSHIFT = 0.003;
+/**
+ * Below this redshift a galaxy's own motion (a few hundred km/s) is a large
+ * part of its recession: no distance from z.
+ */
+export const MIN_REDSHIFT = 0.01;
 
 /**
  * How much a body `au` away shifts against the stars between two places of
@@ -104,14 +108,54 @@ export const parallaxShiftArcmin = (baselineAU, au) => (Math.atan(baselineAU / a
 export const DEPTH_TICKS = [
   { au: 1, key: 'au1' },
   { au: 30, key: 'neptune' },
+  // The Oort cloud is a range, and is drawn as one: its two ends.
+  { au: 2e3, to: 1e5, key: 'oort' },
   { au: AU_PER_PC, key: 'pc1' },
-  { au: 1e3 * AU_PER_PC, key: 'kpc1' },
+  { au: 10 * AU_PER_PC, key: 'pc10' },
+  { au: 100 * AU_PER_PC, key: 'pc100' },
+  // The distance to Sagittarius A*, GRAVITY Collaboration 2019: 8.18 kpc.
+  { au: 8.2e3 * AU_PER_PC, key: 'gc' },
   { au: 1e6 * AU_PER_PC, key: 'mpc1' },
   { au: 1e8 * AU_PER_PC, key: 'mpc100' },
+  { au: 1e10 * AU_PER_PC, key: 'gpc10' },
 ];
 
-/** Where Planet X is predicted to be, in AU: the range the rest of the site works with (hunt.js). */
-export const PLANET_X_AU = [400, 800];
+/** Light-travel (lookback) time to a redshift, in billions of years, in the same flat ΛCDM. */
+export function lookbackGyr(z, { h0 = 67.7, omegaM = 0.31 } = {}) {
+  if (!(z > 0)) return null;
+  const e = (x) => Math.sqrt(omegaM * (1 + x) ** 3 + (1 - omegaM));
+  const f = (x) => 1 / ((1 + x) * e(x));
+  const n = 64;
+  const step = z / n;
+  let sum = f(0) + f(z);
+  for (let i = 1; i < n; i++) sum += (i % 2 ? 4 : 2) * f(i * step);
+  // 1/H0 in Gyr: 977.8 / H0[km/s/Mpc].
+  return (977.8 / h0) * (step / 3) * sum;
+}
+
+/**
+ * Where Planet X is predicted to be, in AU: Brown & Batygin (2021, AJ 162,
+ * 219) find a = 380 (+140/−80) AU, perihelion about 300 AU, a 6.2 Earth-mass
+ * planet; the shell runs from that perihelion to the far end of a's range.
+ */
+export const PLANET_X_AU = [300, 660];
+
+/**
+ * Its predicted brightness, V: 21.7 for the nominal 10 Earth masses at 700 AU,
+ * 24.3 for 5 Earth masses at aphelion (Linder & Mordasini 2016, A&A 589, A134).
+ */
+export const PLANET_X_V = { nominal: 21.7, faint: 24.3 };
+
+/** The band of ecliptic latitude Planet X's predicted orbits keep to, degrees. */
+export const PLANET_X_MAX_BETA = 21;
+
+/** Ecliptic latitude of an equatorial position (J2000), degrees. */
+export function eclipticLatitude(raDeg, decDeg) {
+  const e = 23.4393 * D2R;
+  const a = raDeg * D2R;
+  const d = decDeg * D2R;
+  return Math.asin(Math.sin(d) * Math.cos(e) - Math.cos(d) * Math.sin(e) * Math.sin(a)) / D2R;
+}
 
 /** Every power of ten across the scale, for a ring each. */
 export function decadeRings(scale = DEPTH_SCALE) {
@@ -158,4 +202,28 @@ export function fieldDirection(dEastDeg, dNorthDeg, frame, spread) {
     f[1] - a * r[1] + b * u[1],
     f[2] - a * r[2] + b * u[2],
   ];
+}
+
+/**
+ * The Gaia row that is the field's own target, or null. By its Gaia DR3
+ * source id when the target names one (`ref: 'Gaia DR3 <id>'`); otherwise
+ * only a source within `maxArcsec` of the target once both are carried to
+ * `epoch`, and moving within `pmTol` of the target's own motion. A
+ * neighbour half an arcminute away is not the target, whatever its distance.
+ */
+export function matchTarget(target, rows, epoch, { maxArcsec = 3, pmTol = 0.2 } = {}) {
+  const id = /^Gaia DR3\s+(\d+)$/.exec(String(target.ref ?? '').trim())?.[1];
+  if (id) return rows.find((r) => String(r.id) === id) ?? null;
+  const t = propagate(target, epoch, target.epoch ?? GAIA_EPOCH);
+  const pmT = Math.hypot(target.pmRA ?? NaN, target.pmDE ?? NaN);
+  const cos = Math.cos(t.dec * D2R);
+  for (const r of rows) {
+    const at = propagate(r, epoch, GAIA_EPOCH);
+    const dra = ((((at.ra - t.ra) % 360) + 540) % 360 - 180) * cos;
+    if (Math.hypot(dra, at.dec - t.dec) * 3600 > maxArcsec) continue;
+    const pmR = Math.hypot(r.pmRA ?? NaN, r.pmDE ?? NaN);
+    if (Number.isFinite(pmT) && pmT > 0 && !(Number.isFinite(pmR) && Math.abs(pmR - pmT) <= pmTol * pmT)) continue;
+    return r;
+  }
+  return null;
 }

@@ -139,6 +139,8 @@
         "epoch": 2000,
         "pmRA": -8123.7,
         "pmDE": 673.2,
+        "plx": 439.0,
+        "plxErr": 2.4,
         "ref": "Kirkpatrick et al. 2021, ApJS 253, 7"
       },
       "why": {
