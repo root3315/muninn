@@ -23,6 +23,7 @@ import { planetsNow } from './ephemeris.js';
 import { rankCandidates } from './hunt.js';
 import { searchField } from './huntcore.js';
 import { STAR_MAX_SHARE } from './sharpness.js';
+import { phoneNotHeadset } from './device.js';
 import { FRAME_FILE_MB } from './release.js';
 import { deadline, CATALOG_DEADLINE_MS } from './net.js';
 import { paint, rampFromToken, sortedFinite, limitsFromSorted } from './render.js';
@@ -5637,7 +5638,7 @@ let vrModule = null;
 let vrOpen = false;
 
 async function offerVR() {
-  if (!navigator.xr?.isSessionSupported) return;
+  if (!navigator.xr?.isSessionSupported || phoneNotHeadset(navigator.userAgent)) return;
   let ok = false;
   try { ok = await navigator.xr.isSessionSupported('immersive-vr'); } catch { /* no headset */ }
   if (!ok) return;
