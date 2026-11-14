@@ -104,3 +104,55 @@ test('text is sent compressed, and an unchanged file is a 304', async () => {
   const again = await get('/js/app.js', { headers: { 'if-none-match': plain.headers.get('etag') } });
   assert.equal(again.status, 304);
 });
+
+const IMMUTABLE_RE = /immutable/;
+async function pageTag() {
+  const html = await (await get('/')).text();
+  const tag = html.match(/js\/app\.js\?v=([0-9a-f]+)/)?.[1];
+  assert.ok(tag, 'the page names its code under a tag');
+  return tag;
+}
+
+test('only code under the current tag is kept for good, not the page or its data', async () => {
+  const tag = await pageTag();
+  assert.match((await get(`/js/app.js?v=${tag}`)).headers.get('cache-control'), IMMUTABLE_RE);
+  assert.doesNotMatch((await get(`/?v=${tag}`)).headers.get('cache-control'), IMMUTABLE_RE);
+  assert.doesNotMatch((await get(`/talk.html?v=${tag}`)).headers.get('cache-control'), IMMUTABLE_RE);
+  assert.doesNotMatch((await get(`/data/targets.json?v=${tag}`)).headers.get('cache-control'), IMMUTABLE_RE);
+  assert.doesNotMatch((await get('/js/app.js?v=0000000000')).headers.get('cache-control'), IMMUTABLE_RE);
+});
+
+test('code changed on disk is never kept under the tag from before the change', async () => {
+  const { stat, utimes } = await import('node:fs/promises');
+  const tag = await pageTag();
+  await get(`/js/app.js?v=${tag}`);
+  const file = fileURLToPath(new URL('../public/css/tokens.css', import.meta.url));
+  const { atime, mtime } = await stat(file);
+  try {
+    await utimes(file, atime, new Date(mtime.getTime() + 5000));
+    // At once, inside any recheck window: the old tag no longer names what is on disk.
+    assert.doesNotMatch((await get(`/css/tokens.css?v=${tag}`)).headers.get('cache-control'), IMMUTABLE_RE);
+    assert.doesNotMatch((await get(`/js/sky.js?v=${tag}`)).headers.get('cache-control'), IMMUTABLE_RE);
+    const fresh = await pageTag();
+    assert.notEqual(fresh, tag);
+    assert.match((await get(`/js/sky.js?v=${fresh}`)).headers.get('cache-control'), IMMUTABLE_RE);
+  } finally {
+    await utimes(file, atime, mtime);
+  }
+});
+
+test('a picture keeps its ETag across a code deploy', async () => {
+  const { stat, utimes } = await import('node:fs/promises');
+  const img = '/img/fields/atala.png';
+  assert.ok((await get(img)).ok);
+  const before = (await get(img)).headers.get('etag');
+  const file = fileURLToPath(new URL('../public/css/tokens.css', import.meta.url));
+  const { atime, mtime } = await stat(file);
+  try {
+    await utimes(file, atime, new Date(mtime.getTime() + 7000));
+    await pageTag();
+    assert.equal((await get(img)).headers.get('etag'), before);
+  } finally {
+    await utimes(file, atime, mtime);
+  }
+});

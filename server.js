@@ -749,7 +749,7 @@ async function serveStatic(pathname, req, res, asked = null) {
   const ext = extname(target);
   const headers = {
     'content-type': TYPES[ext] ?? 'application/octet-stream',
-    'cache-control': asked && asked === file.version ? IMMUTABLE : cachePolicy(rel),
+    'cache-control': await keptForGood(rel, asked, file) ? IMMUTABLE : cachePolicy(rel),
     etag: file.etag,
     vary: 'accept-encoding',
   };
@@ -775,15 +775,18 @@ async function loadStatic(target) {
   const info = await stat(target);
   if (!info.isFile()) throw new Error('not a file');
   const kept = staticCache.get(target);
-  if (kept && kept.mtimeMs === info.mtimeMs) return kept;
+  if (kept && kept.mtimeMs === info.mtimeMs && (!kept.version || kept.version === await codeVersion())) return kept;
 
-  const version = await codeVersion();
+  // Only what carries the tag inside it (the page and the code's imports)
+  // changes with it; a picture or a data file keeps its ETag across deploys.
+  const version = carriesTag(target) ? await codeVersion() : null;
   const raw = versioned(target, await readFile(target), version);
+  const stamp = `${info.size.toString(16)}-${Math.round(info.mtimeMs).toString(16)}`;
   const file = {
     mtimeMs: info.mtimeMs,
     raw,
     version,
-    etag: `"${info.size.toString(16)}-${Math.round(info.mtimeMs).toString(16)}-${version}"`,
+    etag: `"${version ? `${stamp}-${version}` : stamp}"`,
   };
   if (COMPRESSIBLE.has(extname(target))) {
     file.br = brotliCompressSync(raw, { params: { [zlib.BROTLI_PARAM_QUALITY]: 9 } });
@@ -813,11 +816,11 @@ let versionTag = null;
 let versionCheckedAt = 0;
 const VERSION_RECHECK_MS = 30_000;
 
-async function codeVersion() {
-  // Re-read now and then, so code copied in without a restart is not sent
-  // under the old tag as immutable; a new tag drops the files compressed
-  // under the old one.
-  if (versionTag && Date.now() - versionCheckedAt < VERSION_RECHECK_MS) return versionTag;
+async function codeVersion({ fresh = false } = {}) {
+  // Re-read now and then for the tag written into pages, so code copied in
+  // without a restart shows up; read afresh before anything is marked
+  // immutable (see keptForGood). A new tag drops what was built under the old.
+  if (!fresh && versionTag && Date.now() - versionCheckedAt < VERSION_RECHECK_MS) return versionTag;
   versionCheckedAt = Date.now();
   const before = versionTag;
   const hash = createHash('sha1');
@@ -828,8 +831,28 @@ async function codeVersion() {
     }
   }
   versionTag = hash.digest('hex').slice(0, 10);
-  if (before && before !== versionTag) staticCache.clear();
+  if (before && before !== versionTag) {
+    for (const [path, file] of staticCache) if (file.version) staticCache.delete(path);
+  }
   return versionTag;
+}
+
+const CODE_PATH = /^(?:js|css)\//;
+
+/** The files whose bytes have the tag written into them: the pages and the code under js/. */
+const carriesTag = (target) => extname(target) === '.html'
+  || (extname(target) === '.js' && target.startsWith(join(PUBLIC, 'js') + sep));
+
+/**
+ * Whether a response may be kept by the edge for a year: only the code, only
+ * under the tag of the code on disk right now (read afresh, not from the
+ * throttled copy, so a file changed a second ago is never kept under the tag
+ * from before it), and only the bytes built under that tag.
+ */
+async function keptForGood(rel, asked, file) {
+  if (!asked || !CODE_PATH.test(rel.replace(/\\/g, '/'))) return false;
+  const now = await codeVersion({ fresh: true });
+  return asked === now && (!file.version || file.version === now);
 }
 
 const PAGE_CODE = /((?:src|href)=")((?:js|css)\/[^"?#]+\.(?:js|css))"/g;
