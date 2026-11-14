@@ -181,6 +181,11 @@ VizieR (CDS Strasbourg), for which NASA has no equivalent; SkyBoT from IMCCE. Ea
 asked on its own: one that does not answer leaves the rest of the card standing, and the card
 names it. Muninn is not affiliated with NASA and adds nothing to the data it shows.
 
+Also used: distances by Bailer-Jones et al. 2021 (VizieR I/352) for the stars of the VR mode;
+the Lunar Reconnaissance Orbiter mosaic (NASA/GSFC/Arizona State University) for the Moon in the
+change to night; and the typefaces Unbounded, Onest and JetBrains Mono under the SIL Open Font
+License (`public/fonts/OFL.txt`).
+
 ### The challenge's Resources tab
 
 | resource | how Muninn uses it |

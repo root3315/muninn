@@ -548,8 +548,9 @@
 
 <!-- How to read this: a short deck of cards, each a picture first (most of
      them real SPHEREx frames from the talk), a one-line claim, then a couple
-     of sentences. The pictures move only while their card is on screen, and
-     not at all for a visitor who asked for less motion. -->
+     of sentences. Each picture plays once when its card is first shown and
+     then answers the hand: a press, a drag, a toggle. Nothing loops but the
+     blink, and nothing moves for a visitor who asked for less motion. -->
 <dialog class="sheet read" id="about" aria-labelledby="about-title">
   <header class="read__bar">
     <h2 class="sheet__title read__title" id="about-title" tabindex="-1" autofocus data-i18n="about.title"></h2>
@@ -562,44 +563,67 @@
     <ol class="read__steps">
 
       <li class="read__step" id="read-sky">
-        <figure class="read__art art-sky" aria-hidden="true">
-          <svg viewBox="0 0 240 150">
-            <defs>
-              <clipPath id="art-sky-clip"><ellipse cx="120" cy="62" rx="104" ry="52"/></clipPath>
-              <pattern id="art-sky-ticks" width="2" height="10" patternUnits="userSpaceOnUse"><rect width="1.2" height="10" fill="#fff"/></pattern>
-              <mask id="art-sky-mask"><rect x="18" y="124" width="204" height="10" fill="url(#art-sky-ticks)"/></mask>
-              <linearGradient id="art-sky-spec">
-                <stop offset="0" class="hue-d1"/><stop offset="0.15" class="hue-d2"/><stop offset="0.3" class="hue-d3"/>
-                <stop offset="0.56" class="hue-d4"/><stop offset="0.79" class="hue-d5"/><stop offset="1" class="hue-d6"/>
-              </linearGradient>
-            </defs>
-            <g clip-path="url(#art-sky-clip)">
-              <rect class="art-sky__done" x="16" y="8" width="208" height="108"/>
-              <rect class="art-sky__beam" x="14" y="8" width="5" height="108"/>
-            </g>
-            <ellipse class="art__line" cx="120" cy="62" rx="104" ry="52"/>
-            <path class="art__faint" d="M16 62h208M120 10v104M68 15c-18 28-18 66 0 94M172 15c18 28 18 66 0 94"/>
-            <rect x="18" y="124" width="204" height="10" fill="url(#art-sky-spec)" mask="url(#art-sky-mask)"/>
-            <text class="art__num" x="18" y="147">0.75 µm</text>
-            <text class="art__num art__num--hi" x="120" y="147" text-anchor="middle">102</text>
-            <text class="art__num" x="222" y="147" text-anchor="end">5 µm</text>
-          </svg>
+        <figure class="read__art art-sky" data-d="3">
+          <div class="art-sky__ruler" role="slider" tabindex="0" aria-valuemin="1" aria-valuemax="102" aria-valuenow="41" data-i18n-label="about.skyLabel">
+            <svg viewBox="0 0 240 150" aria-hidden="true">
+              <defs>
+                <linearGradient id="art-sky-g1"><stop offset="0" class="hue-d1"/><stop offset="1" class="hue-d2"/></linearGradient>
+                <linearGradient id="art-sky-g2"><stop offset="0" class="hue-d2"/><stop offset="1" class="hue-d3"/></linearGradient>
+                <linearGradient id="art-sky-g3"><stop offset="0" class="hue-d3"/><stop offset="1" class="hue-d4"/></linearGradient>
+                <linearGradient id="art-sky-g4"><stop offset="0" class="hue-d4"/><stop offset="1" class="hue-d5"/></linearGradient>
+                <linearGradient id="art-sky-g5"><stop offset="0" class="hue-d5"/><stop offset="1" class="hue-d6"/></linearGradient>
+                <linearGradient id="art-sky-g6"><stop offset="0" class="hue-d6"/><stop offset="1" class="hue-d6"/></linearGradient>
+              </defs>
+              <!-- The focal plane: six detectors, the wavelength sliding across each. -->
+              <g class="art-sky__plane">
+                <rect class="art-sky__det" data-d="1" x="14" y="8" width="32" height="32" rx="2" fill="url(#art-sky-g1)"/>
+                <rect class="art-sky__det" data-d="2" x="50" y="8" width="32" height="32" rx="2" fill="url(#art-sky-g2)"/>
+                <rect class="art-sky__det" data-d="3" x="86" y="8" width="32" height="32" rx="2" fill="url(#art-sky-g3)"/>
+                <rect class="art-sky__det" data-d="4" x="14" y="44" width="32" height="32" rx="2" fill="url(#art-sky-g4)"/>
+                <rect class="art-sky__det" data-d="5" x="50" y="44" width="32" height="32" rx="2" fill="url(#art-sky-g5)"/>
+                <rect class="art-sky__det" data-d="6" x="86" y="44" width="32" height="32" rx="2" fill="url(#art-sky-g6)"/>
+                <g class="art__num art-sky__dnames" text-anchor="middle">
+                  <text x="30" y="27">D1</text><text x="66" y="27">D2</text><text x="102" y="27">D3</text>
+                  <text x="30" y="63">D4</text><text x="66" y="63">D5</text><text x="102" y="63">D6</text>
+                </g>
+                <rect class="art-sky__chan" x="0" y="0" width="1.4" height="32"/>
+              </g>
+              <!-- The whole sky, about every six months: two half-year passes. -->
+              <g class="art-sky__year">
+                <path class="art-sky__half art-sky__half--1" d="M146 42a34 26 0 0 1 68 0"/>
+                <path class="art-sky__half art-sky__half--2" d="M214 46a34 26 0 0 1-68 0"/>
+                <text class="art__num" x="180" y="11" text-anchor="middle">I</text>
+                <text class="art__num" x="180" y="82" text-anchor="middle">II</text>
+                <text class="art__num art-sky__twice" x="180" y="47" text-anchor="middle" data-i18n="about.skyTwice"></text>
+              </g>
+              <!-- The 0.75–5 µm ruler: six brackets of 17 channels. -->
+              <g class="art-sky__brackets"></g>
+              <path class="art-sky__ticks"/>
+              <path class="art__line" d="M14 124h212"/>
+              <g class="art-sky__cursor"><path d="M0 104v26"/><path class="art-sky__nib" d="M-3.5 101h7l-3.5 4z"/></g>
+              <text class="art__num" x="14" y="142" data-i18n="about.skyLo"></text>
+              <text class="art__num" x="226" y="142" text-anchor="end" data-i18n="about.skyHi"></text>
+            </svg>
+          </div>
+          <p class="art__readout num art-sky__read" aria-hidden="true"></p>
         </figure>
         <div class="read__text">
           <p class="read__n num">01</p>
           <h3 class="read__h" data-i18n="about.skyH"></h3>
           <p data-i18n="about.skyP"></p>
+          <p class="read__src" data-i18n="about.skyTry"></p>
         </div>
       </li>
 
       <li class="read__step" id="read-blink">
-        <figure class="read__art art-blink" aria-hidden="true">
-          <div class="art__plate">
-            <span class="art__img art__img--atala-a"></span>
-            <span class="art__img art__img--atala-b art-blink__b"></span>
-          </div>
+        <figure class="read__art art-blink">
+          <button type="button" class="art__plate art__press art-blink__plate" aria-pressed="false" data-i18n-label="about.blinkHold">
+            <img class="art__img" src="img/talk/read-atala-a.webp" width="514" height="322" alt="" decoding="async" loading="lazy">
+            <img class="art__img art-blink__b" src="img/talk/read-atala-b.webp" width="514" height="322" alt="" decoding="async" loading="lazy">
+          </button>
           <p class="art__tags num">
             <span class="art__tag art__tag--a art-blink__ta">A · 25.12.2025</span>
+            <span class="art__hint" data-i18n="about.blinkHold"></span>
             <span class="art__tag art__tag--b art-blink__tb">B · 01.01.2026</span>
           </p>
         </figure>
@@ -611,83 +635,61 @@
         </div>
       </li>
 
-      <li class="read__step" id="read-modes">
-        <figure class="read__art art-modes" aria-hidden="true">
-          <div class="art__plate">
-            <span class="art__img art__img--atala-a"></span>
-            <span class="art__img art__img--atala-b art-modes__b"></span>
-            <span class="art__img art__img--atala-b art-modes__wipe"></span>
-            <span class="art-modes__divider"></span>
-            <span class="art__img art__img--atala-diff art-modes__diff"></span>
-            <span class="art__img art__img--atala-stack art-modes__stack"></span>
+      <li class="read__step" id="read-north">
+        <figure class="read__art art-north">
+          <div class="art-north__stage">
+            <span class="art-north__ghost"></span>
+            <span class="art-north__frame"><img class="art-north__img" src="img/talk/read-atala-a.webp" width="514" height="322" alt="" decoding="async" loading="lazy"></span>
+            <svg class="art-north__rose" viewBox="0 0 40 40" aria-hidden="true"><path d="M32 32H14M32 32V12"/><text x="32" y="9" text-anchor="middle">N</text><text x="8" y="35" text-anchor="middle">E</text></svg>
           </div>
-          <ul class="art__chips art-modes__chips">
-            <li data-i18n="mode.blink"></li>
-            <li data-i18n="mode.wipe"></li>
-            <li data-i18n="mode.diff"></li>
-            <li data-i18n="mode.single"></li>
-            <li data-i18n="mode.stack"></li>
-          </ul>
+          <div class="art__chips" role="group">
+            <button type="button" class="art__chip art-north__raw" aria-pressed="false" data-i18n="about.northRaw"></button>
+            <button type="button" class="art__chip art-north__up" aria-pressed="true" data-i18n="about.northUp"></button>
+          </div>
         </figure>
         <div class="read__text">
           <p class="read__n num">03</p>
-          <h3 class="read__h" data-i18n="about.modesH"></h3>
-          <p data-i18n="about.modesP"></p>
-          <p class="read__src" data-i18n="about.modesSrc"></p>
-        </div>
-      </li>
-
-      <li class="read__step" id="read-north">
-        <figure class="read__art art-north" aria-hidden="true">
-          <div class="art-north__stage">
-            <span class="art-north__ghost"></span>
-            <span class="art-north__frame"><span class="art-north__img"></span></span>
-            <svg class="art-north__rose" viewBox="0 0 40 40"><path d="M32 32H14M32 32V12"/><text x="32" y="9" text-anchor="middle">N</text><text x="8" y="35" text-anchor="middle">E</text></svg>
-          </div>
-        </figure>
-        <div class="read__text">
-          <p class="read__n num">04</p>
           <h3 class="read__h" data-i18n="about.northH"></h3>
           <p data-i18n="about.northP"></p>
         </div>
       </li>
 
+      <li class="read__step" id="read-modes">
+        <figure class="read__art art-modes" data-mode="wipe">
+          <div class="art__plate art-wipe art-modes__plate">
+            <img class="art__img art-modes__a" src="img/talk/read-atala-a.webp" width="514" height="322" alt="" decoding="async" loading="lazy">
+            <img class="art__img art-modes__b" src="img/talk/read-atala-b.webp" width="514" height="322" alt="" decoding="async" loading="lazy">
+            <span class="art-wipe__clip art-modes__wipe"><img class="art__img art-wipe__inner" src="img/talk/read-atala-b.webp" width="514" height="322" alt="" decoding="async" loading="lazy"></span>
+            <span class="art-wipe__divider" role="slider" tabindex="0" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" data-i18n-label="about.wipeLabel"></span>
+            <img class="art__img art-modes__diff" src="img/talk/read-atala-diff.webp" width="514" height="322" alt="" decoding="async" loading="lazy">
+            <img class="art__img art-modes__stack" src="img/talk/read-atala-stack.webp" width="514" height="322" alt="" decoding="async" loading="lazy">
+          </div>
+          <fieldset class="art__chips art-modes__chips">
+            <legend class="visually-hidden" data-i18n="about.modesH"></legend>
+            <label class="art__chip"><input type="radio" name="art-mode" value="blink"><span data-i18n="mode.blink"></span></label>
+            <label class="art__chip"><input type="radio" name="art-mode" value="wipe" checked><span data-i18n="mode.wipe"></span></label>
+            <label class="art__chip"><input type="radio" name="art-mode" value="diff"><span data-i18n="mode.diff"></span></label>
+            <label class="art__chip"><input type="radio" name="art-mode" value="single"><span data-i18n="mode.single"></span></label>
+            <label class="art__chip"><input type="radio" name="art-mode" value="stack"><span data-i18n="mode.stack"></span></label>
+          </fieldset>
+        </figure>
+        <div class="read__text">
+          <p class="read__n num">04</p>
+          <h3 class="read__h" data-i18n="about.modesH"></h3>
+          <p data-i18n="about.modesP"></p>
+          <p data-i18n="about.modesColour"></p>
+          <p class="read__src" data-i18n="about.modesSrc"></p>
+        </div>
+      </li>
+
       <li class="read__step" id="read-run">
-        <figure class="read__art art-run" aria-hidden="true">
-          <svg viewBox="0 0 240 132">
-            <g class="art-run__frames">
-              <rect x="8" y="10" width="34" height="24" rx="3"/><rect x="46" y="10" width="34" height="24" rx="3"/>
-              <rect x="84" y="10" width="34" height="24" rx="3"/><rect x="122" y="10" width="34" height="24" rx="3"/>
-              <rect x="160" y="10" width="34" height="24" rx="3"/><rect x="198" y="10" width="34" height="24" rx="3"/>
-            </g>
-            <rect class="art-run__head" x="6" y="8" width="38" height="28" rx="4"/>
-            <g class="art-run__grid">
-              <use href="#art-run-cells" x="8"/><use href="#art-run-cells" x="46"/><use href="#art-run-cells" x="84"/>
-              <use href="#art-run-cells" x="122"/><use href="#art-run-cells" x="160"/><use href="#art-run-cells" x="198"/>
-            </g>
-            <defs>
-              <g id="art-run-cells">
-                <rect x="0" y="42" width="6.4" height="6"/><rect x="6.9" y="42" width="6.4" height="6"/><rect x="13.8" y="42" width="6.4" height="6"/><rect x="20.7" y="42" width="6.4" height="6"/><rect x="27.6" y="42" width="6.4" height="6"/>
-                <rect x="0" y="48.5" width="6.4" height="6"/><rect x="6.9" y="48.5" width="6.4" height="6"/><rect x="13.8" y="48.5" width="6.4" height="6"/><rect x="20.7" y="48.5" width="6.4" height="6"/><rect x="27.6" y="48.5" width="6.4" height="6"/>
-                <rect x="0" y="55" width="6.4" height="6"/><rect x="6.9" y="55" width="6.4" height="6"/><rect x="13.8" y="55" width="6.4" height="6"/><rect x="20.7" y="55" width="6.4" height="6"/><rect x="27.6" y="55" width="6.4" height="6"/>
-                <rect x="0" y="61.5" width="6.4" height="6"/><rect x="6.9" y="61.5" width="6.4" height="6"/><rect x="13.8" y="61.5" width="6.4" height="6"/><rect x="20.7" y="61.5" width="6.4" height="6"/><rect x="27.6" y="61.5" width="6.4" height="6"/>
-              </g>
-            </defs>
-            <rect class="art-run__hot" x="142.7" y="48.5" width="6.4" height="6"/>
-            <rect class="art-run__warm" x="53.9" y="61.5" width="6.4" height="6"/>
-            <g class="art__num art-run__dates" text-anchor="middle">
-              <text x="25" y="80">Jul</text><text x="63" y="80">Jul</text><text x="101" y="80">Jul</text>
-              <text x="139" y="80">Dec</text><text x="177" y="80">Dec</text><text x="215" y="80">Jan</text>
-            </g>
-            <path class="art__faint" d="M8 92h224"/>
-            <g class="art__num art-run__ramp">
-              <rect class="art-run__ramp-q" x="8" y="104" width="10" height="7"/>
-              <text x="22" y="111" data-i18n="matrix.quiet"></text>
-              <rect class="art-run__ramp-l" x="120" y="104" width="10" height="7"/>
-              <text x="134" y="111" data-i18n="matrix.loud"></text>
-            </g>
-            <text class="art__num" x="8" y="127" data-i18n="about.runSectors"></text>
-          </svg>
+        <figure class="read__art art-run">
+          <ol class="art-run__strip"></ol>
+          <p class="art-run__legend num">
+            <span><i class="art-run__key art-run__key--q"></i><span data-i18n="matrix.quiet"></span></span>
+            <span data-i18n="about.runSectors"></span>
+            <span><i class="art-run__key art-run__key--l"></i><span data-i18n="matrix.loud"></span></span>
+          </p>
         </figure>
         <div class="read__text">
           <p class="read__n num">05</p>
@@ -696,110 +698,114 @@
         </div>
       </li>
 
-      <li class="read__step" id="read-flags">
-        <figure class="read__art art-flags" aria-hidden="true">
-          <div class="art-flags__pair">
-            <div class="art-flags__one art-flags__one--alarm">
-              <p class="art-flags__k" data-i18n="about.flagsBefore"></p>
-              <p class="art-flags__v num">140</p>
+      <li class="read__step" id="read-mark">
+        <figure class="read__art art-mark">
+          <div class="art-mark__pair">
+            <div class="art__plate art-mark__plate">
+              <img class="art__img" src="img/talk/read-mark.webp" width="340" height="250" alt="" decoding="async" loading="lazy">
+              <span class="art-mark__ring" aria-hidden="true"></span>
+              <span class="art-mark__label num" data-i18n="about.markFixed"></span>
+              <button type="button" class="art-mark__star" aria-pressed="false" data-i18n-label="about.markTap"></button>
+              <span class="art__hint art-mark__hint" data-i18n="about.markTap"></span>
             </div>
-            <svg class="art-flags__arrow" viewBox="0 0 24 24"><path d="M4 12h15M13 6l6 6-6 6"/></svg>
-            <div class="art-flags__one art-flags__one--calm">
-              <p class="art-flags__k" data-i18n="about.flagsAfter"></p>
-              <p class="art-flags__v num">1.2</p>
+            <div class="art-mark__card">
+              <img class="art-mark__card-img" src="img/talk/read-mark-card.en.webp" data-src-lang="img/talk/read-mark-card.{lang}.webp" width="483" height="613" alt="" decoding="async" loading="lazy">
             </div>
           </div>
-          <dl class="art-flags__bits num">
-            <div><dt>FLAGS</dt><dd>0x45</dd></div>
-            <div><dt>bit 0</dt><dd>TRANSIENT</dd></div>
-            <div><dt>bit 2</dt><dd>SUR_ERROR</dd></div>
-            <div><dt>bit 6</dt><dd>NONFUNC</dd></div>
-          </dl>
         </figure>
         <div class="read__text">
           <p class="read__n num">06</p>
-          <h3 class="read__h" data-i18n="about.flagsH"></h3>
-          <p data-i18n="about.flagsP"></p>
-        </div>
-      </li>
-
-      <li class="read__step" id="read-mark">
-        <figure class="read__art art-mark" aria-hidden="true">
-          <div class="art-mark__pair">
-            <div class="art__plate art-mark__plate">
-              <span class="art__img art__img--mark"></span>
-            </div>
-            <div class="art-mark__card">
-              <span class="art-mark__card-img"></span>
-            </div>
-          </div>
-        </figure>
-        <div class="read__text">
-          <p class="read__n num">07</p>
           <h3 class="read__h" data-i18n="about.markH"></h3>
           <p data-i18n="about.markP"></p>
         </div>
       </li>
 
       <li class="read__step" id="read-verdicts">
-        <figure class="read__art art-verdicts" aria-hidden="true">
+        <figure class="read__art art-verdicts" data-v="fixed">
+          <div class="art-verdicts__demo" aria-hidden="true">
+            <span class="art-verdicts__cell"><i class="art-verdicts__ring"></i><i class="art-verdicts__dot"></i></span>
+            <span class="art-verdicts__cell"><i class="art-verdicts__ring"></i><i class="art-verdicts__dot"></i></span>
+            <span class="art-verdicts__cell"><i class="art-verdicts__ring"></i><i class="art-verdicts__dot"></i></span>
+            <span class="art-verdicts__visits num" data-i18n="about.verdictsVisits"></span>
+          </div>
           <dl class="art-verdicts__list">
-            <div><dt data-i18n="mark.callFixed"></dt><dd data-i18n="about.vFixed"></dd></div>
-            <div><dt data-i18n="mark.callIntermittent"></dt><dd data-i18n="about.vIntermittent"></dd></div>
-            <div><dt data-i18n="mark.callTransient"></dt><dd data-i18n="about.vTransient"></dd></div>
-            <div><dt data-i18n="mark.callMoving"></dt><dd data-i18n="about.vMoving"></dd></div>
-            <div><dt data-i18n="mark.callNone"></dt><dd data-i18n="about.vNone"></dd></div>
-            <div><dt data-i18n="mark.callSaturated"></dt><dd data-i18n="about.vSaturated"></dd></div>
-            <div><dt data-i18n="mark.callPredicted"></dt><dd data-i18n="about.vPredicted"></dd></div>
+            <div><dt><button type="button" data-v="fixed" aria-pressed="true" data-i18n="mark.callFixed"></button></dt><dd data-i18n="about.vFixed"></dd></div>
+            <div><dt><button type="button" data-v="intermittent" aria-pressed="false" data-i18n="mark.callIntermittent"></button></dt><dd data-i18n="about.vIntermittent"></dd></div>
+            <div><dt><button type="button" data-v="transient" aria-pressed="false" data-i18n="mark.callTransient"></button></dt><dd data-i18n="about.vTransient"></dd></div>
+            <div><dt><button type="button" data-v="moving" aria-pressed="false" data-i18n="mark.callMoving"></button></dt><dd data-i18n="about.vMoving"></dd></div>
+            <div><dt><button type="button" data-v="none" aria-pressed="false" data-i18n="mark.callNone"></button></dt><dd data-i18n="about.vNone"></dd></div>
+            <div><dt><button type="button" data-v="saturated" aria-pressed="false" data-i18n="mark.callSaturated"></button></dt><dd data-i18n="about.vSaturated"></dd></div>
+            <div><dt><button type="button" data-v="predicted" aria-pressed="false" data-i18n="mark.callPredicted"></button></dt><dd data-i18n="about.vPredicted"></dd></div>
           </dl>
         </figure>
         <div class="read__text">
-          <p class="read__n num">08</p>
+          <p class="read__n num">07</p>
           <h3 class="read__h" data-i18n="about.verdictsH"></h3>
           <p data-i18n="about.verdictsP"></p>
         </div>
       </li>
 
       <li class="read__step" id="read-ring">
-        <figure class="read__art art-ring" aria-hidden="true">
-          <div class="art__plate">
-            <span class="art__img art__img--atala-a art-ring__a"></span>
-            <span class="art__img art__img--atala-b art-ring__a art-ring__b"></span>
+        <figure class="read__art art-ring" data-on="a">
+          <button type="button" class="art__plate art__press art-ring__plate" data-i18n-label="about.ringSwitch">
+            <img class="art__img art-ring__a" src="img/talk/read-atala-a.webp" width="514" height="322" alt="" decoding="async" loading="lazy">
+            <img class="art__img art-ring__b" src="img/talk/read-atala-b.webp" width="514" height="322" alt="" decoding="async" loading="lazy">
+          </button>
+          <div class="art__chips" role="group">
+            <button type="button" class="art__chip art__chip--a" data-on="a" aria-pressed="true" data-i18n="about.ringName"></button>
+            <button type="button" class="art__chip art__chip--b" data-on="b" aria-pressed="false" data-i18n="about.ringEmpty"></button>
           </div>
-          <p class="art__tags num">
-            <span class="art__tag art__tag--a" data-i18n="about.ringName"></span>
-            <span class="art__tag art__tag--b" data-i18n="about.ringEmpty"></span>
-          </p>
         </figure>
         <div class="read__text">
-          <p class="read__n num">09</p>
+          <p class="read__n num">08</p>
           <h3 class="read__h" data-i18n="about.ringH"></h3>
           <p data-i18n="about.ringP"></p>
         </div>
       </li>
 
+      <li class="read__step" id="read-flags">
+        <figure class="read__art art-flags" data-flags="off">
+          <div class="art-flags__one">
+            <p class="art-flags__k art-flags__k--off" data-i18n="about.flagsBefore"></p>
+            <p class="art-flags__k art-flags__k--on" data-i18n="about.flagsAfter"></p>
+            <p class="art-flags__v num"><span class="art-flags__v--off">140</span><span class="art-flags__v--on" data-i18n="about.flagsSnr"></span></p>
+          </div>
+          <p class="art-flags__word num" aria-hidden="true">FLAGS = 0x45 = <span class="art-flags__bits"><b data-bit="6">1</b><b>0</b><b>0</b><b>0</b><b data-bit="2">1</b><b>0</b><b data-bit="0">1</b></span>₂</p>
+          <dl class="art-flags__names num">
+            <div data-bit="0"><dt>bit 0</dt><dd>TRANSIENT</dd></div>
+            <div data-bit="2"><dt>bit 2</dt><dd>SUR_ERROR</dd></div>
+            <div data-bit="6"><dt>bit 6</dt><dd>NONFUNC</dd></div>
+          </dl>
+          <button type="button" class="art__chip art-flags__read" aria-pressed="false"><span data-i18n="about.flagsRead"></span> <span class="num art-flags__state"></span></button>
+        </figure>
+        <div class="read__text">
+          <p class="read__n num">09</p>
+          <h3 class="read__h" data-i18n="about.flagsH"></h3>
+          <p data-i18n="about.flagsP"></p>
+        </div>
+      </li>
+
       <li class="read__step" id="read-spectrum">
-        <figure class="read__art art-spec" aria-hidden="true">
-          <svg viewBox="0 0 240 130">
-            <path class="art__faint" d="M18 88h204"/>
-            <g class="art-spec__pts">
-              <circle cx="27" cy="44" r="3.5"/><circle cx="52" cy="38" r="3.5"/><circle cx="88" cy="44" r="3.5"/>
-              <circle cx="132" cy="60" r="3.5"/><circle cx="191" cy="72" r="3.5"/><circle cx="212" cy="76" r="3.5"/>
-            </g>
-            <line class="art-spec__probe" x1="0" y1="20" x2="0" y2="108"/>
-            <g class="art-spec__bands">
-              <rect class="hue-fill-d1" x="18" y="96" width="18" height="10" rx="3"/>
-              <rect class="hue-fill-d2" x="37" y="96" width="27" height="10" rx="3"/>
-              <rect class="hue-fill-d3" x="65" y="96" width="39" height="10" rx="3"/>
-              <rect class="hue-fill-d4" x="105" y="96" width="69" height="10" rx="3"/>
-              <rect class="hue-fill-d5" x="175" y="96" width="29" height="10" rx="3"/>
-              <rect class="hue-fill-d6" x="205" y="96" width="17" height="10" rx="3"/>
-            </g>
-            <g class="art__num art-spec__labels" text-anchor="middle">
-              <text x="27" y="122">D1</text><text x="50" y="122">D2</text><text x="84" y="122">D3</text>
-              <text x="139" y="122">D4</text><text x="189" y="122">D5</text><text x="213" y="122">D6</text>
-            </g>
-          </svg>
+        <figure class="read__art art-spec" data-d="4">
+          <div class="art-spec__chart">
+            <svg viewBox="0 0 240 96" aria-hidden="true">
+              <path class="art__faint" d="M18 88h204"/>
+              <g class="art-spec__pts">
+                <circle data-d="1" cx="27.6" cy="44" r="3.5"/><circle data-d="2" cx="46.8" cy="38" r="3.5"/><circle data-d="3" cx="80.4" cy="44" r="3.5"/>
+                <circle data-d="4" cx="130.8" cy="60" r="3.5"/><circle data-d="5" cx="178.8" cy="72" r="3.5"/><circle data-d="6" cx="207.6" cy="76" r="3.5"/>
+              </g>
+            </svg>
+            <span class="art-spec__probe" aria-hidden="true"></span>
+          </div>
+          <div class="art-spec__bands" role="group">
+            <button type="button" style="--grow: 34" data-d="1" aria-pressed="false">D1</button>
+            <button type="button" style="--grow: 52" data-d="2" aria-pressed="false">D2</button>
+            <button type="button" style="--grow: 78" data-d="3" aria-pressed="false">D3</button>
+            <button type="button" style="--grow: 140" data-d="4" aria-pressed="true">D4</button>
+            <button type="button" style="--grow: 60" data-d="5" aria-pressed="false">D5</button>
+            <button type="button" style="--grow: 58" data-d="6" aria-pressed="false">D6</button>
+          </div>
+          <p class="art__readout num art-spec__read" aria-live="polite"></p>
         </figure>
         <div class="read__text">
           <p class="read__n num">10</p>
@@ -809,15 +815,19 @@
       </li>
 
       <li class="read__step" id="read-overlay">
-        <figure class="read__art art-ov" aria-hidden="true">
-          <div class="art__plate">
-            <span class="art__img art__img--barnard"></span>
-            <span class="art__img art__img--barnard-ov art-ov__on"></span>
+        <figure class="read__art art-ov" data-gaia="on" data-wise="on">
+          <div class="art__plate art-ov__plate">
+            <div class="art-ov__zoom">
+              <img class="art__img" src="img/talk/read-barnard-spherex.webp" width="900" height="676" alt="" decoding="async" loading="lazy">
+              <!-- Where each catalogue puts its sources on this frame, as Muninn drew them in the talk. -->
+              <svg class="art-ov__layer art-ov__gaia" viewBox="0 0 900 676" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><path d="M464 187a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M537 200a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M277 206a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M292 232a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M476 253a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M667 276a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M352 276a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M414 306a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M395 312a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M665 313a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M687 318a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M203 319a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M362 320a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M307 328a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M633 330a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M441 340a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M261 362a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M585 396a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M278 409a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M551 412a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M699 416a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M233 442a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M500 473a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M462 492a7 7 0 1 0 14 0a7 7 0 1 0 -14 0M560 503a7 7 0 1 0 14 0a7 7 0 1 0 -14 0"/></svg>
+              <svg class="art-ov__layer art-ov__wise" viewBox="0 0 900 676" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><path d="M210 311l8 8-8 8-8-8zM695 354l8 8-8 8-8-8zM285 426l8 8-8 8-8-8zM471 179l8 8-8 8-8-8zM592 388l8 8-8 8-8-8zM268 353l8 8-8 8-8-8zM408 282l8 8-8 8-8-8zM477 267l8 8-8 8-8-8zM313 319l8 8-8 8-8-8zM671 305l8 8-8 8-8-8zM402 304l8 8-8 8-8-8zM705 408l8 8-8 8-8-8zM239 434l8 8-8 8-8-8zM285 401l8 8-8 8-8-8zM507 465l8 8-8 8-8-8zM560 403l8 8-8 8-8-8zM567 495l8 8-8 8-8-8zM421 298l8 8-8 8-8-8zM544 191l8 8-8 8-8-8zM296 224l8 8-8 8-8-8zM483 245l8 8-8 8-8-8zM708 330l8 8-8 8-8-8zM673 269l8 8-8 8-8-8zM431 352l8 8-8 8-8-8z"/></svg>
+            </div>
           </div>
-          <p class="art__tags num">
-            <span class="art__tag art-ov__gaia" data-i18n="about.ovGaia"></span>
-            <span class="art__tag art-ov__wise" data-i18n="about.ovWise"></span>
-          </p>
+          <div class="art__chips" role="group">
+            <button type="button" class="art__chip art-ov__chip--gaia" data-layer="gaia" aria-pressed="true" data-i18n="about.ovGaia"></button>
+            <button type="button" class="art__chip art-ov__chip--wise" data-layer="wise" aria-pressed="true" data-i18n="about.ovWise"></button>
+          </div>
         </figure>
         <div class="read__text">
           <p class="read__n num">11</p>
@@ -827,20 +837,21 @@
       </li>
 
       <li class="read__step" id="read-wise">
-        <figure class="read__art art-wise" aria-hidden="true">
-          <div class="art__plate">
-            <span class="art__img art__img--wise"></span>
-            <span class="art__img art__img--barnard art-wise__a"></span>
-            <span class="art-wise__divider"></span>
+        <figure class="read__art art-wise">
+          <div class="art__plate art-wipe art-wise__plate">
+            <img class="art__img" src="img/talk/read-barnard-wise.webp" width="900" height="676" alt="" decoding="async" loading="lazy">
+            <span class="art-wipe__clip art-wipe__clip--left"><img class="art__img art-wipe__inner" src="img/talk/read-barnard-spherex.webp" width="900" height="676" alt="" decoding="async" loading="lazy"></span>
             <!-- Where the star stood for each telescope, measured on these two pictures (as in the talk). -->
-            <svg class="art-wise__marks" viewBox="0 0 900 676">
+            <svg class="art-wise__marks" viewBox="0 0 900 676" aria-hidden="true">
               <path class="art-wise__path" d="M436.1 507.3 L446.1 372.2" pathLength="1"/>
               <circle class="art-wise__at art-wise__at--b" cx="433.6" cy="541.2" r="30"/>
               <circle class="art-wise__at art-wise__at--a" cx="448.6" cy="338.3" r="30"/>
             </svg>
+            <span class="art-wipe__divider" role="slider" tabindex="0" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50" data-i18n-label="about.wipeLabel"></span>
           </div>
           <p class="art__tags num">
             <span class="art__tag art__tag--a">A · SPHEREx 2025</span>
+            <span class="art__hint" data-i18n="about.wipeDrag"></span>
             <span class="art__tag art__tag--b">B · WISE 2010</span>
           </p>
         </figure>
@@ -852,21 +863,30 @@
       </li>
 
       <li class="read__step" id="read-depth">
-        <figure class="read__art art-depth" aria-hidden="true">
-          <svg viewBox="0 0 240 120">
+        <figure class="read__art art-depth">
+          <svg viewBox="0 0 240 112" aria-hidden="true">
             <rect class="art-depth__track" x="12" y="44" width="216" height="12" rx="6"/>
             <rect class="art-depth__fill" x="12" y="44" width="64.8" height="12" rx="6"/>
-            <rect class="art-depth__px" x="166.8" y="40" width="30.6" height="20" rx="4"/>
-            <path class="art-depth__gap" d="M80 36h84"/>
+            <rect class="art-depth__bright" x="150.6" y="40" width="16.2" height="20" rx="3"/>
+            <rect class="art-depth__px" x="166.8" y="40" width="30.6" height="20" rx="3"/>
+            <path class="art-depth__gap" d="M80 36h68"/>
             <g class="art__num" text-anchor="middle">
-              <text x="12" y="70" text-anchor="start">14</text><text x="120" y="70">20</text><text x="228" y="70" text-anchor="end">26 AB</text>
+              <text x="12" y="70" text-anchor="start">14</text><text x="120" y="70">20</text><text x="228" y="70" text-anchor="end">26</text>
             </g>
-            <text class="art__num art__num--hi" x="76.8" y="92" text-anchor="middle">17.6</text>
-            <text class="art__num art-depth__pxlabel" x="182" y="92" text-anchor="middle">22.6–24.3</text>
+            <text class="art__num art__num--hi" x="76.8" y="92" text-anchor="middle" data-i18n="about.depthOneMag"></text>
+            <text class="art__num art-depth__brightlabel" x="157" y="92" text-anchor="end" data-i18n="about.depthBrightMag"></text>
+            <text class="art__num art-depth__pxlabel" x="187" y="92" text-anchor="middle" data-i18n="about.depthPxMag"></text>
             <text class="art__num" x="76.8" y="106" text-anchor="middle" data-i18n="about.depthOne"></text>
-            <text class="art__num art-depth__pxlabel" x="182" y="106" text-anchor="middle" data-i18n="about.depthPx"></text>
-            <text class="art__num art-depth__gaplabel" x="122" y="30" text-anchor="middle">5.0–6.7ᵐ</text>
+            <text class="art__num art-depth__pxlabel" x="174" y="106" text-anchor="middle" data-i18n="about.depthPx"></text>
+            <text class="art__num art-depth__gaplabel" x="114" y="30" text-anchor="middle" data-i18n="about.depthGap"></text>
+            <g class="art-depth__probe"><path d="M0 34v32"/><path class="art-depth__nib" d="M-3.5 31h7l-3.5 4z"/></g>
           </svg>
+          <label class="art-depth__try">
+            <span class="visually-hidden" data-i18n="about.depthTry"></span>
+            <input type="range" class="art-depth__mag" min="14" max="26" step="0.1" value="20.4">
+          </label>
+          <p class="art__readout num art-depth__read" aria-live="polite"></p>
+          <p class="art-depth__legend num"><span class="art-depth__key art-depth__key--main"></span><span data-i18n="about.depthMain"></span> <span class="art-depth__key art-depth__key--bright"></span><span data-i18n="about.depthBright"></span></p>
         </figure>
         <div class="read__text">
           <p class="read__n num">13</p>
@@ -892,6 +912,37 @@
         </div>
       </li>
 
+      <li class="read__step" id="read-seasons">
+        <figure class="read__art art-seasons" data-au="500">
+          <svg viewBox="0 0 240 124" aria-hidden="true">
+            <path class="art-seasons__arc" d="M37.1 94.6Q100 6 222 58"/>
+            <path class="art__faint" d="M30 104L37.1 94.6"/>
+            <g class="art-seasons__ticks">
+              <circle cx="44.5" cy="85.9" r="1.8"/><circle cx="60.1" cy="70.8" r="1.8"/><circle cx="113" cy="43.5" r="1.8"/><circle cx="222" cy="58" r="1.8"/>
+            </g>
+            <g class="art__num" text-anchor="middle">
+              <text x="30" y="80">1000</text><text x="72" y="82">500</text><text x="113" y="34">200</text><text x="222" y="48">100</text>
+            </g>
+            <circle class="art-seasons__a" cx="30" cy="104" r="4"/>
+            <circle class="art-seasons__b" cx="0" cy="0" r="4"/>
+            <text class="art__num art__num--hi" x="30" y="119" text-anchor="middle">A</text>
+            <text class="art__num art-seasons__au" x="232" y="76" text-anchor="end" data-i18n="about.seasonsAU"></text>
+          </svg>
+          <div class="art__chips" role="group">
+            <button type="button" class="art__chip" data-au="1000" aria-pressed="false">1000</button>
+            <button type="button" class="art__chip" data-au="500" aria-pressed="true">500</button>
+            <button type="button" class="art__chip" data-au="200" aria-pressed="false">200</button>
+            <button type="button" class="art__chip" data-au="100" aria-pressed="false">100</button>
+          </div>
+          <p class="art__readout num art-seasons__read" aria-live="polite"></p>
+        </figure>
+        <div class="read__text">
+          <p class="read__n num">15</p>
+          <h3 class="read__h" data-i18n="about.seasonsH"></h3>
+          <p data-i18n="about.seasonsP"></p>
+        </div>
+      </li>
+
       <li class="read__step" id="read-bytes">
         <figure class="read__art art-bytes" aria-hidden="true">
           <svg viewBox="0 0 240 120">
@@ -903,13 +954,13 @@
             <g class="art-bytes__px">
               <rect x="60" y="78" width="14" height="14"/><rect x="76" y="78" width="14" height="14"/><rect x="92" y="78" width="14" height="14"/>
               <rect class="art-bytes__flag" x="108" y="78" width="14" height="14"/><rect x="124" y="78" width="14" height="14"/>
-              <rect x="140" y="78" width="14" height="14"/><rect class="art-bytes__flag art-bytes__flag--late" x="156" y="78" width="14" height="14"/><rect x="172" y="78" width="14" height="14"/>
+              <rect x="140" y="78" width="14" height="14"/><rect class="art-bytes__flag" x="156" y="78" width="14" height="14"/><rect x="172" y="78" width="14" height="14"/>
             </g>
             <text class="art__num" x="120" y="110" text-anchor="middle" data-i18n="about.bytesFlags"></text>
           </svg>
         </figure>
         <div class="read__text">
-          <p class="read__n num">15</p>
+          <p class="read__n num">16</p>
           <h3 class="read__h" data-i18n="about.bytesH"></h3>
           <p data-i18n="about.bytesP"></p>
         </div>
@@ -921,7 +972,13 @@
       <button type="button" class="link" id="tour-replay" data-i18n="tour.replay"></button>
     </div>
     <p class="sheet__fine" data-i18n="foot.built"></p>
-    <p class="sheet__fine" data-i18n="foot.credit"></p>
+    <dl class="read__credits">
+      <div><dt data-i18n="credit.dataH"></dt><dd data-i18n="credit.data"></dd></div>
+      <div><dt data-i18n="credit.idH"></dt><dd data-i18n="credit.id"></dd></div>
+      <div><dt data-i18n="credit.archivesH"></dt><dd data-i18n="credit.archives"></dd></div>
+      <div><dt data-i18n="credit.imageryH"></dt><dd data-i18n="credit.imagery"></dd></div>
+    </dl>
+    <p class="sheet__fine" data-i18n="credit.note"></p>
     <p class="sheet__fine" data-i18n="foot.team"></p>
     <p class="sheet__fine"><a class="link" href="talk.html" data-i18n="gate.talk"></a></p>
   </article>

@@ -5504,7 +5504,22 @@ function wire() {
   $('bare').addEventListener('click', () => setBare(!state.bare));
   $('restore').addEventListener('click', () => setBare(false));
 
-  initRead({ onTour: startTour });
+  // Under the open sheet nothing else should draw: the opening sky's sweep
+  // and the field's playback both redrew every frame behind it.
+  let pausedUnderSheet = { sky: false, run: false };
+  initRead({
+    onTour: startTour,
+    onOpen: () => {
+      pausedUnderSheet = { sky: Boolean(gate?.running && !flying), run: state.playing };
+      if (pausedUnderSheet.sky) gate.stop();
+      if (pausedUnderSheet.run) stopPlayback();
+    },
+    onClose: () => {
+      if (pausedUnderSheet.sky && !$('gate').hidden) gate.start();
+      if (pausedUnderSheet.run && $('gate').hidden) startPlayback();
+      pausedUnderSheet = { sky: false, run: false };
+    },
+  });
 
   $('theme').addEventListener('click', () => {
     const key = $('theme');
