@@ -29,8 +29,9 @@ import { radecToVec, vecToRadec, angleBetween } from './skydata.js';
 import { createMarkers } from './targets3d.js';
 import { createPointers } from './input.js';
 import { openFieldVR } from './field.js';
-import { readLook, loadFonts, createPanel, FONTS, wrapText, fitText } from './panel.js';
+import { readLook, loadFonts, createPanel, FONTS, wrapText, fitText, wrapLines } from './panel.js';
 import { LAYOUT, yawOf, minTextPx } from './layout.js';
+import { navigate } from './nav.js';
 import { tv } from './strings.js';
 
 const D2R = Math.PI / 180;
@@ -159,13 +160,16 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       ctx.textBaseline = 'middle';
       ctx.fillStyle = look.ink;
       ctx.font = `500 ${px}px ${FONTS.body}`;
-      if (renderer.xr.isPresenting) {
-        wrapText(ctx, tv('vr.first'), x, cy - px * 0.7, w, px * 1.2, 1);
-        ctx.fillStyle = look.muted;
-        wrapText(ctx, tv('vr.firstHand'), x, cy + px * 0.7, w, px * 1.2, 1);
-      } else {
-        wrapText(ctx, tv('vr.firstFlat'), x, cy - px * 0.6, w, px * 1.2, 2);
+      // Every word, on up to three lines: a size smaller if the words need it.
+      const text = renderer.xr.isPresenting ? `${tv('vr.first')} ${tv('vr.firstHand')}` : tv('vr.firstFlat');
+      let size = px;
+      let lines = wrapLines(`500 ${size}px ${FONTS.body}`, text, w, 9);
+      while (size > px * 0.75 && (lines.length > 3 || lines.length * size * 1.2 > H - 30)) {
+        size -= 2;
+        lines = wrapLines(`500 ${size}px ${FONTS.body}`, text, w, 9);
       }
+      ctx.font = `500 ${size}px ${FONTS.body}`;
+      lines.forEach((l, k) => ctx.fillText(l, x, cy + (k - (lines.length - 1) / 2) * size * 1.2));
     });
   }
   drawFirst();
@@ -187,7 +191,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   let lostSince = null;
   let chevronSide = 0;
   // Pressed, the chevron brings the screens round.
-  chevron.mesh.userData.pick = () => bring();
+  chevron.mesh.userData.pick = () => returnToScreens();
   function drawChevron(sideSign) {
     if (sideSign === chevronSide) return;
     chevronSide = sideSign;
@@ -275,6 +279,11 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   /* ---- what is open ------------------------------------------------- */
   let field = null;
   let firstPicked = false;
+  /** Where the viewer is: sky, field, or the field's depth turned to the front (nav.js). */
+  let view = 'sky';
+  /** The way back to the screens: a short fade, everything put back, then the screens brought round. */
+  let home = null;
+  const headQuat = new THREE.Quaternion();
   let fade = { from: 1, to: 1, t0: 0, ms: 0 };
   let currentDim = 1;
   const head = new THREE.Vector3();
@@ -285,6 +294,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     cam.updateMatrixWorld?.();
     head.setFromMatrixPosition(cam.matrixWorld);
     cam.getWorldDirection(dir);
+    cam.getWorldQuaternion(headQuat);
     return { head: head.clone(), dir: dir.clone() };
   }
 
@@ -317,12 +327,14 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     field = openFieldVR(marker.target, {
       scene, head: h, baseYawDeg: yawDeg, fromDir: world.clone().normalize(), lang: getLanguage(), pxPerDeg, haptic, showCard,
       onBack: () => closeField(true),
-      onBring: bring,
+      onBring: returnToScreens,
+      onFlipped: (flipped) => { view = flipped ? 'depth' : 'field'; },
     });
     dimTo(LAYOUT.dive.skyDim);
     markers.setDim(0.45);
     markers.setFirst(null);
     firstSign.mesh.visible = false;
+    view = navigate(view, 'open');
     ui.field(field.label);
   }
 
@@ -333,7 +345,27 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     markers.setDim(1);
     dimTo(1, animate ? 500 : 1);
     chevron.mesh.visible = false;
+    view = navigate(view, 'sky');
+    home = null;
     ui.field(null);
+  }
+
+  /**
+   * Back to the field's screens from wherever the viewer went: the view fades,
+   * the depth view goes back behind at its own size, the walk is undone, and
+   * the screens come round to where the head then points. The blink goes on.
+   */
+  function returnToScreens() {
+    if (!field) return;
+    view = navigate(view, 'screens');
+    home = { t0: performance.now(), stage: 0 };
+  }
+
+  /** B: from the depth view back to the screens; from the screens back to the sky. */
+  function goBack() {
+    if (!field) return;
+    if (navigate(view, 'back') === 'field') returnToScreens();
+    else closeField(true);
   }
 
   /** The screens come round to where the head points, and to where it stands. */
@@ -361,6 +393,9 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       if (hits.length) return { kind: 'mesh', object: hits[0].object, uv: hits[0].uv, distance: hits[0].distance, hit: hits[0] };
       const d = field.depthPick(ray.origin, ray.dir);
       if (d) return { kind: 'depth', depth: d, distance: d.distance };
+      // While a field is open the sky behind it cannot be chosen: a stray
+      // press must not swap the field. "⟵ Sky" or B first.
+      return null;
     }
     const local = toSky(ray.dir);
     const m = markers.pick(local);
@@ -410,8 +445,8 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       if (was?.object && was.object !== hit.object) return;
       hit.object.userData.pick?.(hit.uv, hit.hit);
     },
-    onBack: () => closeField(true),
-    onBring: bring,
+    onBack: goBack,
+    onBring: returnToScreens,
     onStep: (d) => field?.step(d),
     onToggle: () => field?.toggle(),
     onTurn: (d) => turnBy(d * LAYOUT.move.snapDeg * D2R),
@@ -638,6 +673,10 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     open: (key) => { const m = markers.markers.find((x) => x.key === key); if (m) openTarget(m); return Boolean(m); },
     close: () => closeField(true),
     get field() { return field; },
+    get view() { return view; },
+    back: () => goBack(),
+    flip: () => field?.flipView(),
+    screens: () => returnToScreens(),
     pointers,
     diagLines,
     info: () => ({ calls: renderer.info.render.calls, textures: renderer.info.memory.textures, geometries: renderer.info.memory.geometries }),
@@ -692,8 +731,26 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     }
     // Until the first choice the Milky Way is quieter, so the gold rings are what is seen.
     sky.setDim(currentDim, firstPicked ? 1 : LAYOUT.bandFirst);
-    veil.visible = Boolean(field?.veil);
-    veil.material.opacity = field?.veil ?? 0;
+    if (home && field) {
+      const k = Math.min(1, (now - home.t0) / 260);
+      home.veil = k < 0.5 ? k * 2 : 2 - k * 2;
+      if (k >= 0.5 && home.stage === 0) {
+        // In the dark: the depth view back behind, the walk undone.
+        home.stage = 1;
+        field.resetView();
+        offset.identity();
+        applyOffset();
+        if (!renderer.xr.isPresenting) camera.position.set(0, EYE_HEIGHT, 0);
+      } else if (home.stage === 1) {
+        // A frame later, the head is where the undone walk put it: bring the screens to it.
+        home.stage = 2;
+        bring();
+      }
+      if (k >= 1) home = null;
+    }
+    const dark = Math.max(field?.veil ?? 0, home?.veil ?? 0);
+    veil.visible = dark > 0.001;
+    veil.material.opacity = dark;
     if (field) markers.setDim(0.45, toSky(field.depthAxis()), LAYOUT.depth.clearDeg);
     markers.tick(now, { growMs: LAYOUT.dive.ms, grow: LAYOUT.dive.markerGrow });
 
@@ -712,7 +769,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       }
     }
 
-    const rays = pointers.update();
+    const rays = pointers.update(h, headQuat);
     const seen = new Set();
     let markerHover = null;
     let starHover = -1;

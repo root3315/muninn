@@ -251,6 +251,7 @@ export function openFieldVR(target, env) {
   const depthView = createDepthView({
     onAction: (id) => {
       if (id === 'back') env.onBack?.();
+      else if (id === 'screens') env.onBring?.();
       else if (id === 'flip') flip();
       // The view as it was opened: where it stood, at its own size.
       else if (id === 'reset') { depthHolder.scale.setScalar(1); stand(); depthView.setScale(1); }
@@ -887,7 +888,7 @@ export function openFieldVR(target, env) {
       if (st.flipAnim) {
         const k = Math.min(1, (now - st.flipAnim.t0) / 200);
         st.veil = k < 0.5 ? k * 2 : 2 - k * 2;
-        if (k >= 0.5 && !st.flipAnim.swapped) { st.flipAnim.swapped = true; st.flipped = !st.flipped; stand(); drawBar(); }
+        if (k >= 0.5 && !st.flipAnim.swapped) { st.flipAnim.swapped = true; st.flipped = !st.flipped; stand(); drawBar(); env.onFlipped?.(st.flipped); }
         if (k >= 1) { st.flipAnim = null; st.veil = 0; }
       }
       if (st.playing && !st.paused) {
@@ -924,6 +925,19 @@ export function openFieldVR(target, env) {
       st.yaw = yaw;
       stand();
     },
+    /** The screens in front again: the depth view turned back behind, at its own size. */
+    resetView() {
+      st.flipped = false;
+      st.flipAnim = null;
+      st.veil = 0;
+      depthHolder.scale.setScalar(1);
+      depthView.setScale(1);
+      stand();
+      drawBar();
+    },
+    get flipped() { return st.flipped; },
+    /** "Depth ↻", from outside (the bar has the same). */
+    flipView() { flip(); },
     /** Where the main screen is, as a world direction from the head, for the way back to it. */
     mainYaw() { return st.yaw + (st.flipped ? Math.PI : 0); },
     /** Hold the blink while the headset is not being looked through. */

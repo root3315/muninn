@@ -40,9 +40,31 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
 
   /* ------------------------------------------------------------ headset */
 
-  const lineGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]);
-  const reticleGeo = new THREE.RingGeometry(0.009, 0.014, 32);
-  const reticleMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(look.ink), transparent: true, opacity: 0.95, depthTest: false, side: THREE.DoubleSide });
+  // Every pointer shows where it lands: a ray that fades toward its end, and
+  // at the end a reticle — a ring with a dot, the same size to the eye at any
+  // distance, turned to the head, bright over something that can be pressed,
+  // an open ring while the trigger or the pinch is held. The two hands are
+  // tinted apart. Nothing here is made anew per frame.
+  const RAY_VERTEX = 'attribute float fade; varying float vF; void main() { vF = fade; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }';
+  const RAY_FRAGMENT = 'uniform vec3 tint; uniform float k; varying float vF; void main() { gl_FragColor = vec4(tint, vF * k); }';
+  const RETICLE_VERTEX = 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }';
+  const RETICLE_FRAGMENT = `uniform vec3 tint; uniform float glow; uniform float held; varying vec2 vUv;
+    void main() {
+      float r = length(vUv * 2.0 - 1.0);
+      float w = fwidth(r) * 1.5;
+      float ring = smoothstep(0.62 - w, 0.62, r) * (1.0 - smoothstep(0.9, 0.9 + w, r));
+      float dot = (1.0 - smoothstep(0.2, 0.2 + w, r)) * (1.0 - held);
+      float a = max(ring, dot) * mix(0.75, 1.0, glow);
+      if (a < 0.01) discard;
+      gl_FragColor = vec4(mix(tint, vec3(1.0), glow * 0.35), a);
+    }`;
+  const TINTS = [look.accent, look.counter];
+  const RETICLE_DEG = 1.3;
+  const AIM_DEFAULT_M = 6;
+  const headPos = new THREE.Vector3();
+  const headQuat = new THREE.Quaternion();
+  const vA = new THREE.Vector3();
+  const vB = new THREE.Vector3();
 
   const controllers = [];
   const walk = [0, 0];
@@ -50,22 +72,41 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
   const keys = new Set();
   for (let i = 0; i < 2; i++) {
     const c = renderer.xr.getController(i);
-    // Faint over nothing, bright over something that can be chosen.
-    const lineMat = new THREE.LineBasicMaterial({ color: new THREE.Color(look.accent), transparent: true, opacity: 0.3, depthTest: false });
+    const hand = renderer.xr.getHand(i);
+    scene.add(hand);
+    const tint = new THREE.Color(TINTS[i]);
+    const lineGeo = new THREE.BufferGeometry();
+    lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+    lineGeo.setAttribute('fade', new THREE.BufferAttribute(new Float32Array([0.9, 0]), 1));
+    const lineMat = new THREE.ShaderMaterial({
+      uniforms: { tint: { value: tint }, k: { value: 0.35 } },
+      vertexShader: RAY_VERTEX, fragmentShader: RAY_FRAGMENT, transparent: true, depthTest: false, depthWrite: false,
+    });
     const line = new THREE.Line(lineGeo, lineMat);
-    line.scale.z = RAY_LENGTH;
+    line.frustumCulled = false;
     line.renderOrder = 50;
     line.visible = false;
-    c.add(line);
-    const reticle = new THREE.Mesh(reticleGeo, reticleMat);
+    scene.add(line);
+    const reticleMat = new THREE.ShaderMaterial({
+      uniforms: { tint: { value: tint }, glow: { value: 0 }, held: { value: 0 } },
+      vertexShader: RETICLE_VERTEX, fragmentShader: RETICLE_FRAGMENT, transparent: true, depthTest: false, depthWrite: false,
+    });
+    reticleMat.extensions = { derivatives: true };
+    const reticle = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), reticleMat);
     reticle.renderOrder = 51;
     reticle.visible = false;
     scene.add(reticle);
-    const entry = { c, line, reticle, source: null, pressed: [], stickArmed: true, id: `xr${i}`, hold: null };
+    const entry = {
+      c, hand, line, reticle, source: null, pressed: [], stickArmed: true, id: `xr${i}`, hold: null, handed: i ? 1 : -1,
+      ray: { id: `xr${i}`, origin: new THREE.Vector3(), dir: new THREE.Vector3(0, 0, -1), entry: null }, aimed: false,
+    };
+    entry.ray.entry = entry;
     c.addEventListener('connected', (e) => {
       entry.source = e.data;
+      entry.aimed = false;
+      entry.handed = e.data.handedness === 'left' ? -1 : 1;
       // A gaze ray comes from between the eyes; a line from there is in the way.
-      line.visible = e.data.targetRayMode === 'tracked-pointer';
+      line.visible = e.data.targetRayMode !== 'gaze';
     });
     c.addEventListener('disconnected', () => {
       entry.source = null;
@@ -95,12 +136,38 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
     controllers.push(entry);
   }
 
+  /**
+   * Where a pointer is aimed. A controller's own ray. A hand's is steadied:
+   * from an estimate of the shoulder through the wrist, which shakes far less
+   * than the fingers, eased a little from frame to frame.
+   */
+  function aim(entry) {
+    if (!entry.source) return false;
+    const wrist = entry.source.hand ? entry.hand.joints?.wrist : null;
+    if (wrist && wrist.visible !== false) {
+      wrist.getWorldPosition(vA);
+      // The shoulder: under and beside the head, on the hand's own side.
+      vB.set(entry.handed * 0.17, -0.22, 0.02).applyQuaternion(headQuat);
+      vB.y = -0.22;
+      vB.add(headPos);
+      const dir = vA.clone().sub(vB).normalize();
+      if (entry.aimed) entry.ray.dir.lerp(dir, 0.35).normalize();
+      else entry.ray.dir.copy(dir);
+      entry.ray.origin.copy(vA);
+    } else {
+      entry.ray.origin.setFromMatrixPosition(entry.c.matrixWorld);
+      entry.c.getWorldQuaternion(tmpQ);
+      entry.ray.dir.set(0, 0, -1).applyQuaternion(tmpQ).normalize();
+    }
+    entry.aimed = true;
+    return true;
+  }
+
   function rayOf(entry) {
     if (!entry.source) return null;
-    const origin = new THREE.Vector3().setFromMatrixPosition(entry.c.matrixWorld);
-    entry.c.getWorldQuaternion(tmpQ);
-    const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(tmpQ).normalize();
-    return { id: entry.id, origin, dir };
+    if (!entry.aimed) aim(entry);
+    // A copy for whoever keeps it past this frame.
+    return { id: entry.id, origin: entry.ray.origin.clone(), dir: entry.ray.dir.clone() };
   }
 
   /**
@@ -253,16 +320,18 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
   /* ------------------------------------------------------------- frame */
 
   return {
-    /** The rays this frame; a held one that drags is reported to onDrag. */
-    update() {
+    /** The rays this frame; a held one that drags is reported to onDrag. `head` and `quat` place the reticles. */
+    update(head = null, quat = null) {
+      if (head) headPos.copy(head);
+      if (quat) headQuat.copy(quat);
       rays.clear();
       if (renderer.xr.isPresenting) {
         const now = performance.now();
         for (const entry of controllers) {
           readPads(entry, now);
-          const ray = rayOf(entry);
-          if (!ray) { entry.reticle.visible = false; continue; }
-          rays.set(ray.id, { ...ray, entry });
+          if (!aim(entry)) { entry.reticle.visible = false; entry.line.visible = false; continue; }
+          const ray = entry.ray;
+          rays.set(ray.id, ray);
           const hold = entry.hold;
           if (hold) {
             if (!hold.moved && hold.dir.angleTo(ray.dir) * (180 / Math.PI) > DRAG_DEG) hold.moved = true;
@@ -280,13 +349,22 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
       const ray = rays.get(id);
       if (!ray?.entry) return;
       const { line, reticle } = ray.entry;
-      line.material.opacity = pickable ? 0.9 : 0.3;
-      line.scale.z = distance ?? RAY_LENGTH;
-      if (distance == null) { reticle.visible = false; return; }
-      reticle.visible = true;
-      reticle.position.copy(ray.origin).addScaledVector(ray.dir, distance * 0.995);
-      reticle.lookAt(ray.origin);
-      reticle.scale.setScalar(Math.max(1, distance / 1.5));
+      // The ray ends where it lands, or a few metres out on the sky.
+      const d = distance ?? AIM_DEFAULT_M;
+      const pos = line.geometry.attributes.position;
+      pos.setXYZ(0, ray.origin.x, ray.origin.y, ray.origin.z);
+      pos.setXYZ(1, ray.origin.x + ray.dir.x * d, ray.origin.y + ray.dir.y * d, ray.origin.z + ray.dir.z * d);
+      pos.needsUpdate = true;
+      line.visible = ray.entry.source?.targetRayMode !== 'gaze';
+      line.material.uniforms.k.value = pickable ? 0.9 : 0.4;
+      // The reticle: on whatever the ray landed on, the same size to the eye, turned to the head.
+      reticle.visible = line.visible;
+      reticle.position.copy(ray.origin).addScaledVector(ray.dir, d * 0.995);
+      reticle.quaternion.copy(headQuat);
+      const toEye = reticle.position.distanceTo(headPos);
+      reticle.scale.setScalar(2 * Math.tan((RETICLE_DEG / 2) * Math.PI / 180) * Math.max(0.2, toEye));
+      reticle.material.uniforms.glow.value = pickable ? 1 : 0;
+      reticle.material.uniforms.held.value = ray.entry.hold?.kind === 'select' ? 1 : 0;
     },
     /** A short buzz in the hand that holds this ray: `strength` 0–1 for `ms`. */
     pulse(id, strength, ms) {

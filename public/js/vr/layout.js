@@ -65,7 +65,7 @@ export const LAYOUT = {
   /** The Milky Way's brightness until the first choice, so the markers are what is seen. */
   bandFirst: 0.6,
   blinkHz: 1.5,
-  first: { dist: 1.8, pitchDeg: -8, w: 1.0, h: 0.22, pxPerM: 760 },
+  first: { dist: 1.8, pitchDeg: -8, w: 1.0, h: 0.3, pxPerM: 760 },
   /** How far the main screen may be from the gaze, and for how long, before a chevron points to it. */
   lost: { deg: 100, ms: 2500 },
   /** Moving about: walking and flying speeds (m/s), the snap turn, the vignette, and the depth scene's scale range. */
