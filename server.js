@@ -819,8 +819,31 @@ const VERSION_RECHECK_MS = 30_000;
 async function codeVersion({ fresh = false } = {}) {
   // Re-read now and then for the tag written into pages, so code copied in
   // without a restart shows up; read afresh before anything is marked
-  // immutable (see keptForGood). A new tag drops what was built under the old.
-  if (!fresh && versionTag && Date.now() - versionCheckedAt < VERSION_RECHECK_MS) return versionTag;
+  // immutable (see keptForGood).
+  if (fresh) return freshVersion();
+  if (versionTag && Date.now() - versionCheckedAt < VERSION_RECHECK_MS) return versionTag;
+  return readVersion();
+}
+
+/**
+ * A read of the tag that began after the caller asked. A page load asks for
+ * some forty tagged files at once; they share reads instead of each listing
+ * both folders: a request that arrives while a read is running waits for the
+ * next one, which starts when that one ends and serves everyone who queued.
+ */
+let freshRun = null;
+let freshNext = null;
+function freshVersion() {
+  if (!freshRun) {
+    freshRun = readVersion().finally(() => { freshRun = null; });
+    return freshRun;
+  }
+  freshNext ??= freshRun.then(() => { freshNext = null; return freshVersion(); }, () => { freshNext = null; return freshVersion(); });
+  return freshNext;
+}
+
+/** List js/ and css/ and hash what is there. A new tag drops what was built under the old. */
+async function readVersion() {
   versionCheckedAt = Date.now();
   const before = versionTag;
   const hash = createHash('sha1');

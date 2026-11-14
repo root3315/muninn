@@ -122,6 +122,15 @@ test('only code under the current tag is kept for good, not the page or its data
   assert.doesNotMatch((await get('/js/app.js?v=0000000000')).headers.get('cache-control'), IMMUTABLE_RE);
 });
 
+// Before the tests below move file dates about: the page's tag is reread
+// at most every 30 s, and must match the disk here.
+test('a page load\'s worth of tagged requests at once all get the current tag', async () => {
+  const tag = await pageTag();
+  const names = ['app', 'sky', 'stamp', 'catalog', 'wcs', 'fits', 'render', 'net'];
+  const all = await Promise.all(Array.from({ length: 40 }, (_, k) => get(`/js/${names[k % names.length]}.js?v=${tag}`)));
+  for (const res of all) assert.match(res.headers.get('cache-control'), IMMUTABLE_RE);
+});
+
 test('code changed on disk is never kept under the tag from before the change', async () => {
   const { stat, utimes } = await import('node:fs/promises');
   const tag = await pageTag();
