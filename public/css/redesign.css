@@ -456,11 +456,11 @@ body { font-size: var(--text-base); line-height: 1.5; }
 /* The figures, one a line: what it is on the left, the value on the right. */
 .facts { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2xs); }
 .facts > div { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-sm); min-inline-size: 0; }
-/* A figure is never broken across lines: when a row is short of room the
-   name gives way and wraps; only a value that is a sentence wraps itself. */
-.facts dt { flex: 1 1 auto; min-inline-size: 0; font-size: var(--text-sm); color: var(--color-neutral); }
+/* A name is never cut or broken: it keeps its line, and when a row is short
+   of room the value beside it wraps instead. */
+.facts dt { flex: 0 0 auto; white-space: nowrap; font-size: var(--text-sm); color: var(--color-neutral); }
 .facts .facts__go { font-size: inherit; min-block-size: 0; }
-.facts dd { flex: 0 0 auto; max-inline-size: 64%; text-align: end; font-family: var(--font-mono); font-size: 0.8125rem; color: var(--color-ink); }
+.facts dd { flex: 0 1 auto; min-inline-size: 0; text-align: end; overflow-wrap: break-word; font-family: var(--font-mono); font-size: 0.8125rem; color: var(--color-ink); }
 /* A measured value stays ink in every band: in the long bands the accent is
    red, and a red figure reads as a failed one. */
 .facts dd[data-tone="accent"] { color: var(--color-ink); font-weight: 500; }
