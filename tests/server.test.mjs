@@ -8,6 +8,8 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { request } from 'node:http';
 import { fileURLToPath } from 'node:url';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 const PORT = Number(process.env.TEST_PORT) || 5199;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -198,4 +200,35 @@ test('code changed in a folder under js/ changes the tag', async () => {
   } finally {
     await utimes(file, atime, mtime);
   }
+});
+
+test('a coordinate is a plain decimal number, not whatever Number() accepts', async () => {
+  for (const query of ['ra=1e1&dec=0x10', 'ra=10&dec=0x10', 'ra=1e1&dec=5', 'ra=10.&dec=5', 'ra=Infinity&dec=5']) {
+    assert.equal((await get(`/api/search?${query}`)).status, 400, query);
+    assert.equal((await get(`/api/tap?cat=gaia&${query}&r=0.01`)).status, 400, query);
+  }
+  assert.equal((await get('/api/search?ra=+13.4194&dec=3.8459')).status, 200);
+});
+
+test('a missing file is a 404 in plain text', async () => {
+  const res = await get('/no-such-file.txt');
+  assert.equal(res.status, 404);
+  assert.equal(res.headers.get('content-type'), 'text/plain; charset=utf-8');
+});
+
+test('an answer from the own cache of the server may be kept for a few minutes, an error never', async () => {
+  const dir = join(fileURLToPath(new URL('..', import.meta.url)), '.cache');
+  const file = join(dir, 'tap_gaia_269.4500_4.6900_0.01_9_all.json');
+  await mkdir(dir, { recursive: true });
+  await writeFile(file, JSON.stringify({ rows: [], via: 'test' }), 'utf8');
+  try {
+    const hit = await get('/api/tap?cat=gaia&ra=269.45&dec=4.69&r=0.01');
+    assert.equal(hit.status, 200);
+    assert.equal((await hit.json()).cached, true);
+    assert.equal(hit.headers.get('cache-control'), 'private, max-age=300');
+  } finally {
+    await rm(file, { force: true });
+  }
+  const refused = await get('/api/tap?cat=gaia&ra=&dec=4.69&r=0.01');
+  assert.equal(refused.headers.get('cache-control'), 'no-cache');
 });

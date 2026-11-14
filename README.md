@@ -6,7 +6,7 @@ brightness, spectrum and catalogue identity. It reads the Level-2 frames of Data
 and Quick Release 3 straight from NASA's public archive mirror, in the browser, a few
 megabytes at a time.
 
-- **Live:** <https://muninn.mydevbox.xyz> — open *(152) Atala* under the search and press Space.
+- **Live:** <https://muninn.mydevbox.xyz> — open *(152) Atala* under the search; the blink runs on its own, and Space pauses or stops it.
 - **Talk** (ten slides and an appendix; slide 2 reads real frames as you watch):
   <https://muninn.mydevbox.xyz/talk.html> · PDF [English](https://muninn.mydevbox.xyz/talk.pdf),
   [Russian](https://muninn.mydevbox.xyz/talk.ru.pdf)
@@ -482,7 +482,7 @@ Open (152) Atala, click the centre of the image and read the verdict: one visit,
 
 ```bash
 node server.js            # serves public/ and the relays on http://127.0.0.1:5173 (PORT, HOST to change)
-npm test                  # 171 offline tests (node --test); TEST_PORT sets the server tests' port
+npm test                  # all offline tests (node --test, about 190); TEST_PORT sets the server tests' port
 npm run bake              # refresh the frame indexes of the ten ready fields
 npm run probe             # check the WCS round trip against a live SPHEREx header
 node tools/sensitivity.mjs                        # the depth table above
