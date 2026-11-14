@@ -24,7 +24,8 @@
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-import { brotliCompressSync, gzipSync, gunzipSync, constants as zlib } from 'node:zlib';
+import { brotliCompress, gzip, gunzip, constants as zlib } from 'node:zlib';
+import { promisify } from 'node:util';
 import { readFile, writeFile, mkdir, stat, readdir, unlink } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -721,6 +722,7 @@ const WISE_DEADLINE_MS = 85_000;
 /** Biggest cutout asked for: the widest field the page opens, with a margin. */
 const WISE_MAX_DEG = 0.6;
 const wiseInflight = new Map();
+const gunzipped = promisify(gunzip);
 
 /**
  * The AllWISE image of a field, as a FITS file. IRSA cuts it from the Atlas
@@ -786,7 +788,7 @@ async function cutWise({ ra, dec }, band, size, file) {
   const cut = await retryOnGateway(() => withTimeout(`${tiles[0].url}?center=${ra.toFixed(5)},${dec.toFixed(5)}&size=${size.toFixed(3)}deg`, left()));
   if (!cut.ok) throw new Error(`IRSA cutout: HTTP ${cut.status}`);
   let body = Buffer.from(await cut.arrayBuffer());
-  if (body[0] === 0x1f && body[1] === 0x8b) body = gunzipSync(body, { maxOutputLength: 64 << 20 });
+  if (body[0] === 0x1f && body[1] === 0x8b) body = await gunzipped(body, { maxOutputLength: 64 << 20 });
   if (!body.subarray(0, 6).toString('latin1').startsWith('SIMPLE')) throw new Error('IRSA cutout: not a FITS file');
   body = binFits(body, WISE_MAX_SIDE);
   try {
@@ -1038,9 +1040,17 @@ async function serveStatic(pathname, req, res, asked = null) {
  * Text is sent compressed. The page's own code is 700 KB as written and about
  * a quarter of that on the wire, and a baked frame index goes from 390 KB to
  * 40. Each file is compressed once and kept until it changes on disk.
+ *
+ * Compressed off the event loop, in zlib's own threads. Done in line, a new
+ * deploy's first page load spent seconds of the box's one thread squeezing
+ * some ninety files at the highest settings, and every question that came in
+ * meanwhile, a cached answer included, waited behind it: seven seconds for
+ * the other-archives list that was already on disk.
  */
 const COMPRESSIBLE = new Set(['.html', '.js', '.mjs', '.css', '.json', '.svg', '.txt', '.webmanifest']);
 const staticCache = new Map();
+const brotli = promisify(brotliCompress);
+const gzipped = promisify(gzip);
 
 async function loadStatic(target) {
   const info = await stat(target);
@@ -1060,8 +1070,10 @@ async function loadStatic(target) {
     etag: `"${version ? `${stamp}-${version}` : stamp}"`,
   };
   if (COMPRESSIBLE.has(extname(target))) {
-    file.br = brotliCompressSync(raw, { params: { [zlib.BROTLI_PARAM_QUALITY]: 9 } });
-    file.gzip = gzipSync(raw, { level: 9 });
+    [file.br, file.gzip] = await Promise.all([
+      brotli(raw, { params: { [zlib.BROTLI_PARAM_QUALITY]: 9 } }),
+      gzipped(raw, { level: 9 }),
+    ]);
   }
   staticCache.set(target, file);
   return file;
