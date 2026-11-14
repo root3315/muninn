@@ -1952,8 +1952,12 @@ async function askSkybot(v, signal) {
       radiusDeg: Math.max(0.03, (sky.grid?.spanDeg ?? state.fov) * 0.8), iso: mid,
     }, { signal });
     if (!signal?.aborted && asked === skybot) sky.setKnownObjects(id, objects);
-  } catch {
-    if (!signal?.aborted) { asked.failed.add(id); asked.failedAt.set(id, Date.now()); }
+  } catch (err) {
+    if (!signal?.aborted) {
+      console.debug(`SkyBoT: no answer for ${id}:`, err?.name ?? '', err?.message ?? err);
+      asked.failed.add(id);
+      asked.failedAt.set(id, Date.now());
+    }
   } finally {
     asked.asking.delete(id);
   }
@@ -2113,8 +2117,9 @@ function retrackMarks() {
 
 /** Match every mark against SkyBoT's answers so far, and ask who the still ones are. */
 function nameMarks() {
+  const loaded = sky.visits.map((v) => v.frame.obsId);
   for (const m of sky.marks) {
-    m.catalog = skybotVerdict(seenAt(m.analysis, { ra: m.ra, dec: m.dec, obsId: m.obsId }));
+    m.catalog = skybotVerdict(seenAt(m.analysis, { ra: m.ra, dec: m.dec, obsId: m.obsId }, loaded));
     // A body that explains some of the visits leaves the others unexplained,
     // and the picture must not draw the mark as accounted for.
     m.known = m.catalog.state === 'match' && !m.catalog.unmatched?.length ? m.catalog.name : null;
