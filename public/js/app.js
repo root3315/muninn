@@ -1568,6 +1568,7 @@ async function matchB() {
   // Visits land and re-sort while the wavelengths are read: B is found by its frame.
   const at = sky.visits.findIndex((v) => v.frame === best.frame);
   if (at < 0 || sky.visits[sky.b]?.frame === best.frame) { renderCompareLambda(); return; }
+  state.abChosen = true;
   sky.setAB(null, at);
   syncScrub();
 }
@@ -3322,7 +3323,9 @@ function addVisitInPlace(frame, stamp) {
   const a = sky.visits[sky.a];
   const b = sky.visits[sky.b];
   sky.addVisit(frame, stamp);
-  if (a && b && a !== b) sky.setAB(sky.visits.indexOf(a), sky.visits.indexOf(b));
+  // Each held by its frame, separately: when A and B were the same visit,
+  // neither was moved, and the list shifted under them as visits landed.
+  if (a || b) sky.setAB(a ? sky.visits.indexOf(a) : null, b ? sky.visits.indexOf(b) : null);
 }
 
 /**
@@ -3544,6 +3547,8 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.visits = [];
   state.allVisits = [];
   state.wantVisit = visit;
+  // A and B the person chose stay chosen when the last visits land.
+  state.abChosen = false;
   state.truncated = false;
   state.partial = false;
   // What the last field measured goes with it: the reading is now built up as
@@ -3676,7 +3681,9 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   }
 
   setPlateState('', { hidden: true });
-  sky.setAB(0, Math.max(0, sky.visits.length - 1));
+  // The first and last visits, unless A and B were chosen while the field
+  // loaded: the plate is in use well before its last frame lands.
+  if (!state.abChosen) sky.setAB(0, Math.max(0, sky.visits.length - 1));
   // A visit asked for by a link is held on screen, which is a single frame.
   let holding = sky.visits.findIndex((v) => v.frame === state.allVisits[state.wantVisit]);
   // The held frame itself may not have been read (a failed or uncovered
@@ -5155,7 +5162,7 @@ function jumpToNearest(mjd) {
     if (d < gap) { gap = d; best = i; }
   });
   if (sky.indexed) sky.setIndex(best);
-  else sky.setAB(best, null);
+  else { state.abChosen = true; sky.setAB(best, null); }
   syncScrub();
   refreshKnownObjects();
 }
@@ -5240,6 +5247,7 @@ function wire() {
   $('scrub').addEventListener('input', (e) => { holdStill(); jumpToNearest(Number(e.target.value)); });
 
   $('slot-a').addEventListener('change', (e) => {
+    state.abChosen = true;
     sky.setAB(Number(e.target.value), null);
     syncScrub();
     refreshKnownObjects();
@@ -5251,6 +5259,7 @@ function wire() {
     const v = e.target.value;
     if (v.startsWith('wise') || v === 'gaia') { chooseReference(referenceOf(v)); return; }
     chooseReference(null);
+    state.abChosen = true;
     sky.setAB(null, Number(v));
     syncScrub();
   });
