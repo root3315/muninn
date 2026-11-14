@@ -47,6 +47,8 @@ const HAPTIC = { hover: [0.15, 12], select: [0.6, 35] };
 const FLY_MS = 900;
 /** How far out the field's picture stands on the sky, metres: inside the sky's sphere. */
 const SKY_PATCH_M = 290;
+/** On a flat screen, how much of the view's upper half a card may use: the rest is the page's heading. */
+const FLAT_TOP_FREE = 0.72;
 /** The field's screen's width over its height (layout.js). */
 const FIELD_ASPECT = LAYOUT.screens.main.w / LAYOUT.screens.main.h;
 /** A step to the floor: how fast the arc is thrown (m/s), how far it may land, and the fade over the jump. */
@@ -241,9 +243,56 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   const showCard = (content, at) => {
     const { head: h, dir: d } = headPose();
     card.show(content, at ?? h.clone().addScaledVector(d, 2), h);
+    if (!renderer.xr.isPresenting) {
+      // On a flat screen the card is what was asked for: the first sign makes room,
+      // and the card stands beside what it is about, wholly inside the view.
+      firstSign.mesh.visible = false;
+      clearOf(card.mesh, field?.panels() ?? [], h, { parent: scene });
+      keepInView(card.mesh, h, at);
+      return;
+    }
     // Off every panel standing round: the screens, the depth view's signs, the first sign.
     clearOf(card.mesh, [firstSign.mesh, ...(field?.panels() ?? [])], h, { parent: scene });
   };
+
+  /**
+   * Keep a card wholly inside a flat screen's view, clear of the page's
+   * heading at the top: moved the least way in, at the same distance,
+   * facing the head.
+   */
+  function keepInView(mesh, h, at = null) {
+    const g = mesh.geometry.parameters;
+    const used = mesh.userData.panel?.used ?? 1;
+    // The drawn plate's centre: a card is drawn from its top.
+    const c = mesh.localToWorld(new THREE.Vector3(0, (g.height * (1 - used)) / 2, 0)).sub(h);
+    const dist = c.length();
+    const hw = Math.atan(g.width / 2 / dist);
+    const hh = Math.atan((g.height * used) / 2 / dist);
+    const vHalf = (camera.fov / 2) * D2R;
+    const hHalf = Math.atan(Math.tan(vHalf) * camera.aspect);
+    const look = camera.getWorldDirection(new THREE.Vector3());
+    const camYaw = Math.atan2(-look.x, -look.z);
+    const camPitch = Math.asin(Math.max(-1, Math.min(1, look.y)));
+    let yaw = Math.atan2(-c.x, -c.z);
+    let pitch = Math.asin(Math.max(-1, Math.min(1, c.y / dist)));
+    const dy = Math.atan2(Math.sin(yaw - camYaw), Math.cos(yaw - camYaw));
+    const roomX = Math.max(0, hHalf * 0.94 - hw);
+    yaw = camYaw + Math.max(-roomX, Math.min(roomX, dy));
+    // The top fifth of the view is the page's own heading.
+    const top = camPitch + vHalf * FLAT_TOP_FREE - hh;
+    const bottom = camPitch - vHalf * 0.92 + hh;
+    // Too high to stand above what it is about: it stands below it instead, so the thing stays in view.
+    if (pitch > top && at) {
+      const t = at.clone().sub(h).normalize();
+      pitch = Math.asin(Math.max(-1, Math.min(1, t.y))) - hh - 2.5 * D2R;
+    }
+    pitch = Math.max(bottom, Math.min(top, pitch));
+    const plate = new THREE.Vector3(-Math.sin(yaw) * Math.cos(pitch), Math.sin(pitch), -Math.cos(yaw) * Math.cos(pitch)).multiplyScalar(dist).add(h);
+    mesh.position.copy(plate);
+    mesh.lookAt(h);
+    // Back from the plate's centre to the card's own.
+    mesh.position.addScaledVector(new THREE.Vector3(0, 1, 0).applyQuaternion(mesh.quaternion), -(g.height * (1 - used)) / 2);
+  }
 
   /**
    * Leave for another page: the headset session is ended first and the page
