@@ -699,7 +699,10 @@ li { list-style: none; }
 /* Out of flow: see the note at the head of this file. */
 #sky {
   position: absolute; inset: 0;
-  display: block; cursor: crosshair; touch-action: none;
+  /* A finger drawn up or down the picture scrolls the page; across it, it
+     moves the wipe. Held at none, the plate was a third of a phone that
+     would not scroll. */
+  display: block; cursor: crosshair; touch-action: pan-y pinch-zoom;
 }
 .plate[data-mode="wipe"] #sky { cursor: ew-resize; }
 
