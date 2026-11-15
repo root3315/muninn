@@ -1155,9 +1155,10 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
   function markCard(d, words) {
     return {
       title: words[0],
+      // The second line is the one the flight's name carries: where the distance is from.
       lines: [
-        { text: words[1] ?? '', tone: 'muted' },
         { text: `${formatRA(d.ra)}  ${formatDec(d.dec)}`, mono: true, tone: 'neutral' },
+        ...(words[1] ? [{ text: words[1], tone: 'muted' }] : []),
       ],
       actions: d.state === 'failed' ? [{ id: 'markRetry', label: tv('vr.markAskAgain'), run: () => onAction?.('markRetry', d.n) }] : [],
     };
