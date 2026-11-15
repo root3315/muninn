@@ -25,7 +25,8 @@ import { searchField } from './huntcore.js';
 import { STAR_MAX_SHARE } from './sharpness.js';
 import { phoneNotHeadset } from './device.js';
 import { FRAME_FILE_MB } from './release.js';
-import { deadline, CATALOG_DEADLINE_MS } from './net.js';
+import { deadline, pause, backoffMs, CATALOG_DEADLINE_MS } from './net.js';
+import { toast, watchNetwork, onUnplannedFailure, reloadForCode } from './safety.js';
 import { paint, rampFromToken, sortedFinite, limitsFromSorted } from './render.js';
 import { seasonChunks, chunkAt, forStack, averaged } from './stack.js';
 import { TangentGrid, separation, deltaRA } from './wcs.js';
@@ -107,7 +108,7 @@ const state = {
   filling: false, visitGoal: 0,
   /** A drag on the picture, the run or the scrubber; background reading waits for it. */
   dragging: false,
-  playing: false, rate: 2, timer: null, abort: null, presets: [], bytes: 0, bare: false,
+  playing: false, rate: 2, timer: null, abort: null, presets: [], presetsFallback: false, bytes: 0, bare: false,
   depth: null, examined: [], sectors: null, candidates: null, hunting: false, loading: false, failed: false, view: 'sky',
   facts: null, bodies: 0,
   survey: 'off',
@@ -146,7 +147,19 @@ async function pool(items, limit, worker) {
  * worker cannot start at all — an old browser, a strict policy — does the
  * same function run here instead.
  */
-const stampWorkers = { idle: [], waiting: [], count: 0, broken: false, seq: 0 };
+const stampWorkers = { idle: [], waiting: [], count: 0, broken: false, seq: 0, restarts: 0 };
+/**
+ * A worker that dies in the middle of a read (out of memory on a phone, a
+ * crash in the browser) is replaced and the read handed to the new one; only
+ * after this many deaths in a session is the work brought back to this thread.
+ */
+const WORKER_RESTARTS = 6;
+/**
+ * A worker that says nothing for this long has stopped without saying so:
+ * every read it makes has its own deadline (45 s, asked up to four times),
+ * so a live one is never this quiet.
+ */
+const WORKER_SILENCE_MS = 240_000;
 
 /** A worker for one read, as soon as one is free; null where workers cannot run. */
 function takeWorker(signal) {
@@ -175,15 +188,19 @@ function spawnWorker() {
     return null;
   }
   stampWorkers.count++;
-  // One that fails to load while it waits for its first read is let go here,
-  // as readStamp lets go of one that fails during a read.
+  // One that fails to load, or dies, while it waits for a read is let go
+  // here, as readStamp lets go of one that fails during a read. It is not
+  // replaced until a read needs it; one that keeps failing (a worker this
+  // browser cannot load) ends the workers for the session.
   w.addEventListener('error', (e) => {
     if (!stampWorkers.idle.includes(w)) return;
     e.preventDefault?.();
     stampWorkers.idle = stampWorkers.idle.filter((x) => x !== w);
     w.terminate();
     stampWorkers.count--;
-    workersBroken();
+    stampWorkers.restarts++;
+    console.warn('[muninn] an idle frame worker stopped', e.message ?? '');
+    if (stampWorkers.restarts > WORKER_RESTARTS) workersBroken();
   });
   return w;
 }
@@ -220,14 +237,20 @@ async function readStamp(url, grid, { signal, onHeader } = {}) {
   if (!worker) return loadStamp(url, grid, { signal, onHeader });
   const id = ++stampWorkers.seq;
   return new Promise((resolve, reject) => {
+    let silence = 0;
+    const listen = () => {
+      clearTimeout(silence);
+      silence = setTimeout(onSilence, WORKER_SILENCE_MS);
+    };
     const settle = () => {
+      clearTimeout(silence);
       worker.removeEventListener('message', onMessage);
       worker.removeEventListener('error', onError);
       signal?.removeEventListener('abort', onAbort);
     };
     const onMessage = ({ data }) => {
       if (data.id !== id) return;
-      if (data.header) { onHeader?.(); return; }
+      if (data.header) { listen(); onHeader?.(); return; }
       settle();
       releaseWorker(worker);
       if (data.error) {
@@ -238,20 +261,40 @@ async function readStamp(url, grid, { signal, onHeader } = {}) {
         resolve(data.stamp);
       }
     };
-    // A worker that fails to load says so once, here; from then on the page
-    // does the work itself rather than failing every visit the same way.
+    // A worker that fails or dies says so once, here. It is replaced and the
+    // read asked of the new one; after too many deaths the page does the work
+    // itself rather than failing every visit the same way.
     const onError = (e) => {
       e.preventDefault?.();
       settle();
       worker.terminate();
       stampWorkers.count--;
-      workersBroken();
-      loadStamp(url, grid, { signal, onHeader }).then(resolve, reject);
+      stampWorkers.restarts++;
+      console.warn('[muninn] a frame worker stopped; starting another', e.message ?? '');
+      if (stampWorkers.restarts > WORKER_RESTARTS) workersBroken();
+      if (signal?.aborted) { reject(new DOMException('The read was cancelled', 'AbortError')); return; }
+      readStamp(url, grid, { signal, onHeader }).then(resolve, reject);
+    };
+    // Silent past every deadline its reads have: let go of it and of this
+    // read, which is counted as not read and asked for again later.
+    const onSilence = () => {
+      settle();
+      worker.terminate();
+      stampWorkers.count--;
+      stampWorkers.restarts++;
+      if (stampWorkers.restarts > WORKER_RESTARTS) workersBroken();
+      // A read queued for a worker gets this one's replacement.
+      if (stampWorkers.waiting.length && !stampWorkers.broken) {
+        const fresh = spawnWorker();
+        if (fresh) releaseWorker(fresh);
+      }
+      reject(new Error('The frame worker stopped answering'));
     };
     const onAbort = () => worker.postMessage({ type: 'abort', id });
     worker.addEventListener('message', onMessage);
     worker.addEventListener('error', onError);
     signal?.addEventListener('abort', onAbort, { once: true });
+    listen();
     worker.postMessage({
       id, url, header: Boolean(onHeader),
       grid: { ra: grid.ra, dec: grid.dec, fovDeg: grid.fovDeg, width: grid.width, height: grid.height },
@@ -327,7 +370,7 @@ function renderPlateLog() {
   const show = !$('plate-state').hidden && state.visits.length > 0 && !sky?.visits.length;
   log.hidden = !show;
   if (!show) return;
-  log.replaceChildren(...state.visits.map(({ frame, status, bytes }) => {
+  log.replaceChildren(...state.visits.map(({ frame, status, bytes, final }) => {
     const li = document.createElement('li');
     li.className = 'plate__log-row';
     li.dataset.status = status;
@@ -341,7 +384,10 @@ function renderPlateLog() {
     what.className = 'plate__log-what';
     what.textContent = status === 'ready'
       ? t('log.ready', { mb: fmt((bytes ?? 0) / 1048576, 1) })
-      : t(`log.${status}`);
+      // A visit not read is skipped, not given up on: it is asked for again
+      // once the rest are in, and says so until that has failed too.
+      : status === 'failed' && !final ? t('log.retrying')
+        : t(`log.${status}`);
     li.append(date, band, what);
     return li;
   }));
@@ -358,6 +404,26 @@ function setPlateState(message, { progress = null, hidden = false, retry = false
   meter.hidden = progress == null;
   if (progress != null) $('plate-meter-fill').style.transform = `scaleX(${clamp(progress, 0, 1)})`;
   renderPlateLog();
+  watchForStall(!hidden && progress != null);
+}
+
+/**
+ * A wait that shows progress and then stops moving: past this with no step
+ * forward, the plate says the archive is slow and offers to ask again, while
+ * the reading it is waiting on goes on. Every step forward sets the clock back.
+ */
+const PLATE_STALL_MS = 45_000;
+let plateStall = 0;
+
+function watchForStall(waiting) {
+  clearTimeout(plateStall);
+  if (!waiting) return;
+  const gen = fieldSeq;
+  plateStall = setTimeout(() => {
+    if (gen !== fieldSeq || $('plate-state').hidden || $('plate-meter').hidden) return;
+    $('plate-message').textContent = navigator.onLine === false ? t('net.offline') : t('epochs.slow');
+    $('plate-retry').hidden = false;
+  }, PLATE_STALL_MS);
 }
 
 /**
@@ -587,12 +653,52 @@ async function loadPresets() {
       const res = await fetch(url, { signal: deadline(null, CATALOG_DEADLINE_MS) });
       if (!res.ok) continue;
       const body = await res.json();
-      if (Array.isArray(body.targets) && body.targets.length) { state.presets = body.targets; break; }
+      if (Array.isArray(body.targets) && body.targets.length) {
+        state.presets = body.targets;
+        state.presetsFallback = false;
+        renderPresets();
+        return;
+      }
     } catch {
       /* try the next source */
     }
   }
+  // Neither answered: the ready fields are still the ready fields. Their
+  // positions are in the frame indexes' own list, or failing that in the
+  // page, so the sky and the search keep them; targets.json is asked for
+  // again when the network comes back (see resume).
+  if (!state.presets.length) {
+    state.presets = await readyFieldsIndex();
+    state.presetsFallback = true;
+  }
   renderPresets();
+}
+
+/** The ready fields as positions alone, named by the page's own words for them. */
+const READY_FIELDS = [
+  ['atala', 13.4194, 3.8459, 'D2'], ['nep', 269.7, 66.56, 'all'], ['sep', 90, -66.56, 'all'],
+  ['m51', 202.4696, 47.1953, 'all'], ['m42', 83.8221, -5.3911, 'all'], ['barnard', 269.4463, 4.768, 'D2'],
+  ['epsindib', 331.0967, -56.8012, 'D2'], ['wise0855', 133.7595, -7.2422, 'D6'],
+  ['rwaur', 76.9564, 30.4014, 'D2'], ['rdra', 248.1675, 66.755, 'D3'],
+];
+
+/** The five the challenge names, listed on the sky apart from the rest. */
+const CHALLENGE_FIELDS = new Set(['barnard', 'epsindib', 'wise0855', 'rwaur', 'rdra']);
+
+async function readyFieldsIndex() {
+  const bands = new Map(READY_FIELDS.map(([key, , , band]) => [key, band]));
+  const field = (key, ra, dec) => ({
+    key, ra, dec, fov: 0.3, band: bands.get(key) ?? 'all', ...(CHALLENGE_FIELDS.has(key) ? { group: 'challenge' } : {}),
+  });
+  try {
+    const res = await fetch('data/fields/index.json', { signal: deadline(null, CATALOG_DEADLINE_MS) });
+    const index = res.ok ? await res.json() : null;
+    if (Array.isArray(index) && index.length) {
+      return index.filter((f) => f.key && Number.isFinite(f.ra) && Number.isFinite(f.dec))
+        .map((f) => field(f.key, f.ra, f.dec));
+    }
+  } catch { /* the page's own list */ }
+  return READY_FIELDS.map(([key, ra, dec]) => field(key, ra, dec));
 }
 
 /**
@@ -3163,6 +3269,7 @@ function autoBlink({ final = false } = {}) {
  */
 async function readOne(entry, grid, signal, { onHeader } = {}) {
   entry.status = 'reading';
+  entry.final = false;
   drawAxis();
   renderPlateLog();
   try {
@@ -3201,11 +3308,49 @@ async function readOne(entry, grid, signal, { onHeader } = {}) {
       if (sky.marks.length && sky.visits.length >= 3) retrackMarks();
     }
     return stamp.meta.bytesRead;
-  } catch {
+  } catch (err) {
     // Not the same as a frame that misses the field: this one was never read.
-    if (!signal.aborted) entry.status = 'failed';
+    // It is skipped, said as such, and asked for again later (see fillVisits).
+    if (!signal.aborted) {
+      entry.status = 'failed';
+      console.warn('[muninn] visit not read', entry.frame.obsId, err?.message ?? err);
+    }
     return 0;
   }
+}
+
+/**
+ * A field whose list of frames did not come is asked for again by itself, a
+ * few times further apart (the button stays for anyone who will not wait).
+ * Counted per position, so a field that keeps failing stops asking.
+ */
+const FIELD_RETRIES = 3;
+let fieldRetry = { at: '', tries: 0, timer: 0 };
+
+function retryFieldLater(gen, { ra, dec, label }) {
+  const at = `${ra},${dec}`;
+  if (fieldRetry.at !== at) fieldRetry = { at, tries: 0, timer: 0 };
+  clearTimeout(fieldRetry.timer);
+  if (fieldRetry.tries >= FIELD_RETRIES) return;
+  const wait = backoffMs(fieldRetry.tries, { base: 10_000 });
+  fieldRetry.tries += 1;
+  fieldRetry.timer = setTimeout(() => {
+    if (gen === fieldSeq && state.failed && $('gate').hidden) openField({ ra, dec, label });
+  }, wait);
+}
+
+/** Times a field whose opening visits all failed asks for them again before saying so. */
+const OPENING_REREADS = 2;
+
+/** Resolves at once with a network, else when it comes back; rejects if the field is left meanwhile. */
+function untilOnline(signal) {
+  if (navigator.onLine !== false) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const back = () => { signal?.removeEventListener('abort', gone); resolve(); };
+    const gone = () => { window.removeEventListener('online', back); reject(signal.reason); };
+    window.addEventListener('online', back, { once: true });
+    signal?.addEventListener('abort', gone, { once: true });
+  });
 }
 
 /**
@@ -3277,7 +3422,8 @@ function fillCap() {
 }
 
 const fillWaiters = [];
-const fillPaused = () => document.hidden || flying || state.dragging;
+/** Hidden, diving, dragged on, or with no network to read over (it goes on when the network is back). */
+const fillPaused = () => document.hidden || flying || state.dragging || navigator.onLine === false;
 
 /** Resolves when background reading may go on. */
 function fillMayRun() {
@@ -3369,6 +3515,7 @@ async function fillVisits(limit) {
     if (live()) await read(entry);
   });
   if (!live()) return;
+  for (const entry of state.visits) if (entry.status === 'failed') entry.final = true;
 
   state.filling = false;
   clearTimeout(fillTimer);
@@ -3535,16 +3682,23 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
     if (ctrl.signal.aborted) return;
     state.loading = false;
     state.failed = true;
+    // With no network every route fails alike, and "no relay here" would be
+    // a wrong reason: it is said as what it is, and the field opens again by
+    // itself when the network comes back (see resume).
+    const offline = navigator.onLine === false;
+    const retry = offline || !(err instanceof NoRelayError);
     setPlateState(
-      t(err instanceof NoRelayError ? 'epochs.noRelay' : err instanceof UpstreamError ? 'epochs.upstream' : 'epochs.failed'),
-      { retry: !(err instanceof NoRelayError) },
+      t(offline ? 'net.offline' : err instanceof NoRelayError ? 'epochs.noRelay' : err instanceof UpstreamError ? 'epochs.upstream' : 'epochs.failed'),
+      { retry },
     );
+    if (retry && !offline) retryFieldLater(gen, { ra, dec, label });
     renderVerdict();
     updateIdentity();
     drawAxis();
     return;
   }
   if (ctrl.signal.aborted) return;
+  fieldRetry.tries = 0;
 
   state.frames = frames;
   state.searched = true;
@@ -3604,7 +3758,22 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.readingSince = performance.now();
   setTimeout(() => { if (gen === fieldSeq) maybeHuntEarly(); }, HUNT_PATIENCE_MS + 50);
 
-  const bytes = await readVisits(state.visits, grid, ctrl.signal);
+  let bytes = await readVisits(state.visits, grid, ctrl.signal);
+  // Not one visit read, and some of them for a fault rather than for missing
+  // the field: they are asked for again in place, after a growing wait and
+  // once there is a network, before the plate says they could not be read.
+  for (let round = 0; round < OPENING_REREADS && !sky.visits.length; round++) {
+    const unread = state.visits.filter((v) => v.status === 'failed');
+    if (!unread.length || ctrl.signal.aborted) break;
+    try {
+      await untilOnline(ctrl.signal);
+      await pause(backoffMs(round, { base: 3000 }), ctrl.signal);
+    } catch {
+      return;
+    }
+    bytes += await readVisits(unread, grid, ctrl.signal);
+  }
+  for (const entry of state.visits) if (entry.status === 'failed' && !sky.visits.length) entry.final = true;
 
   if (ctrl.signal.aborted) return;
   if (!sky.visits.length) {
@@ -4556,6 +4725,33 @@ function closeGate() {
 let gateBuilt = null;
 const ensureGate = () => (gateBuilt ??= buildGate());
 
+/**
+ * The sky's measured layers, the stars and the deep-sky objects: whichever is
+ * not in hand yet. A sky without them is still a sky (the modelled disc, and
+ * the ready fields from targets.json), and they are asked for again when the
+ * network comes back.
+ */
+let skyLayersAsked = null;
+function loadSkyLayers() {
+  skyLayersAsked ??= Promise.all([
+    gate.stars ? null : loadStars().catch(() => null),
+    gateDeep ? null : fetch('data/sky/deepsky.json', { signal: deadline(null, CATALOG_DEADLINE_MS) })
+      .then((r) => (r.ok ? r.json() : null)).catch(() => null),
+  ]).then(([stars, deep]) => {
+    if (stars) gate.setStars(stars);
+    gateDeep = deep ?? gateDeep ?? null;
+    gate.setTargets(gateTargets(gateDeep));
+    // Say which layers are measured and which are drawn from a model: that
+    // difference is the whole difference between this tool and a wallpaper. It
+    // goes in the colophon with the other credits rather than on the sky, where
+    // it was four lines of small type over the only thing worth looking at.
+    state.skyLayers = { stars: Boolean(gate.stars), deep: Boolean(gateDeep) };
+    relabel();
+    gate.resize();
+  }).finally(() => { skyLayersAsked = null; });
+  return skyLayersAsked;
+}
+
 async function buildGate() {
   gate = new Gate($('gate-sky'), {
     // A press shows what was pressed. The flight starts from the card.
@@ -4574,20 +4770,7 @@ async function buildGate() {
     $('gate').style.setProperty('--gate-dock', `${Math.ceil(tall)}px`);
   }).observe(document.querySelector('.gate__poster'));
 
-  const [stars, deep] = await Promise.all([
-    loadStars().catch(() => null),
-    fetch('data/sky/deepsky.json', { signal: deadline(null, CATALOG_DEADLINE_MS) }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-  ]);
-  if (stars) gate.setStars(stars);
-  gateDeep = deep;
-  gate.setTargets(gateTargets(deep));
-  // Say which layers are measured and which are drawn from a model: that
-  // difference is the whole difference between this tool and a wallpaper. It
-  // goes in the colophon with the other credits rather than on the sky, where
-  // it was four lines of small type over the only thing worth looking at.
-  state.skyLayers = { stars: Boolean(stars), deep: Boolean(deep) };
-  relabel();
-  gate.resize();
+  await loadSkyLayers();
   // The sky was opened before it existed: boot shows the gate first and builds
   // it after, so the sweep starts here or not at all.
   if (!$('gate').hidden) gate.start();
@@ -5663,7 +5846,50 @@ function relabel() {
     if (sky.knownObjects.size) reportKnownObjects();
   }
   if (!sky?.visits.length && state.ra == null) setPlateState(t('status.idle'));
+  network?.relabel();
 }
+
+/* ------------------------------------------------------------ when it fails */
+
+let network = null;
+
+/**
+ * Pick up where a failure left things: the network is back, or something
+ * escaped while a field was open. Whatever was not read or not answered is
+ * asked for again, and nothing already in hand is dropped.
+ */
+function resume() {
+  wakeFill();
+  if (!state.presets.length || state.presetsFallback) loadPresets();
+  if (gate && !gate.stars) loadSkyLayers();
+  if (state.ra == null || !$('gate').hidden) return;
+  // A field whose list never came, or none of whose visits could be read:
+  // opened again, as the plate's own button would.
+  const nothingRead = !state.loading && !sky?.visits.length && state.visits.some((v) => v.status === 'failed');
+  if ((state.failed && !$('plate-retry').hidden) || nothingRead) {
+    openField({ ra: state.ra, dec: state.dec, label: state.label });
+    return;
+  }
+  if (state.partial && !listRetry.busy) retryPartialList();
+  if (!state.loading && !state.filling && state.visits.some((v) => v.status === 'failed')) retryUnread();
+}
+
+function wireSafety() {
+  network = watchNetwork({ words: () => ({ offline: t('net.offline'), back: t('net.back') }), onBack: resume });
+  onUnplannedFailure({
+    visible: () => $('gate').hidden && state.ra != null,
+    onTrouble: () => {
+      toast(t('safety.oops'));
+      // Not on every escape: a fault that repeats must not reopen the field in a loop.
+      if (Date.now() - lastTroubleResume < TROUBLE_RESUME_MS) return;
+      lastTroubleResume = Date.now();
+      resume();
+    },
+  });
+}
+
+const TROUBLE_RESUME_MS = 30_000;
+let lastTroubleResume = 0;
 
 async function boot() {
   const hash = readHash();
@@ -5678,6 +5904,7 @@ async function boot() {
   // The hash for a shared field, the query for a plain link (/?lang=en), then what this browser chose before.
   const asked = hash.lang ?? new URLSearchParams(location.search).get('lang');
   setLanguage(['en', 'ru'].includes(asked) ? asked : stored ?? (navigator.language?.startsWith('ru') ? 'ru' : 'en'));
+  wireSafety();
   loadExamined();
 
   sky = new SkyView($('sky'), {
@@ -5753,7 +5980,21 @@ async function offerVR() {
     $('banner-close').addEventListener('click', closeVrBanner);
   }
   const idle = window.requestIdleCallback ?? ((f) => setTimeout(f, 1500));
-  idle(() => { vrModule ??= import('./vr/main.js'); });
+  idle(() => { loadVR().catch(() => {}); });
+}
+
+/**
+ * The headset's code, fetched once. A failed fetch is not kept, so the next
+ * tap asks again; one that fails on a tap is the page's code having moved on
+ * under it (a deploy since the page loaded), and the page is loaded afresh,
+ * once (see safety.js).
+ */
+function loadVR() {
+  vrModule ??= import('./vr/main.js').catch((err) => {
+    vrModule = null;
+    throw err;
+  });
+  return vrModule;
 }
 
 function closeVrBanner() {
@@ -5778,12 +6019,14 @@ function enterVR() {
     vrOpen = false;
     if (!$('gate').hidden) gate?.start();
   };
-  (vrModule ??= import('./vr/main.js'))
-    .then((m) => m.mountVR({ session, context, lang: getLanguage(), onEnd: back }))
+  let codeLoaded = false;
+  loadVR()
+    .then((m) => { codeLoaded = true; return m.mountVR({ session, context, lang: getLanguage(), onEnd: back }); })
     .catch((err) => {
       session.then((s) => s.end()).catch(() => {});
       back();
       console.error('VR did not start', err);
+      if (!codeLoaded && !reloadForCode()) toast(t('safety.oops'));
     });
 }
 
