@@ -204,6 +204,14 @@ can drive one; on a flat screen `/vr.html` is the same scene with mouse or touch
 - **Comfort:** no camera roll, eased moves with a vignette, foveation, 72–90 fps on Quest 3 (about
   55 draw calls; 7 ms a frame on a desktop GPU). A five-step guide opens with the first field;
   *Open on the site* leaves VR for the same view on the page.
+- **Sound, synthesised in the browser** (Web Audio, no audio files): air that follows the speed of
+  a flight or a walk, in stereo and capped in pitch, with its own switch; soft clicks, ticks and
+  glass tones for the interface and for a mark's verdict; a wooden tick for the clock; a faint room
+  tone that rests after a minute idle. A chosen star sounds from its place on the sky (HRTF), its
+  pitch a sonification of its B−V colour (temperature after Ballesteros 2012, 3 000–30 000 K on
+  three octaves) and its loudness of its brightness; a star with no colour gives a rustle, not a
+  tone. Sound on/off, flight sound and volume are in every card and kept between visits; on a
+  computer it starts at the first click.
 
 What the data cannot give is said in the scene: Gaia rows here carry no radial velocities, so the
 clock moves stars across the sky but not toward or away; the sky's star list has no proper
@@ -628,7 +636,9 @@ AWS по диапазонам байтов: заголовок, только н�
 работают как на сайте. За спиной то же поле стоит в глубину по настоящим расстояниям: звёзды Gaia,
 астероиды на дату захода, галактики по красному смещению, кольца от Нептуна и Планеты X до центра
 Галактики. Там можно ходить, лететь к объекту, мерить расстояние между двумя, показать путь
-объекта и прокрутить движение звёзд на ±10 000 лет.
+объекта и прокрутить движение звёзд на ±10 000 лет. Звук синтезируется прямо в браузере: воздух в
+полёте, щелчки и тоны интерфейса, а выбранная звезда звучит со своего места тоном её цвета
+(это озвучивание данных, не «звук звезды»); выключается в любой карточке.
 
 Подробное руководство: [docs/study-guide.ru.pdf](docs/study-guide.ru.pdf).
 Запуск: `node server.js`, затем <http://127.0.0.1:5173>. Зависимостей нет.
