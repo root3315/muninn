@@ -10,6 +10,7 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test tests/*.test.mjs",
+    "check:vr-layout": "node tools/check-vr-layout.mjs",
     "probe": "node tools/probe.mjs",
     "bake": "node tools/bake-targets.mjs",
     "deploy": "wrangler pages deploy",
