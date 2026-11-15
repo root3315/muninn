@@ -100,6 +100,8 @@ export function serve(file, { honourRange = true } = {}) {
     const m = /bytes=(\d+)-(\d+)/.exec(range ?? '');
     if (!honourRange || !m) return new Response(file.slice(), { status: 200 });
     const start = Number(m[1]);
+    // As S3 answers a range that starts past the end of the file.
+    if (start >= file.length) return new Response('', { status: 416, headers: { 'content-range': `bytes */${file.length}` } });
     const end = Math.min(Number(m[2]), file.length - 1);
     return new Response(file.slice(start, end + 1), {
       status: 206,
