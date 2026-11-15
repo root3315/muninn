@@ -623,11 +623,14 @@ compares it with IRSA file for file (`MUNINN_COMPARE_IRSA=1`).
 ```bash
 node tools/build-frame-index.mjs --estimate   # one week, and the size of the whole (about 130 MB)
 node tools/build-frame-index.mjs              # fetch what is missing, three weeks at a time, then pack
+node tools/build-frame-index.mjs --source sia --days 1   # the same through the SIA, when TAP is down
 MUNINN_COMPARE_IRSA=1 node --test tests/frame-index-irsa.test.mjs
 ```
 
-The build reads IRSA's TAP a week at a time (one to four minutes each, as IRSA is loaded)
-and resumes from the weeks it has. It writes to `.index/` (not in git), or to
+The build reads IRSA's TAP a week at a time, as asynchronous jobs (one to four minutes each
+when IRSA is well, far longer when it is loaded), waits out bursts of 502 for up to two hours
+a week, and resumes from the weeks it has. Stopped and started again, it asks only for what
+is missing. It writes to `.index/` (not in git), or to
 `MUNINN_INDEX_DIR`. On a server, keep the index outside the app's folder, which a deploy
 replaces:
 
