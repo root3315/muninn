@@ -39,7 +39,7 @@ import { sbIdentUrl, parseSbIdent } from './public/js/sbident.js';
 import { smallBodyQuery, SBDB_TEXT, sbdbUrl, readSbdb, horizonsUrl, readHorizons } from './public/js/smallbody.js';
 import { archivesQuery, neossatQuery, neossatFilesQuery, readNeossat, ARCHIVE_RADIUS } from './public/js/archives.js';
 import {
-  ROW, searchIndex, footprintMeetsCone, frameFromIndexRow, indexRowFromObscore, spreadCap,
+  ROW, searchIndex, footprintMeetsCone, frameFromIndexRow, indexRowFromObscore, capLikeIrsa,
   s3List, folderOf, folderVersions, versionIn,
 } from './public/js/frameindex.js';
 
@@ -504,7 +504,7 @@ const indexHolds = (collection) => (ownIndex?.meta.counts?.[collection] ?? 0) > 
 /** One collection's frames at a position, from the own index, capped as IRSA caps them. */
 async function indexAnswer(collection, ra, dec, radius) {
   const frames = await searchIndex(readCell, ownIndex.meta, collection, ra, dec, radius);
-  const capped = spreadCap(frames, MAXREC);
+  const capped = capLikeIrsa(frames, MAXREC);
   return { frames: capped, truncated: capped.length < frames.length };
 }
 
@@ -556,7 +556,7 @@ async function tapCollection(collection, ra, dec, radius) {
     const version = versionIn(await versionsOf(folderOf(collection, row[ROW.obsId])), row[ROW.obsId], row[ROW.det]);
     if (version) frames.push(frameFromIndexRow(row, meta, version));
   }
-  const capped = spreadCap(frames, MAXREC);
+  const capped = capLikeIrsa(frames, MAXREC);
   const value = { frames: capped, truncated: capped.length < frames.length };
   await writeCache(framesKey(collection, ra, dec, radius), value);
   return value;

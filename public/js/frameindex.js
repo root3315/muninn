@@ -227,14 +227,16 @@ export function versionIn(entry, obsId, det) {
 }
 
 /**
- * At most `cap` frames, spread evenly over time, as IRSA caps a long list.
- * The page reads changes between visits, so a cap that kept only the first
- * months would hide the rest.
+ * At most `cap` frames, kept as near as can be to what IRSA's SIA keeps with
+ * MAXREC. The SIA keeps the first rows of its table, which runs in the order
+ * the weeks were loaded: by time, but with the first weeks interleaved. At
+ * the north ecliptic pole its 500 of 20 901 deep frames are exactly the 500
+ * earliest; at the south one, 485 of its 500 are (the rest a few hours
+ * later, in an order no column of the table gives). So: the earliest.
  */
-export function spreadCap(frames, cap) {
+export function capLikeIrsa(frames, cap) {
   if (frames.length <= cap) return frames;
-  const sorted = frames.slice().sort((a, b) => a.mjd - b.mjd);
-  return Array.from({ length: cap }, (_, i) => sorted[Math.floor((i * sorted.length) / cap)]);
+  return frames.slice().sort((a, b) => a.mjd - b.mjd || (a.url < b.url ? -1 : a.url > b.url ? 1 : 0)).slice(0, cap);
 }
 
 const round = (value, places) => Number(value.toFixed(places));

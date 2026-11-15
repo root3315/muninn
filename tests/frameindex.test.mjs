@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   tileOf, tilesNear, separation, parseRegion, footprintMeetsCone, footprintReach,
-  indexRowFromObscore, frameFromIndexRow, folderVersions, versionIn, spreadCap, ROW,
+  indexRowFromObscore, frameFromIndexRow, folderVersions, versionIn, capLikeIrsa, ROW,
 } from '../public/js/frameindex.js';
 import { COLLECTIONS } from '../public/js/release.js';
 
@@ -105,11 +105,14 @@ test("a week folder's version: one name, or file by file when the week was repro
   assert.equal(await folderVersions('dr1/level2/2099W01_1A', list), null);
 });
 
-test('a long list is capped evenly over time, a short one kept whole', () => {
-  const frames = Array.from({ length: 1000 }, (_, i) => ({ mjd: 61000 - i }));
-  const capped = spreadCap(frames, 100);
+test('a long list is capped as IRSA caps it, to the earliest, a short one kept whole', () => {
+  const frames = Array.from({ length: 1000 }, (_, i) => ({ mjd: 61000 - i, url: `u${i}` }));
+  const capped = capLikeIrsa(frames, 100);
   assert.equal(capped.length, 100);
   assert.equal(capped[0].mjd, 60001);
-  assert.ok(capped[99].mjd > 60980);
-  assert.equal(spreadCap(frames.slice(0, 5), 100).length, 5);
+  assert.equal(capped[99].mjd, 60100);
+  assert.equal(capLikeIrsa(frames.slice(0, 5), 100).length, 5);
+  // Frames of one exposure (six detectors, one start) are cut in the same order every time.
+  const tied = [{ mjd: 1, url: 'b' }, { mjd: 1, url: 'a' }, { mjd: 0, url: 'z' }];
+  assert.deepEqual(capLikeIrsa(tied, 2).map((f) => f.url), ['z', 'a']);
 });

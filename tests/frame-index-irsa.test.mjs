@@ -17,7 +17,7 @@ import { gunzipSync } from 'node:zlib';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { searchIndex, ROW } from '../public/js/frameindex.js';
+import { searchIndex, capLikeIrsa, ROW } from '../public/js/frameindex.js';
 import { parseCsv } from '../public/js/csv.js';
 import { COLLECTIONS } from '../public/js/release.js';
 
@@ -38,9 +38,9 @@ const readCell = async (id) => {
 };
 
 /** IRSA's whole list for one collection, as the relay reads it: calibrated science frames. */
-async function irsaFiles(collection, ra, dec, radius) {
+async function irsaFiles(collection, ra, dec, radius, maxrec = 100000) {
   const pos = encodeURIComponent(`circle ${ra} ${dec} ${radius}`);
-  const url = `https://irsa.ipac.caltech.edu/SIA?COLLECTION=${collection}&POS=${pos}&MAXREC=100000&RESPONSEFORMAT=csv`;
+  const url = `https://irsa.ipac.caltech.edu/SIA?COLLECTION=${collection}&POS=${pos}&MAXREC=${maxrec}&RESPONSEFORMAT=csv`;
   for (let attempt = 0; attempt < 4; attempt += 1) {
     try {
       const res = await fetch(url, { signal: AbortSignal.timeout(180_000) });
@@ -112,6 +112,29 @@ for (const [name, rawRa, rawDec, radius] of POSITIONS) {
       const ours = (await searchIndex(readCell, meta, collection, ra, dec, radius)).map((f) => f.url).sort();
       t.diagnostic(`${collection}: IRSA ${theirs.length}, index ${ours.length}`);
       assert.deepEqual(ours, theirs, `${name}, ${collection}`);
+    }
+  });
+}
+
+/**
+ * A capped list: IRSA's SIA with MAXREC=500 keeps the 500 earliest frames;
+ * the relay caps the own index's list the same way. Compared only while the
+ * index holds every frame up to IRSA's 500th, as it must.
+ */
+for (const [name, ra, dec] of [['north ecliptic pole', 270, 66.5607], ['south ecliptic pole', 90, -66.5607]]) {
+  test(`a capped list keeps what IRSA keeps: ${name}`, { skip, timeout: 15 * 60_000 }, async (t) => {
+    for (const collection of ['spherex_dr1_deep', 'spherex_qr3_deep']) {
+      const irsa = await irsaFiles(collection, ra, dec, 0.006, 500);
+      if (!irsa) { t.diagnostic(`${collection}: IRSA did not answer`); continue; }
+      const lastMjd = meta.fetchedThroughMjd ?? Infinity;
+      if (irsa.length < 500 || irsa.some((f) => f.mjd >= lastMjd)) { t.diagnostic(`${collection}: not capped, or past the index`); continue; }
+      const all = await searchIndex(readCell, meta, collection, ra, dec, 0.006);
+      const ours = new Set(capLikeIrsa(all, 500).map((f) => f.url));
+      const shared = irsa.filter((f) => ours.has(f.url)).length;
+      t.diagnostic(`${collection}: IRSA kept ${irsa.length}, the index ${ours.size} of ${all.length}; ${shared} the same`);
+      // IRSA keeps its table's first rows, in the order its weeks were loaded: by time, the first weeks interleaved.
+      assert.equal(ours.size, irsa.length);
+      assert.ok(shared >= 0.95 * irsa.length, `only ${shared} of ${irsa.length} the same`);
     }
   });
 }
