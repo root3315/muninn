@@ -36,6 +36,7 @@ import { lightTime } from './card.js';
 import { depthStep, DEPTH_IDLE } from './depthmodes.js';
 import { formatRA, formatDec } from '../catalog.js';
 import { tv } from './strings.js';
+import { markWords } from './markdepth.js';
 
 const D2R = Math.PI / 180;
 const D = LAYOUT.depth;
@@ -54,12 +55,10 @@ const POINT_VERTEX = /* glsl */ `
   attribute float sizeDeg;
   attribute vec3 tint;
   attribute float solid;
-  attribute vec3 skyPos;
   attribute vec3 pA;
   attribute vec3 pB;
   attribute vec3 pD;
   attribute vec3 pE;
-  uniform float morph;
   uniform float when;
   uniform float pxPerDeg;
   uniform float nearM;
@@ -70,19 +69,16 @@ const POINT_VERTEX = /* glsl */ `
   varying float vSolid;
   varying float vDim;
   void main() {
-    // Between where it is (its distance) and where it looks to be from the
-    // Earth (every object at one distance on the sky): the morph.
     // The clock, −1 … 1 across the whole span: between the five places
     // worked out for it, from the farthest past through now to the farthest future.
     float t = clamp(when, -1.0, 1.0) * 2.0;
     vec3 at = t <= -1.0 ? mix(pB, pA, -t - 1.0) : t < 0.0 ? mix(position, pB, -t) : t < 1.0 ? mix(position, pD, t) : mix(pD, pE, t - 1.0);
-    vec3 p = mix(at, normalize(at) * length(skyPos), morph);
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(at, 1.0);
     gl_PointSize = max(3.0, sizeDeg * pxPerDeg);
     vTint = tint;
     vSolid = solid;
     // A little dimmer toward the far end, so the near reads as near (a depth cue, not a brightness).
-    vDim = dim * mix(1.0, falloff, clamp((length(position) - nearM) / (farM - nearM), 0.0, 1.0) * (1.0 - morph));
+    vDim = dim * mix(1.0, falloff, clamp((length(position) - nearM) / (farM - nearM), 0.0, 1.0));
   }
 `;
 
@@ -160,13 +156,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
 
   const disposables = [];
   const layers = {};
-  /** 0: every object at its distance; 1: all on one sphere, as seen from the Earth. */
-  const morph = { value: 0 };
-  const morphTo = { from: 0, to: 0, t0: 0 };
   /** The level the pins drop to, a metre under the eye. */
   const PLANE_Y = -1.0;
-  /** The sphere "as seen from the Earth" is drawn on, in metres. */
-  const SKY_M = 3.2;
   const labels = [];
   const state = {
     gaia: null, bodies: [], galaxies: null, candidates: [], failed: [], depthAB: null,
@@ -313,7 +304,6 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
       const at = a.clone().addScaledVector(out, cone(r) * (1.15 + 0.12 * (labels.filter((l) => !l.keep).length % 3)));
       panel.mesh.position.copy(at);
       const lead = lines([...p.toArray(), ...at.toArray()], look[tone] ?? look.ink, 0.5);
-      lead.userData.truth = true;
       panel.lead = lead;
     }
     // Turned before it joins the corridor, whose origin is the viewer.
@@ -463,13 +453,10 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     const size = new Float32Array(items.length);
     const tint = new Float32Array(items.length * 3);
     const solid = new Float32Array(items.length);
-    const skyPos = new Float32Array(items.length * 3);
     const keys = [0, 1, 2, 3].map(() => new Float32Array(items.length * 3));
     items.forEach((it, i) => {
       pos.set(it.pos, i * 3);
       keys.forEach((k, j) => k.set(it.path?.[j] ?? it.pos, i * 3));
-      const u = unit(it.pos);
-      skyPos.set([u[0] * SKY_M, u[1] * SKY_M, u[2] * SKY_M], i * 3);
       size[i] = it.sizeDeg;
       const c = color(it.color);
       tint.set([c.r, c.g, c.b], i * 3);
@@ -480,10 +467,9 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     geo.setAttribute('sizeDeg', new THREE.BufferAttribute(size, 1));
     geo.setAttribute('tint', new THREE.BufferAttribute(tint, 3));
     geo.setAttribute('solid', new THREE.BufferAttribute(solid, 1));
-    geo.setAttribute('skyPos', new THREE.BufferAttribute(skyPos, 3));
     ['pA', 'pB', 'pD', 'pE'].forEach((name, j) => geo.setAttribute(name, new THREE.BufferAttribute(keys[j], 3)));
     const mat = new THREE.ShaderMaterial({
-      uniforms: { pxPerDeg, morph, when: clock.uniform, dim: focusDim, nearM: { value: D.nearM }, farM: { value: D.unknownM }, falloff: { value: D.falloff } },
+      uniforms: { pxPerDeg, when: clock.uniform, dim: focusDim, nearM: { value: D.nearM }, farM: { value: D.unknownM }, falloff: { value: D.falloff } },
       vertexShader: POINT_VERTEX,
       fragmentShader: POINT_FRAGMENT,
       blending: THREE.AdditiveBlending,
@@ -511,11 +497,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     const drop = [];
     for (const it of items) if (it.known) drop.push(...it.pos, it.pos[0], PLANE_Y, it.pos[2]);
     if (drop.length) {
-      const pins = lines(drop, lineColor, 0.16);
-      pins.userData.truth = true;
-      layer.objects.push(pins);
+      layer.objects.push(lines(drop, lineColor, 0.16));
     }
-    for (const o of layer.objects) if (o.isLineSegments) o.userData.truth = true;
     return layer;
   }
 
@@ -530,12 +513,11 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
   /** Labels by priority, each hidden if it would cover one shown before it, by angle from the head. */
   function settleLabels(headWorld) {
     group.updateMatrixWorld();
-    const truth = morph.value < 0.05;
     const shownBoxes = [];
     // The Planet X note is always shown, and nothing may stand on it.
     // Nor on the corridor's sign and controls: names give way to the panels.
     const fixed = [xSign, sign, controls].map((p) => ({ mesh: p.mesh, widthM: p.widthM, heightM: p.heightM, priority: 99, fixed: true }));
-    const order = [...fixed, ...labels.filter((l) => l.on !== false && (l.keep || truth))].sort((a, b) => b.priority - a.priority);
+    const order = [...fixed, ...labels.filter((l) => l.on !== false)].sort((a, b) => b.priority - a.priority);
     for (const l of order) {
       const p = l.mesh.getWorldPosition(tmpA).sub(headWorld);
       const d = Math.max(0.1, p.length());
@@ -556,7 +538,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
       if (!hit || l.fixed) shownBoxes.push(box);
     }
   }
-  const pickables = { gaia: [], gaiaUnknown: [], bodies: [], galaxies: [], candidates: [], target: [] };
+  const pickables = { gaia: [], gaiaUnknown: [], bodies: [], galaxies: [], candidates: [], target: [], marks: [] };
   /** The tape: the first thing measured from, and the line drawn to the second. */
   const tape = { from: null };
   /** What the depth view is doing (depthmodes.js): one mode at a time, each ending the ones it must. */
@@ -596,29 +578,28 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
   const classOf = { gaia: 'stars', target: 'stars', gaiaUnknown: 'unknown', candidates: 'unknown', bodies: 'bodies', galaxies: 'galaxies' };
 
   function applyFilters() {
-    const truth = morph.value < 0.05;
     for (const [name, layer] of Object.entries(layers)) {
       const kind = name.startsWith('path:') ? { gaia: 'stars', body: 'bodies', galaxy: 'galaxies' }[name.split(':')[1]] : classOf[name];
       const on = shown[kind] ?? true;
-      for (const o of layer.objects) { o.userData.on = on; o.visible = on && (!o.userData.truth || truth); }
+      for (const o of layer.objects) { o.userData.on = on; o.visible = on; }
       // A name filtered off goes at once; one filtered on waits for the next
       // settling, which decides whether it would cover another.
       for (const l of layer.labels) {
         l.on = on;
-        if (!on || !truth) l.mesh.visible = false;
-        if (l.lead) { l.lead.userData.on = on; if (!on || !truth) l.lead.visible = false; }
+        if (!on) l.mesh.visible = false;
+        if (l.lead) { l.lead.userData.on = on; if (!on) l.lead.visible = false; }
       }
     }
     settledSig = '';
     applyTime();
   }
 
-  const controls = createPanel({ widthM: 1.2, heightM: 1.0, pxPerM: 760, name: 'depth-controls', opaque: true });
+  const controls = createPanel({ widthM: 1.2, heightM: 1.2, pxPerM: 760, name: 'depth-controls', opaque: true });
   {
     // Across the corridor's mouth from the sign, a little below the eyes and
     // within a flat screen's width: pressed often, never read looking down.
     const p = v3(frame.f).multiplyScalar(1.5).addScaledVector(v3(frame.r), 1.05);
-    p.y = -0.6;
+    p.y = -0.7;
     controls.mesh.position.copy(p);
     controls.mesh.lookAt(0, -0.3, 0);
     group.add(controls.mesh);
@@ -654,9 +635,13 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
       // Back to the field's screens, the way the viewer came; or out to the sky.
       chip('screens', `‹ ${tv('vr.screensAway')}`);
       chip('back', tv('vr.backSky'));
-      chip('morph', morphTo.to > 0.5 ? tv('vr.trueDistances') : tv('vr.asSeen'), morphTo.to > 0.5);
       chip('reset', tv('vr.resetView'));
       row();
+      // A catalogue that did not answer can be asked again from here, first thing under the way out.
+      if (state.failed.length) {
+        for (const what of state.failed) chip('retrySource', `↻ ${what}`, false, what);
+        row();
+      }
       const g = state.gaia;
       chip('filter', tv('vr.filterStars', { n: g?.known ?? 0, m: (g?.known ?? 0) + (g?.unknown ?? 0) }), shown.stars, 'stars');
       bodyNoteY = y + bh + Math.round(px * 0.85);
@@ -696,8 +681,6 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
       }
       if (mode.tape) chip('tapeCancel', tv('vr.tapeArmed'), true);
       if (layers.tape) chip('tapeClear', tv('vr.tapeClear'));
-      // A catalogue that did not answer can be asked again from here.
-      for (const what of state.failed) chip('retrySource', `↻ ${what}`, false, what);
       if (state.moved) chip('home', tv('vr.backEarth'));
       if (sound) chip('sound', sound.enabled ? tv('vr.soundOn') : tv('vr.soundOff'), sound.enabled);
       // What a metre along the corridor is worth now, in distance.
@@ -764,7 +747,6 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     const h = forced ?? controls.hitAt(uv);
     if (!h) return;
     if (h.id === 'filter') { shown[h.data] = !shown[h.data]; applyFilters(); drawControls(); return; }
-    if (h.id === 'morph') { api.toggleMorph(); return; }
     if (h.id === 'play' || h.id === 'playBack') { playToward(h.id === 'play' ? 1 : -1); return; }
     if (h.id === 'step') { onAction?.('sound', { kind: 'step', dir: Number(h.data) }); easeYears(Math.round(clock.years + Number(h.data) * stepYears())); return; }
     if (h.id === 'epoch') { clock.epochAt = clock.epochMjd; easeYears(epochYears()); return; }
@@ -994,7 +976,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     for (const name of ['gaia', 'gaiaUnknown', 'target']) {
       for (const o of layers[name]?.objects ?? []) {
         if (o.userData.trail) o.visible = off && (shown.stars ?? true);
-        else if (o.isLineSegments) o.visible = !off && o.userData.on !== false && morph.value < 0.05;
+        else if (o.isLineSegments) o.visible = !off && o.userData.on !== false;
       }
     }
   }
@@ -1147,6 +1129,115 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     return [u[0] * r, u[1] * r, u[2] * r];
   }
 
+  /* ---- the marks: a beam each along its direction, a marker where a distance is known ---- */
+  /** The markers, one instanced mesh for all; each pulses once when it first appears. */
+  const markFx = { mesh: null, items: [], born: new Map(), asking: [], sig: '' };
+  const MARK_PULSE_MS = 1400;
+  /** A marker's size: a constant 0.5 degree at whatever distance it stands. */
+  const markerSize = (r) => r * Math.tan(0.5 * D2R);
+  const markMatrix = new THREE.Matrix4();
+
+  /** The markers in place, the new ones pulsing: up to twice as large, easing back. */
+  function placeMarkers(now) {
+    const mesh = markFx.mesh;
+    if (!mesh) return;
+    markFx.items.forEach((it, i) => {
+      const k = (now - (markFx.born.get(it.n) ?? 0)) / MARK_PULSE_MS;
+      const pulse = k < 1 ? 1 + 1.2 * Math.sin(Math.PI * k) * (1 - k) : 1;
+      const size = markerSize(Math.hypot(...it.pos)) * pulse;
+      markMatrix.makeScale(size, size, size).setPosition(...it.pos);
+      mesh.setMatrixAt(i, markMatrix);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+  }
+
+  /** The card a mark's beam opens: its words, where it is, and a retry when the catalogues failed. */
+  function markCard(d, words) {
+    return {
+      title: words[0],
+      lines: [
+        { text: words[1] ?? '', tone: 'muted' },
+        { text: `${formatRA(d.ra)}  ${formatDec(d.dec)}`, mono: true, tone: 'neutral' },
+      ],
+      actions: d.state === 'failed' ? [{ id: 'markRetry', label: tv('vr.markAskAgain'), run: () => onAction?.('markRetry', d.n) }] : [],
+    };
+  }
+
+  function setMarks(list) {
+    const sig = JSON.stringify(list.map((d) => [d.n, d.state, d.show, d.au, d.nearAU, d.farAU, d.name, d.tone, d.ra, d.dec, d.track?.length, d.folded]));
+    if (sig === markFx.sig) return;
+    markFx.sig = sig;
+    clearLayer('marks');
+    if (markFx.mesh) { markFx.mesh.removeFromParent(); markFx.mesh.geometry.dispose(); markFx.mesh.material.dispose(); markFx.mesh = null; }
+    markFx.items = [];
+    markFx.asking = [];
+    pickables.marks = [];
+    const layer = { objects: [], labels: [] };
+    layers.marks = layer;
+    const glow = (pts, css, opacity) => {
+      const o = lines(pts, css, opacity);
+      o.material.blending = THREE.AdditiveBlending;
+      o.renderOrder = 9;
+      layer.objects.push(o);
+    };
+    const farM = unknownShell();
+    const seen = new Set();
+    for (const d of list) {
+      const css = look[d.tone] ?? look.accent;
+      const u = unit(dirOf(d.ra, d.dec));
+      const at = (m) => [u[0] * m, u[1] * m, u[2] * m];
+      // The beam: from the viewer's end of the corridor through all of it.
+      glow([...at(D.nearM * 0.6), ...at(farM)], css, d.faint ? 0.22 : 0.5);
+      let end = at(farM);
+      if (d.show === 'range' || d.show === 'ceiling') {
+        // The part of the beam the measurement allows, brighter.
+        const b = depthMetres(d.farAU);
+        glow([...at(depthMetres(d.nearAU)), ...at(b)], css, 0.95);
+        end = at(b);
+      } else if (d.show === 'at') {
+        end = at(depthMetres(d.au));
+        markFx.items.push({ pos: end, css, n: d.n });
+        if (!markFx.born.has(d.n)) markFx.born.set(d.n, performance.now());
+        seen.add(d.n);
+      }
+      // A mover's path over its visits, at the distance its beam gives it.
+      if (d.track?.length > 1 && d.show !== 'far') {
+        const m = depthMetres(d.show === 'at' ? d.au : d.farAU);
+        const pts = d.track.map((q) => { const v = unit(dirOf(q.ra, q.dec)); return [v[0] * m, v[1] * m, v[2] * m]; });
+        const seg = [];
+        for (let k = 1; k < pts.length; k++) seg.push(...pts[k - 1], ...pts[k]);
+        glow(seg, css, 0.9);
+      }
+      const words = markWords(d, tv);
+      // A folded mark keeps its beam and its one line; an open one says where the distance is from.
+      const label = addLabel(d.folded ? words.slice(0, 1) : words, end, { tone: d.tone, priority: 96 });
+      layer.labels.push(label);
+      if (d.state === 'asking') markFx.asking.push(label);
+      pickables.marks.push({
+        pos: end,
+        real: d.show === 'at' ? { ra: d.ra, dec: d.dec, au: d.au } : null,
+        name: words[0].split(':')[0],
+        key: `mark:${d.n}`,
+        card: () => markCard(d, words),
+      });
+    }
+    for (const n of [...markFx.born.keys()]) if (!seen.has(n)) markFx.born.delete(n);
+    if (markFx.items.length) {
+      const mesh = new THREE.InstancedMesh(
+        new THREE.SphereGeometry(1, 14, 10),
+        new THREE.MeshBasicMaterial({ toneMapped: false, transparent: true, opacity: 0.95, depthWrite: false }),
+        markFx.items.length,
+      );
+      markFx.items.forEach((it, i) => mesh.setColorAt(i, color(it.css)));
+      mesh.instanceColor.needsUpdate = true;
+      mesh.renderOrder = 10;
+      mesh.frustumCulled = false;
+      group.add(mesh);
+      markFx.mesh = mesh;
+      placeMarkers(performance.now());
+    }
+  }
+
   const api = {
     group,
     /** The visit on the screen, as the plate's picture. */
@@ -1189,6 +1280,21 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     clockTo(years, play = false, dir = 1) { clock.playing = play; clock.dir = dir; clock.dirU.value = dir; clock.last = performance.now(); setYears(years); },
     /** For the checks: press a control by its id. */
     press(id, data = null) { controls.mesh.userData.pickAs?.(id, data); },
+    /** The marks on the field, as markdepth.js describes them: a beam each, a marker where a distance is known. */
+    setMarks(list) { setMarks(list); },
+    /** Fly to a mark's place in the corridor, as its card's "Fly there" would; false if it has none. */
+    flyToMark(n) {
+      const it = pickables.marks.find((p) => p.key === `mark:${n}`);
+      if (!it) return false;
+      group.updateMatrixWorld();
+      const world = v3(it.pos).applyMatrix4(group.matrixWorld);
+      go('fly');
+      focusOn(it);
+      onAction?.('fly', world);
+      return true;
+    },
+    /** For the checks: how the marks stand in depth. */
+    get marksShown() { return { markers: markFx.items.length, beams: pickables.marks.length, asking: markFx.asking.length, words: layers.marks?.labels.length ?? 0 }; },
     /** A catalogue being asked (again): its failure no longer said. */
     sourceAsking(what) { delete state.retry[what]; drawSign(); },
     /** A catalogue that answered. */
@@ -1208,6 +1314,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     },
     /** Whether any failed catalogue is counting down to its retry. */
     get retrying() { return Object.values(state.retry).some(Boolean); },
+    /** For the checks: which catalogues failed, and how much of each was drawn. */
+    get sources() { return { failed: [...state.failed], stars: state.gaia?.known ?? 0, unknown: state.gaia?.unknown ?? 0, galaxies: state.galaxies?.length ?? 0, bodies: state.bodies.length }; },
     redrawSign() { drawSign(); },
     /** B in the depth view: one level unwound; true if it was used here, false to leave the view. */
     back() { return !go('back').has('leaveDepth'); },
@@ -1238,14 +1346,6 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
       group.updateMatrixWorld();
       return v3(it.pos).applyMatrix4(group.matrixWorld);
     },
-    /** Between true distances and as seen from the Earth, eased over 1.2 s. */
-    toggleMorph() {
-      morphTo.from = morph.value;
-      morphTo.to = morphTo.to > 0.5 ? 0 : 1;
-      morphTo.t0 = performance.now();
-      drawControls();
-    },
-    get apparent() { return morphTo.to > 0.5; },
     /** The scene's scale, for the readout: what a metre along the corridor is worth. */
     setScale(s) {
       if (Math.abs(s - scaleNow) / scaleNow < 0.02 && s !== 1) return;
@@ -1590,6 +1690,10 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
         if (then) playToward(then);
       }
       tickFocus(headWorld);
+      const nowMs = performance.now();
+      if (markFx.items.some((it) => nowMs - (markFx.born.get(it.n) ?? 0) < MARK_PULSE_MS + 100)) placeMarkers(nowMs);
+      // "Identifying" breathes while the catalogues are out.
+      for (const l of markFx.asking) l.mesh.material.opacity = 0.55 + 0.45 * Math.sin(nowMs / 300) ** 2;
       if (clock.playing) {
         const now = performance.now();
         const dt = Math.min(0.1, (now - clock.last) / 1000);
@@ -1600,24 +1704,14 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
       // Every few frames, the names that would cover one another as seen
       // from where the viewer now stands: the more important one is shown.
       // Names are settled by where the head is, not where it looks: again only
-      // once it has moved a few centimetres, or the names or the morph changed.
+      // once it has moved a few centimetres, or the names changed.
       if (++settleFrame % 8 === 0) {
-        const sig = `${labels.length}|${morph.value < 0.05}|${labels.filter((l) => l.on !== false).length}`;
+        const sig = `${labels.length}|${labels.filter((l) => l.on !== false).length}`;
         if (!settledAt || settledAt.distanceTo(headWorld) > 0.05 || sig !== settledSig) {
           settleLabels(headWorld);
           settledAt = (settledAt ?? new THREE.Vector3()).copy(headWorld);
           settledSig = sig;
         }
-      }
-      if (morph.value !== morphTo.to) {
-        const k = Math.min(1, (performance.now() - morphTo.t0) / 1200);
-        const e = k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;
-        morph.value = morphTo.from + (morphTo.to - morphTo.from) * e;
-        // Lines and names belong to the distances: they go while the field is flat.
-        const truth = morph.value < 0.05;
-        group.traverse((o) => { if (o.userData.truth) o.visible = truth && o.userData.on !== false; });
-        for (const l of labels) if (!l.keep) l.mesh.visible = truth && l.on !== false;
-        settledSig = '';
       }
       group.updateMatrixWorld();
       const local = group.worldToLocal(headWorld.clone());
@@ -1627,6 +1721,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     },
     dispose() {
       for (const name of Object.keys(layers)) clearLayer(name);
+      if (markFx.mesh) { markFx.mesh.geometry.dispose(); markFx.mesh.material.dispose(); }
       for (const l of labels.splice(0)) { dropLead(l); l.dispose(); }
       for (const o of statics) { o.geometry.dispose(); o.material.dispose(); }
       sign.dispose();

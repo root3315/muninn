@@ -49,6 +49,7 @@ import {
 } from '../marks.js';
 import { geometricDistances, galaxiesWithRedshift, bakedAnswers } from './distances.js';
 import { tv } from './strings.js';
+import { markDepth } from './markdepth.js';
 
 const D2R = Math.PI / 180;
 /** The texture the field is drawn into: as sharp as the screen can show at 2 m, no sharper. */
@@ -341,6 +342,7 @@ export function openFieldVR(target, env) {
       if (id === 'back') env.onBack?.();
       else if (id === 'fly') env.onFly?.(data);
       else if (id === 'closeCard') env.onCloseCard?.();
+      else if (id === 'markRetry') markAct('retry', data - 1);
       else if (id === 'retrySource') {
         const kind = Object.keys(DEPTH_NAMES).find((k) => DEPTH_NAMES[k] === data);
         if (kind) askDepth(kind, true);
@@ -584,8 +586,19 @@ export function openFieldVR(target, env) {
     undo = null;
   }
 
+  /** What the depth view's catalogues answered, kept for redrawing (the stars) and for the marks' distances. */
+  const depthKept = { rows: null, reached: null, bj: null, galaxies: null, epoch: 2026 };
+  /** The marks in the depth view: a beam each, where the catalogues or the rate put it (markdepth.js). */
+  function depthMarks() {
+    depthView.setMarks(sky.marks.map((m, i) => ({
+      ...markDepth(m, i + 1, { bj: depthKept.bj, galaxies: depthKept.galaxies }),
+      folded: m.open === false,
+    })));
+  }
+
   function drawMarks() {
     if (st.closed) return;
+    depthMarks();
     const was = marksPanel.mesh.visible;
     marksPanel.mesh.visible = sky.marks.length > 0 || Boolean(undo);
     if (!was && marksPanel.mesh.visible) windows.settle(marksPanel.mesh, st.head);
@@ -628,6 +641,10 @@ export function openFieldVR(target, env) {
       m.whoStop?.abort();
       m.who = null;
       askWho(m);
+    } else if (id === 'depth' && m) {
+      // Round to the depth view, and along the mark's beam once there.
+      st.flyToMark = i + 1;
+      if (!st.flipped) flip();
     }
     drawMarks();
   }
@@ -1376,7 +1393,6 @@ export function openFieldVR(target, env) {
    */
   const DEPTH_NAMES = { gaia: 'Gaia DR3', bj: 'Bailer-Jones', galaxies: 'SIMBAD' };
   const depthTry = { gaia: { tries: 0, timer: 0 }, bj: { tries: 0, timer: 0 }, galaxies: { tries: 0, timer: 0 } };
-  const depthKept = { rows: null, reached: null, bj: null, epoch: 2026 };
   function drawGaia() {
     if (depthKept.rows) depthView.setGaia(depthKept.rows, { bj: depthKept.bj, epoch: depthKept.epoch, detected, limit: depthKept.reached });
   }
@@ -1395,10 +1411,13 @@ export function openFieldVR(target, env) {
         depthKept.bj = baked?.bj ? new Map(baked.bj.map(([id, r, lo, hi]) => [id, { r, lo, hi }])) : await geometricDistances({ ra, dec, radiusDeg }, signal);
         drawGaia();
       } else {
-        depthView.setGalaxies(baked?.galaxies ?? await galaxiesWithRedshift({ ra, dec, radiusDeg }, signal));
+        depthKept.galaxies = baked?.galaxies ?? await galaxiesWithRedshift({ ra, dec, radiusDeg }, signal);
+        depthView.setGalaxies(depthKept.galaxies);
       }
       if (signal.aborted) return;
       depthView.sourceOk(DEPTH_NAMES[kind]);
+      // A mark's star or galaxy may have its distance now.
+      depthMarks();
     } catch {
       if (signal.aborted || st.closed) return;
       const delay = DEPTH_RETRY_S[d.tries];
@@ -1447,7 +1466,11 @@ export function openFieldVR(target, env) {
         const k = Math.min(1, (now - st.flipAnim.t0) / 200);
         st.veil = k < 0.5 ? k * 2 : 2 - k * 2;
         if (k >= 0.5 && !st.flipAnim.swapped) { st.flipAnim.swapped = true; st.flipped = !st.flipped; stand(); drawBar(); if (!st.flipped) depthView.leave(); env.onFlipped?.(st.flipped); }
-        if (k >= 1) { st.flipAnim = null; st.veil = 0; }
+        if (k >= 1) {
+          st.flipAnim = null;
+          st.veil = 0;
+          if (st.flipped && st.flyToMark) { depthView.flyToMark(st.flyToMark); st.flyToMark = null; }
+        }
       }
       if (st.playing && !st.paused) {
         st.clock += dt;
@@ -1537,6 +1560,8 @@ export function openFieldVR(target, env) {
     depthBack: () => depthView.back(),
     depthCard: (on) => depthView.cardShown(on),
     get depthMode() { return depthView.mode; },
+    get depthSources() { return depthView.sources; },
+    get depthMarks() { return depthView.marksShown; },
     setMoved: (on) => depthView.setMoved(on),
     clearFocus: () => depthView.clearFocus(),
     get focusPhase() { return depthView.focusPhase; },
