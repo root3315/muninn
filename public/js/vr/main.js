@@ -88,6 +88,21 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   const look = readLook();
 
   const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
+  // The GPU can drop the page's context (a driver reset, memory pressure): the
+  // scene says so, and when the context comes back every texture is sent again.
+  canvas.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    ui.problem?.(tv('vr.glLost'), tv('vr.restartScene'), () => location.reload());
+  });
+  canvas.addEventListener('webglcontextrestored', () => {
+    scene.traverse((o) => {
+      for (const m of [].concat(o.material ?? [])) {
+        for (const key of ['map', 'alphaMap']) if (m[key]) m[key].needsUpdate = true;
+        for (const u of Object.values(m.uniforms ?? {})) if (u?.value?.isTexture) u.value.needsUpdate = true;
+      }
+    });
+    ui.problem?.(null);
+  });
   renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
   renderer.setSize(canvas.clientWidth, canvas.clientHeight, false);
   renderer.setClearColor(new THREE.Color(look.well), 1);
@@ -306,6 +321,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   function leaveTo(url) {
     if (session && renderer.xr.isPresenting) {
       session.addEventListener('end', () => location.assign(url), { once: true });
+      endingOnPurpose = true;
       session.end();
     } else {
       location.assign(url);
@@ -942,8 +958,11 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   const cpu = [];
   let rateChosen = false;
 
+  /** Set when the session is ended by the page or the viewer, so its end is not taken for a failure. */
+  let endingOnPurpose = false;
   async function enterXR(given = null) {
-    if (session) { session.end(); return; }
+    if (session) { endingOnPurpose = true; session.end(); return; }
+    ui.problem?.(null);
     try {
       const s = await (given ?? navigator.xr.requestSession('immersive-vr', { optionalFeatures: OPTIONAL_FEATURES }));
       session = s;
@@ -973,7 +992,9 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       sound.start();
     } catch (err) {
       session = null;
-      ui.status(tv('vr.failed', { why: err?.message ?? String(err) }));
+      // The headset would not start: the page stays on the flat screen, says so, and offers to try again.
+      ui.problem?.(`${tv('vr.failed', { why: err?.message ?? String(err) })} ${tv('vr.flatFallback')}`, tv('vr.enterAgain'), () => enterXR());
+      if (!ui.problem) ui.status(tv('vr.failed', { why: err?.message ?? String(err) }));
     }
   }
 
@@ -994,6 +1015,9 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
 
   function onSessionEnd() {
     session = null;
+    // Ended by the headset rather than by the viewer: the flat view, a note, and a way back in.
+    if (!endingOnPurpose) ui.problem?.(tv('vr.sessionLost'), tv('vr.enterAgain'), () => enterXR());
+    endingOnPurpose = false;
     sound.quiet();
     ui.ended?.();
     renderer.xr.setReferenceSpaceType('local-floor');
@@ -1277,6 +1301,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     /** End the session if there is one, and free the scene. */
     stop() {
       sound.quiet();
+      endingOnPurpose = true;
       renderer.setAnimationLoop(null);
       session?.end().catch(() => {});
       closeField(false);
@@ -1367,6 +1392,20 @@ function bootPage() {
     try { return new URLSearchParams(location.search).has('diag') || localStorage.getItem('muninn.vrDiag') === '1'; } catch { return false; }
   };
   const ui = {
+    /** Something went wrong, said plainly, with the one thing to do about it; null clears it. */
+    problem: (text, label = null, action = null) => {
+      const box = $('vr-problem');
+      if (!box) return;
+      box.hidden = !text;
+      if (!text) return;
+      $('vr-problem-text').textContent = text;
+      const b = $('vr-problem-do');
+      b.hidden = !label;
+      if (label) {
+        b.textContent = label;
+        b.onclick = () => { box.hidden = true; action?.(); };
+      }
+    },
     /** The page's own sound switch and level, kept with the headset's (sound.js). */
     sound: (s) => {
       const b = $('vr-sound');
@@ -1435,8 +1474,12 @@ function bootPage() {
     set(diagStored());
     toggle.addEventListener('click', () => set(out.hidden));
   }
-  startVR({ canvas, lang, ui, context: contextFromUrl() }).catch((err) => {
-    ui.status(tv('vr.failed', { why: err?.message ?? String(err) }));
+  startVR({ canvas, lang, ui, context: contextFromUrl() }).then(() => {
+    // boot.js stops waiting: the scene is up.
+    window.muninnVRStarted = true;
+  }).catch((err) => {
+    window.muninnVRStarted = true;
+    ui.problem(tv('vr.failed', { why: err?.message ?? String(err) }), tv('vr.restartScene'), () => location.reload());
     console.error(err);
   });
 }

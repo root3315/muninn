@@ -30,6 +30,7 @@
 </header>
 
 <p id="vr-status" class="vr__status" role="status" hidden></p>
+<p id="vr-problem" class="vr__problem" role="alert" hidden><span id="vr-problem-text"></span> <button id="vr-problem-do" class="vr__problem-do" type="button" hidden></button></p>
 <p id="vr-hint" class="vr__hint" hidden><span id="vr-hint-text"></span><button id="vr-hint-x" class="vr__hint-x" type="button" aria-label="Close">×</button></p>
 
 <footer class="vr__foot">
@@ -43,6 +44,7 @@
 </footer>
 <pre id="vr-diag-out" class="vr__diag" hidden></pre>
 
+<script src="js/vr/boot.js"></script>
 <script type="module" src="js/vr/main.js"></script>
 </body>
 </html>

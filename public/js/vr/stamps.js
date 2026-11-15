@@ -11,7 +11,11 @@
 import { loadStamp } from '../stamp.js';
 
 const WORKERS = 2;
-const pool = { idle: [], waiting: [], count: 0, broken: false, seq: 0 };
+const pool = { idle: [], waiting: [], count: 0, broken: false, seq: 0, crashes: 0 };
+/** A worker that crashes is replaced; after this many crashes the drawing thread reads instead. */
+const MAX_CRASHES = 3;
+/** A read that has not answered in this long is a hung worker: it is replaced and the read fails. */
+const READ_MS = 90_000;
 
 function take() {
   if (pool.idle.length) return Promise.resolve(pool.idle.pop());
@@ -29,6 +33,13 @@ function take() {
   return new Promise((resolve) => { pool.waiting.push(resolve); });
 }
 
+/** A worker gone: one waiting for it is given a new one (or the drawing thread, if they keep crashing). */
+function refill() {
+  const next = pool.waiting.shift();
+  if (!next) return;
+  take().then((w) => next(w));
+}
+
 function give(w) {
   const next = pool.waiting.shift();
   if (next) next(w);
@@ -42,7 +53,15 @@ export async function readStamp(url, grid, { signal } = {}) {
   if (!worker) return loadStamp(url, grid, { signal });
   const id = ++pool.seq;
   return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      settle();
+      worker.terminate();
+      pool.count--;
+      refill();
+      reject(new Error('the frame read took too long'));
+    }, READ_MS);
     const settle = () => {
+      clearTimeout(timer);
       worker.removeEventListener('message', onMessage);
       worker.removeEventListener('error', onError);
       signal?.removeEventListener('abort', onAbort);
@@ -59,13 +78,16 @@ export async function readStamp(url, grid, { signal } = {}) {
         resolve(data.stamp);
       }
     };
+    // A crash: the worker is replaced (a few times at most) and this read asked again.
     const onError = (e) => {
       e.preventDefault?.();
       settle();
       worker.terminate();
       pool.count--;
-      pool.broken = true;
-      loadStamp(url, grid, { signal }).then(resolve, reject);
+      pool.crashes += 1;
+      if (pool.crashes >= MAX_CRASHES) pool.broken = true;
+      refill();
+      readStamp(url, grid, { signal }).then(resolve, reject);
     };
     const onAbort = () => worker.postMessage({ type: 'abort', id });
     worker.addEventListener('message', onMessage);

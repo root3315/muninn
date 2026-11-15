@@ -23,6 +23,8 @@ import { tv } from './strings.js';
 
 const { w: W_M, h: H_M, dist: DIST } = SCREENS.spectrum;
 const PX_PER_M = 760;
+/** A visit's wavelength not read in this long is given up, to be asked again on demand. */
+const WAVE_MS = 20_000;
 /** SPHEREx's range, µm, and its six bands' hues (redesign.css --hue-d1 … d6). */
 const RANGE = [0.7, 5.1];
 const HUES = { D1: 285, D2: 235, D3: 160, D4: 100, D5: 60, D6: 25 };
@@ -71,6 +73,7 @@ export function createSpectrumPanel({ look }) {
         ctx.font = `400 ${px}px ${FONTS.body}`;
         ctx.fillStyle = look.muted;
         wrapText(ctx, state.done < state.total ? tv('vr.spectrumWait', { done: state.done, total: state.total }) : tv('vr.spectrumNone'), x0, box.y + px, W - x0 * 2, px * 1.3, 4);
+        retryButton(ctx, W, H, hits, font, bh);
         return;
       }
       const axis = fluxAxis(pts.map((p) => p.pt));
@@ -137,6 +140,7 @@ export function createSpectrumPanel({ look }) {
       ctx.font = legendFont;
       ctx.fillStyle = look.muted;
       legend.forEach((l, k) => ctx.fillText(l, x0, H - 22 - (legend.length - 1 - k) * Math.round(px * 1.15)));
+      retryButton(ctx, W, H, hits, font, bh);
     });
   }
 
@@ -144,8 +148,59 @@ export function createSpectrumPanel({ look }) {
     const h = uv ? panel.hitAt(uv)?.id ?? null : null;
     if (h !== hover) { hover = h; draw(); }
   };
-  panel.mesh.userData.pick = (uv) => { if (panel.hitAt(uv)?.id === 'close') hide(); };
+  panel.mesh.userData.pick = (uv) => {
+    const id = panel.hitAt(uv)?.id;
+    if (id === 'close') hide();
+    else if (id === 'retry' && state) {
+      // Only the visits that did not answer are asked again.
+      const again = state.points.filter((p) => p.failed);
+      state.done -= again.length;
+      readWaves(again, job, state.signal);
+      draw();
+    }
+  };
   panel.mesh.userData.pickable = (uv) => Boolean(panel.hitAt(uv));
+
+  /**
+   * The wavelength of each visit at the mark, two at a time: each a small read
+   * of a file's header and its table, given up after WAVE_MS so nothing waits
+   * for ever; the ones that failed can be asked again.
+   */
+  /** Once every visit has answered or given up: the ones that gave up, and a way to ask them again. */
+  function retryButton(ctx, W, H, hits, font, bh) {
+    if (!state.failed || state.done < state.total) return;
+    const words = tv('vr.spectrumRetry', { n: state.failed });
+    const bw = chipWidth(ctx, font, words, bh, 120);
+    button(ctx, hits, look, { x: W - bw - 24, y: 20 + bh + 10, w: bw, h: bh, label: words, id: 'retry', font, hover: hover === 'retry' });
+  }
+
+  function readWaves(points, mine, signal) {
+    let next = 0;
+    state.failed = 0;
+    const one = async () => {
+      while (job === mine && next < points.length) {
+        const p = points[next++];
+        try {
+          // Where in its band the visit saw the source, as the site places it (spectrum.js).
+          const limit = AbortSignal.timeout(WAVE_MS);
+          const wave = await loadWavelength(toS3(p.frame.url), state.ra, state.dec, { signal: signal ? AbortSignal.any([signal, limit]) : limit });
+          p.um = wave ? placeInBand(p.frame, wave).um : null;
+          p.failed = false;
+        } catch {
+          if (signal?.aborted) return;
+          p.um = null;
+          p.failed = true;
+          state.failed += 1;
+        }
+        if (job !== mine) return;
+        state.done += 1;
+        draw();
+      }
+    };
+    state.signal = signal;
+    one();
+    one();
+  }
 
   function hide() {
     panel.mesh.visible = false;
@@ -165,23 +220,7 @@ export function createSpectrumPanel({ look }) {
         state.points.push({ band: v.frame.band, pt: visitPoint(m), um: null, frame: v.frame });
       }
       draw();
-      // Two at a time: each is a small read of a file's header and its wavelength table.
-      let next = 0;
-      const one = async () => {
-        while (job === mine && next < state.points.length) {
-          const p = state.points[next++];
-          try {
-            // Where in its band the visit saw the source, as the site places it (spectrum.js).
-            const wave = await loadWavelength(toS3(p.frame.url), ra, dec, { signal });
-            p.um = wave ? placeInBand(p.frame, wave).um : null;
-          } catch { p.um = null; }
-          if (job !== mine) return;
-          state.done += 1;
-          draw();
-        }
-      };
-      one();
-      one();
+      readWaves(state.points, mine, signal);
     },
     hide,
     dispose() { panel.dispose(); },
