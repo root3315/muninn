@@ -22,6 +22,7 @@
  *   node tools/build-frame-index.mjs --pack         pack the weeks already fetched
  *   node tools/build-frame-index.mjs --verify       compare the row count with IRSA's
  *   options: --dir <path> --from <mjd> --to <mjd> --days 7 --pause 3 --parallel 3
+ *            --source sia   read IRSA's SIA by time instead of TAP, when TAP is down (use --days 2)
  *
  * Run again to refresh: weeks fetched whole are kept, and only new weeks, and
  * weeks fetched before they were over, are asked for. A new release: add its
@@ -41,6 +42,7 @@ import {
 } from '../public/js/frameindex.js';
 
 const TAP_ASYNC = 'https://irsa.ipac.caltech.edu/TAP/async';
+const SIA = 'https://irsa.ipac.caltech.edu/SIA';
 const USER_AGENT = 'Muninn/1.0 (frame index)';
 /** The first SPHEREx survey exposure in DR1 starts on MJD 60789.75. */
 const FIRST_MJD = 60789;
@@ -56,12 +58,13 @@ const BANDS_PER_PASS = 15;
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 function options(argv) {
-  const opts = { dir: process.env.MUNINN_INDEX_DIR || join(ROOT, '.index'), days: 7, pause: 3, parallel: 3 };
+  const opts = { dir: process.env.MUNINN_INDEX_DIR || join(ROOT, '.index'), days: 7, pause: 3, parallel: 3, source: 'tap' };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     const next = () => argv[++i];
     if (arg === '--estimate') opts.estimate = true;
     else if (arg === '--pack') opts.packOnly = true;
+    else if (arg === '--source') opts.source = next() === 'sia' ? 'sia' : 'tap';
     else if (arg === '--verify') opts.verify = true;
     else if (arg === '--dir') opts.dir = next();
     else if (arg === '--from') opts.from = Number(next());
@@ -124,10 +127,22 @@ async function tapOnce(query) {
 const worthRetry = (err) => err.status === undefined || [429, 500, 502, 503, 504].includes(err.status);
 
 /** A TAP question, asked again with longer and longer pauses while IRSA's gateway fails. */
-async function tap(query) {
+const tap = (query) => patiently(() => tapOnce(query));
+
+/** IRSA's SIA, the same frames by exposure time, one collection at a time, for when TAP is down. */
+async function siaOnce(collection, t0, t1) {
+  const url = `${SIA}?COLLECTION=${collection}&TIME=${t0}+${t1}&MAXREC=1000000&RESPONSEFORMAT=csv`;
+  const res = await fetch(url, { headers: { 'user-agent': USER_AGENT }, signal: AbortSignal.timeout(TAP_TIMEOUT_MS) });
+  const text = await res.text();
+  if (!res.ok) throw Object.assign(new Error(`SIA HTTP ${res.status}`), { status: res.status });
+  if (text.trimStart().startsWith('<')) throw Object.assign(new Error('SIA answer is not a table'), { status: 200 });
+  return parseCsv(text).filter((r) => r.dataproduct_subtype === 'science' && Number(r.calib_level) >= 2);
+}
+
+async function patiently(ask) {
   for (let attempt = 0; ; attempt += 1) {
     try {
-      return await tapOnce(query);
+      return await ask();
     } catch (err) {
       const wait = RETRY_WAITS_MS[attempt];
       if (!worthRetry(err) || wait === undefined) throw err;
@@ -168,8 +183,18 @@ async function exists(path) {
  * a week keeps its collection by name, and the pack takes the ones
  * release.js names, so a release added later needs no new fetch of old weeks.
  */
-async function fetchChunk(t0, t1) {
-  const rows = await tap(`SELECT ${COLUMNS} FROM spherex.obscore WHERE t_min >= ${t0} AND t_min < ${t1}`);
+async function fetchChunk(t0, t1, source = 'tap') {
+  let rows;
+  if (source === 'sia') {
+    // The SIA lists a frame whose exposure overlaps the window; kept by its start, as TAP's are.
+    rows = [];
+    for (const collection of COLLECTIONS) {
+      const listed = await patiently(() => siaOnce(collection, t0, t1));
+      rows.push(...listed.filter((r) => Number(r.t_min) >= t0 && Number(r.t_min) < t1));
+    }
+  } else {
+    rows = await tap(`SELECT ${COLUMNS} FROM spherex.obscore WHERE t_min >= ${t0} AND t_min < ${t1}`);
+  }
   const kept = [];
   let dropped = 0;
   for (const row of rows) {
@@ -177,7 +202,7 @@ async function fetchChunk(t0, t1) {
     const stored = indexRowFromObscore(row, [name], -1);
     if (stored) { stored[ROW.coll] = name; kept.push(stored); } else dropped += 1;
   }
-  return { t0, t1, fetchedAt: new Date().toISOString(), listed: rows.length, dropped, rows: kept };
+  return { t0, t1, source, fetchedAt: new Date().toISOString(), listed: rows.length, dropped, rows: kept };
 }
 
 const mjdNow = () => Date.now() / 86400000 + 40587;
@@ -227,7 +252,7 @@ async function fetchMissing(opts) {
       const t0 = todo.shift();
       const t1 = Math.min(t0 + opts.days, opts.to);
       const began = Date.now();
-      const chunk = await fetchChunk(t0, t1);
+      const chunk = await fetchChunk(t0, t1, opts.source);
       await writeAtomically(chunkPath(opts.dir, t0), gzipSync(JSON.stringify(chunk)));
       done += 1;
       log(`MJD ${t0}–${t1}: ${chunk.rows.length} frames in ${((Date.now() - began) / 1000).toFixed(0)} s (${done} done)`);
@@ -312,6 +337,8 @@ async function pack(opts) {
   for (let lo = 0; lo < bands; lo += BANDS_PER_PASS) {
     const hi = lo + BANDS_PER_PASS;
     const cells = new Map();
+    // Weeks fetched on different grids (TAP's weeks, the SIA's days) may overlap: each frame once.
+    const seen = new Set();
     for (const file of files) {
       for (const row of (await readChunk(file)).rows) {
         const tile = tileOf(row[ROW.ra], row[ROW.dec]);
@@ -319,6 +346,9 @@ async function pack(opts) {
         if (band < lo || band >= hi) continue;
         const collection = row[ROW.coll];
         if (!COLLECTIONS.includes(collection)) continue;
+        const key = `${collection} ${row[ROW.obsId]} ${row[ROW.det]}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
         row[ROW.coll] = COLLECTIONS.indexOf(collection);
         const version = versionIn(known[folderOf(collection, row[ROW.obsId])], row[ROW.obsId], row[ROW.det]);
         if (!version) { unresolved += 1; continue; }
@@ -377,7 +407,7 @@ async function estimate(opts) {
   const t0 = opts.from;
   log(`one week, MJD ${t0}–${t0 + opts.days}`);
   const began = Date.now();
-  const chunk = await fetchChunk(t0, t0 + opts.days);
+  const chunk = await fetchChunk(t0, t0 + opts.days, opts.source);
   const seconds = (Date.now() - began) / 1000;
   const packed = gzipSync(JSON.stringify(chunk.rows), { level: 9 }).length;
   const perRow = packed / Math.max(1, chunk.rows.length);
