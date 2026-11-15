@@ -42,6 +42,15 @@ const D2R = Math.PI / 180;
 const R = LAYOUT.ring;
 const CELL_W = 256;
 const CELL_H = 192;
+/**
+ * Under each picture, inside its own cell, the visit's twenty sectors (5 × 4)
+ * as the site's run draws them: the accent's opacity by score, clamped at
+ * TOP, the unscored ones faint (sectors.js, strip.js).
+ */
+const GRID_H = 60;
+const GRID_COLS = 5;
+const GRID_ROWS = 4;
+const SECTOR_TOP = 12;
 const COLS = 4;
 const LABEL_PX = 900;
 
@@ -116,6 +125,9 @@ export function createTimeline({ visits, onPick, look, lang }) {
   let list = visits;
   let quads = [];
   let current = -1;
+  /** The field's sector scores (sectors.js scoreSectors), and a count of their changes. */
+  let sectors = null;
+  let sectorsVersion = 0;
   let hover = -1;
   let labels = [];
   let lines = [];
@@ -292,7 +304,7 @@ export function createTimeline({ visits, onPick, look, lang }) {
       const hi = Math.max(...layout.angles) + (R.frameW / R.radius) / D2R;
       const rows = Math.max(...layout.tiers) + 1;
       const top = dy0 + R.frameH / 2 + 0.12;
-      const bottom = dy0 - (rows - 1) * R.tierDropM - R.frameH / 2 - 0.42;
+      const bottom = dy0 - (rows - 1) * R.tierDropM - R.frameH / 2 - 0.5;
       const g = new THREE.CylinderGeometry(R.radius + 0.04, R.radius + 0.04, top - bottom, 48, 1, true, (lo + 180) * D2R, (hi - lo) * D2R);
       g.translate(0, (top + bottom) / 2, 0);
       backdrop = new THREE.Mesh(g, new THREE.MeshBasicMaterial({ color: css(look.well), transparent: true, opacity: 0.92, side: THREE.DoubleSide, depthWrite: false }));
@@ -315,6 +327,7 @@ export function createTimeline({ visits, onPick, look, lang }) {
       const months = Math.max(1, Math.round(g.days / 30.44));
       placeLabel(label(tv('vr.gap', { n: months }), { tone: 'neutral', font: 'body', priority: 1 }), g.at, 0, 'above');
     }
+    let legendBelow = null;
     if (layout.baseline) {
       const { a, b, chordAU, shiftArcmin, bodyAU } = layout.baseline;
       const pa = ringPoint(a, 0).p;
@@ -333,6 +346,17 @@ export function createTimeline({ visits, onPick, look, lang }) {
       // Under the chord's middle, nearer the viewer than the frames.
       const mid = pa.clone().lerp(pb, 0.5);
       l.mesh.position.copy(mid).add(new THREE.Vector3(0, -l.heightM * 1.8, 0));
+      faceHead(l.mesh);
+      legendBelow = l.mesh.position.clone().add(new THREE.Vector3(0, -l.heightM * 2.4, 0));
+    }
+    // What the little grids under the frames are, once for the whole strip.
+    {
+      // Under the baseline's words when there are any, else under the frames.
+      const mid = (Math.min(...layout.angles) + Math.max(...layout.angles)) / 2;
+      const p = legendBelow ?? ringPoint(mid, 0).p;
+      if (!legendBelow) p.y = dy0 - Math.max(...layout.tiers) * R.tierDropM - R.frameH / 2 - 0.17;
+      const l = label(tv('vr.sectorsLegend'), { tone: 'neutral', font: 'body', priority: 0.4 });
+      l.mesh.position.copy(p);
       faceHead(l.mesh);
     }
     // The date of the visit on the screen and of the one pointed at.
@@ -397,10 +421,18 @@ export function createTimeline({ visits, onPick, look, lang }) {
     actx.clip();
     const v = s.visit;
     if (v?.canvas) {
+      // The picture above, its sectors under it, in the same cell.
+      const ph = CELL_H - GRID_H;
+      actx.save();
+      actx.beginPath();
+      actx.rect(x, y, CELL_W, ph);
+      actx.clip();
       const sw = v.canvas.width;
       const sh = v.canvas.height;
-      const k = Math.max(CELL_W / sw, CELL_H / sh);
-      actx.drawImage(v.canvas, x + CELL_W / 2 - (sw * k) / 2, y + CELL_H / 2 - (sh * k) / 2, sw * k, sh * k);
+      const k = Math.max(CELL_W / sw, ph / sh);
+      actx.drawImage(v.canvas, x + CELL_W / 2 - (sw * k) / 2, y + ph / 2 - (sh * k) / 2, sw * k, sh * k);
+      actx.restore();
+      paintSectors(actx, x, y + ph, i, s);
     } else {
       actx.fillStyle = look.paper2;
       actx.fillRect(x, y, CELL_W, CELL_H);
@@ -429,6 +461,41 @@ export function createTimeline({ visits, onPick, look, lang }) {
     actx.restore();
   }
 
+  /**
+   * A visit's twenty sectors under its picture: brighter where something
+   * stood out, faint where not yet scored; on the visit on the screen, its
+   * most unusual sector ringed.
+   */
+  function paintSectors(actx, x, y, i, s) {
+    actx.fillStyle = look.paper2;
+    actx.fillRect(x, y, CELL_W, GRID_H);
+    const gap = 2;
+    const cw = (CELL_W - 12 - gap * (GRID_COLS - 1)) / GRID_COLS;
+    const ch = (GRID_H - 8 - gap * (GRID_ROWS - 1)) / GRID_ROWS;
+    let best = -1;
+    let bestZ = -Infinity;
+    for (let c = 0; c < GRID_COLS * GRID_ROWS; c++) {
+      const cx = x + 6 + (c % GRID_COLS) * (cw + gap);
+      const cy = y + 4 + Math.floor(c / GRID_COLS) * (ch + gap);
+      const z = s.at >= 0 ? sectors?.cells?.[c]?.[s.at] : null;
+      if (z == null) {
+        actx.fillStyle = look.neutral;
+        actx.globalAlpha = s.at >= 0 ? 0.4 : 0.18;
+      } else {
+        actx.fillStyle = look.accent;
+        actx.globalAlpha = Math.min(1, Math.max(0.05, z / SECTOR_TOP));
+        if (z > bestZ) { bestZ = z; best = c; }
+      }
+      actx.fillRect(cx, cy, cw, ch);
+    }
+    actx.globalAlpha = 1;
+    if (i === current && best >= 0) {
+      actx.strokeStyle = look.ink;
+      actx.lineWidth = 3;
+      actx.strokeRect(x + 6 + (best % GRID_COLS) * (cw + gap) - 1.5, y + 4 + Math.floor(best / GRID_COLS) * (ch + gap) - 1.5, cw + 3, ch + 3);
+    }
+  }
+
   /** Each visit's cell drawn into the atlas when what it shows changes. */
   function paintThumbs() {
     if (!mesh) return;
@@ -438,7 +505,7 @@ export function createTimeline({ visits, onPick, look, lang }) {
     let changed = false;
     list.forEach((s, i) => {
       const v = s.visit;
-      const key = v ? `${v.frame.obsId}|${v.canvasVersion ?? 0}` : `${s.status}|${lang}`;
+      const key = v ? `${v.frame.obsId}|${v.canvasVersion ?? 0}|${s.at}|${sectorsVersion}|${i === current}` : `${s.status}|${lang}`;
       if (quads[i].drawn !== key) {
         paintCell(actx, i, s);
         quads[i].drawn = key;
@@ -484,6 +551,14 @@ export function createTimeline({ visits, onPick, look, lang }) {
       if (was >= 0 && was < quads.length) setState(was, stateOf(was));
       if (i >= 0 && i < quads.length) setState(i, stateOf(i));
       showDate(dateFor.current, i);
+      // The ringed sector moves with the visit on the screen.
+      paintThumbs();
+    },
+    /** The field's sector scores, as they change while visits are read. */
+    setSectors(next) {
+      sectors = next;
+      sectorsVersion += 1;
+      paintThumbs();
     },
     /** New statuses or pictures; the arc is rebuilt only when the visits themselves change. */
     update(next) {

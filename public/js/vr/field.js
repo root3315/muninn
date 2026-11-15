@@ -22,9 +22,9 @@
 import * as THREE from '../vendor/three.module.js';
 import { t, fmt } from '../i18n.js';
 import { seasonChunks, chunkAt, forStack } from '../stack.js';
-import { searchFrames, groupVisits, bandsPresent, toS3, skybotCone, knownBodies, surveySources } from '../catalog.js';
+import { searchFrames, askMissingFrames, groupVisits, bandsPresent, toS3, skybotCone, knownBodies, surveySources } from '../catalog.js';
 import { planetHostNear, systemUrl } from '../exovision.js';
-import { spread, VISITS_PER_BATCH } from '../visits.js';
+import { spread, VISITS_PER_BATCH, mergeFrames } from '../visits.js';
 import { TangentGrid, deltaRA } from '../wcs.js';
 import { SkyView } from '../sky.js';
 import { scoreSectors } from '../sectors.js';
@@ -71,6 +71,8 @@ const MARKS_UNDO_MS = 5000;
 const breathe = () => new Promise((r) => { setTimeout(r, 0); });
 /** The field sizes offered in the headset, from the site's own (hash.js FOV_CHOICES). */
 const FOV_SIZES = [0.15, 0.3, 0.6];
+/** When the list of frames is asked again on its own, seconds after each failure. */
+const LIST_RETRY_S = [5, 15, 45];
 /** The guide's five steps, by their strings' names. */
 const GUIDE = ['Point', 'Field', 'Mark', 'Depth', 'Move'];
 /** The site's "How to read this" cards that hold in the headset, in its order. */
@@ -116,6 +118,7 @@ export function openFieldVR(target, env) {
     playing: false, clock: 0, mode: 'blink', more: false, hoverBtn: null,
     sectors: null, hunt: null, hunting: false, depth: null,
     bodiesFailed: new Set(), host: null, closed: false, mainDirty: true,
+    list: { tries: 0, retryAt: null, timer: 0, asking: false, busy: false, partial: false, missing: [], source: null, indexDate: null },
     depthVisit: null, wise: null, flipped: false, anim: null,
     head: env.head.clone(), yaw: env.baseYawDeg * D2R,
   };
@@ -214,6 +217,13 @@ export function openFieldVR(target, env) {
   const notice = createPanel({ widthM: 1.1, heightM: 0.24, pxPerM: 700, name: 'notice', opaque: true });
   notice.mesh.position.set(0, 0, 0.03);
   main.mesh.add(notice.mesh);
+  interactive.add(notice.mesh);
+  notice.mesh.userData.pick = (uv) => { const h = notice.hitAt(uv); if (h) { env.haptic?.('select'); act(h.id); } };
+  notice.mesh.userData.pickable = (uv) => Boolean(notice.hitAt(uv));
+  notice.mesh.userData.hover = (uv) => {
+    const id = uv && notice.hitAt(uv) ? 'notice:listRetry:' : null;
+    if (id !== st.hoverBtn) { st.hoverBtn = id; drawNotice(); }
+  };
 
   const bar = createPanel({ widthM: SCREENS.bar.w, heightM: SCREENS.bar.h, pxPerM: SCREENS.bar.pxPerM, name: 'bar', opaque: true });
   placePanel(bar, pose(SCREENS.bar));
@@ -293,9 +303,11 @@ export function openFieldVR(target, env) {
   for (const m of [main.mesh, bar.mesh, card.mesh, side.mesh, marksPanel.mesh, spectrum.mesh]) windows.add(m);
 
   /* ---- the visits on the Earth's orbit ------------------------------ */
-  const slots = () => st.entries.map((e) => ({
-    frame: e.frame, status: e.status, visit: sky.visits.find((v) => v.frame === e.frame) ?? null,
-  }));
+  const slots = () => st.entries.map((e) => {
+    const visit = sky.visits.find((v) => v.frame === e.frame) ?? null;
+    // `at`: its place among the visits read, which is how the sector scores are indexed.
+    return { frame: e.frame, status: e.status, visit, at: visit ? sky.visits.indexOf(visit) : -1 };
+  });
   let timeline = null;
   function ensureTimeline() {
     if (timeline || !st.entries.length) return;
@@ -324,6 +336,7 @@ export function openFieldVR(target, env) {
     onAction: (id, data) => {
       if (id === 'back') env.onBack?.();
       else if (id === 'fly') env.onFly?.(data);
+      else if (id === 'closeCard') env.onCloseCard?.();
       else if (id === 'sound') {
         if (data.kind === 'step') env.sound?.step(data.dir);
         else if (data.kind === 'body' && data.world) env.sound?.tick3d(data.world);
@@ -372,6 +385,7 @@ export function openFieldVR(target, env) {
     else if (id === 'bring') env.onBring?.();
     else if (id === 'wise') showWise();
     else if (id === 'layout') { windows.reset(); drawCard(); }
+    else if (id === 'listRetry') { st.list.tries = 0; retryList(); }
     else if (id === 'planets' && st.host) env.onLeave?.(systemUrl(st.host, label, lang));
     else if (id === 'site') env.onLeave?.(siteUrl());
     else if (id === 'sound' && env.sound) { env.sound.start(); env.sound.setEnabled(!env.sound.enabled); drawCard(); }
@@ -864,7 +878,7 @@ export function openFieldVR(target, env) {
   }
 
   function drawSide() {
-    side.draw((ctx, W, H) => {
+    side.draw((ctx, W, H, hits) => {
       panelGround(ctx, W, H);
       const x = 34;
       const w = W - 68;
@@ -873,6 +887,26 @@ export function openFieldVR(target, env) {
       const body = `400 ${T.body}px ${FONTS.body}`;
       let y = 34 + T.body;
       const reading = st.status === 'searching' || st.status === 'reading';
+      // Where the list of frames came from, and what of it is still missing.
+      const notes = [];
+      if (st.list.source === 'own-index') notes.push(tv('vr.ownIndex', { date: st.list.indexDate ?? '—' }));
+      if (st.list.partial && st.entries.length) {
+        const later = st.list.retryAt ? Math.max(1, Math.ceil((st.list.retryAt - performance.now()) / 1000)) : null;
+        notes.push(`${tv('vr.listPartial')}${later ? ` ${tv('vr.retryIn', { s: later })}` : ''}`);
+      }
+      if (notes.length) {
+        ctx.font = `400 ${SMALL}px ${FONTS.body}`;
+        ctx.fillStyle = look.neutral;
+        for (const n of notes) y = wrapText(ctx, n, x, y, w, SMALL * 1.3, 3) + 4;
+        if (st.list.partial && st.entries.length && !st.list.asking) {
+          const font = `500 ${T.body}px ${FONTS.body}`;
+          const bh = Math.round(T.body * 1.8);
+          const bw = Math.min(w, chipWidth(ctx, font, tv('vr.retryNow'), bh, 120));
+          button(ctx, hits, look, { x, y: y - SMALL, w: bw, h: bh, label: tv('vr.retryNow'), id: 'listRetry', font, hover: st.hoverBtn === 'side:listRetry:' });
+          y += bh + 10;
+        }
+        y += T.body;
+      }
 
       // How deep one visit goes: the key number, measured here or, for a
       // demonstration field, as measured when its answers were kept.
@@ -977,7 +1011,8 @@ export function openFieldVR(target, env) {
       const say = h?.error ? t('hunt.failed', { why: h.error })
         : h ? (h.list.length ? tv('vr.huntFound', { n: h.list.length, checked: h.checked }) : tv('vr.huntNone', { checked: h.checked }))
           : st.hunting ? t('hunt.running')
-            : sky.visits.length < 3 ? (reading ? tv('vr.huntStarts') : tv('vr.tooFew', { n: sky.visits.length }))
+            : !st.entries.length ? tv('vr.waitList')
+              : sky.visits.length < 3 ? (reading ? tv('vr.huntStarts') : tv('vr.tooFew', { n: sky.visits.length }))
               : t('hunt.running');
       y = wrapText(ctx, say, x, y, w, lh, 2);
       ctx.fillStyle = look.neutral;
@@ -986,13 +1021,17 @@ export function openFieldVR(target, env) {
   }
 
   function drawNotice() {
-    const say = st.status === 'searching' ? tv('vr.searching')
-      : st.status === 'reading' && !sky.visits.length ? tv('vr.reading', { done: st.done, total: st.entries.length })
-        : st.status === 'none' ? tv('vr.none')
-          : st.status === 'failed' ? tv('vr.searchFailed') : null;
+    const later = st.list.retryAt ? Math.max(1, Math.ceil((st.list.retryAt - performance.now()) / 1000)) : null;
+    const say = st.list.asking ? tv('vr.searching')
+      : st.list.busy && !st.entries.length ? tv('vr.archiveBusy', { s: later ?? '…' })
+        : st.status === 'searching' ? tv('vr.searching')
+          : st.status === 'reading' && !sky.visits.length ? tv('vr.reading', { done: st.done, total: st.entries.length })
+            : st.status === 'none' ? tv('vr.none')
+              : st.status === 'failed' ? (later ? `${tv('vr.searchFailedShort')} ${tv('vr.retryIn', { s: later })}` : tv('vr.searchFailedShort')) : null;
+    const offer = st.status === 'failed' && !st.list.asking;
     notice.mesh.visible = Boolean(say);
     if (!say) return;
-    notice.draw((ctx, W, H) => {
+    notice.draw((ctx, W, H, hits) => {
       roundRect(ctx, 2, 2, W - 4, H - 4, 26);
       ctx.fillStyle = look.paper2;
       ctx.fill();
@@ -1002,7 +1041,14 @@ export function openFieldVR(target, env) {
       ctx.font = `500 38px ${FONTS.body}`;
       ctx.fillStyle = st.status === 'failed' || st.status === 'none' ? look.counter : look.ink;
       ctx.textAlign = 'center';
-      wrapText(ctx, say, W / 2, H / 2 - 4, W - 60, 46, 2);
+      wrapText(ctx, say, W / 2, offer ? H / 2 - 40 : H / 2 - 4, W - 60, 46, 2);
+      ctx.textAlign = 'left';
+      if (offer) {
+        const font = `500 34px ${FONTS.body}`;
+        const words = tv('vr.retryNow');
+        const bw = chipWidth(ctx, font, words, 60, 120);
+        button(ctx, hits, look, { x: (W - bw) / 2, y: H - 80, w: bw, h: 60, label: words, id: 'listRetry', font, hover: st.hoverBtn === `notice:listRetry:` });
+      }
     });
   }
 
@@ -1020,17 +1066,132 @@ export function openFieldVR(target, env) {
   async function load() {
     // A field is centred where its target is best seen: the target's own position is the one to look up, as on the site.
     planetHostNear(target.target?.ra ?? ra, target.target?.dec ?? dec).then((h) => { if (!st.closed && h) { st.host = h; drawCard(); } });
-    const bakedAsk = bakedAnswers(target.key, signal);
-    let frames;
+    bakedAsk = bakedAnswers(target.key, signal);
+    let answer = null;
     try {
-      ({ frames } = await searchFrames({ ra, dec }, { signal }));
+      answer = await searchFrames({ ra, dec }, { signal });
     } catch {
       if (signal.aborted) return;
+    }
+    if (signal.aborted) return;
+    if (!answer?.frames) {
+      // Nothing came: said plainly, with a way to ask again, and asked again on its own.
       st.status = 'failed';
+      listRetryLater();
       drawAll();
       return;
     }
-    if (signal.aborted) return;
+    noteList(answer);
+    await begin(answer.frames);
+  }
+
+  /** The baked answers' question, asked once. */
+  let bakedAsk = null;
+
+  /**
+   * What the list of frames said besides its frames: whether some collections
+   * are missing (asked again later), and whether it came from Muninn's own index.
+   */
+  function noteList(answer) {
+    st.list.partial = Boolean(answer.partial);
+    st.list.missing = answer.missing ?? [];
+    st.list.source = answer.source ?? st.list.source;
+    st.list.indexDate = answer.indexDate ?? st.list.indexDate;
+    if (st.list.partial) listRetryLater();
+    else { clearTimeout(st.list.timer); st.list.retryAt = null; }
+  }
+
+  /** Ask again later: after 5, 15 and 45 s, or when a busy archive says. */
+  function listRetryLater(afterS = null) {
+    clearTimeout(st.list.timer);
+    const delay = afterS ?? LIST_RETRY_S[st.list.tries];
+    if (delay == null) { st.list.retryAt = null; return; }
+    if (afterS == null) st.list.tries += 1;
+    st.list.retryAt = performance.now() + delay * 1000;
+    st.list.timer = setTimeout(() => retryList(), delay * 1000);
+  }
+
+  /**
+   * Ask the archive again: everything if nothing came, else only the
+   * collections that did not answer; what arrives joins what is there.
+   * A busy archive is waited for, never shown as an error.
+   */
+  async function retryList() {
+    if (st.closed || st.list.asking) return;
+    clearTimeout(st.list.timer);
+    st.list.retryAt = null;
+    st.list.asking = true;
+    st.list.busy = false;
+    drawNotice();
+    drawSide();
+    let answer = null;
+    try {
+      answer = await askMissingFrames({ ra, dec, collections: st.entries.length ? st.list.missing : [] }, { signal });
+    } catch {
+      if (signal.aborted) return;
+    }
+    st.list.asking = false;
+    if (st.closed) return;
+    if (answer?.busy) {
+      st.list.busy = true;
+      listRetryLater(answer.retryAfterS);
+    } else if (!answer || answer.failed) {
+      listRetryLater();
+    } else if (!st.entries.length) {
+      st.status = 'searching';
+      noteList(answer);
+      await begin(answer.frames);
+      return;
+    } else {
+      noteList(answer);
+      await addFrames(answer.frames);
+    }
+    drawNotice();
+    drawSide();
+  }
+
+  /** More frames joined to the field's list: the visits they add are read like the rest. */
+  async function addFrames(fresh) {
+    st.frames = mergeFrames(st.frames ?? [], fresh);
+    st.all = groupVisits(st.frames, { ra, dec, band });
+    const have = new Set(st.entries.map((e) => e.frame.url));
+    const room = Math.max(0, VISITS - st.entries.length);
+    const added = spread(st.all, VISITS).filter((f) => !have.has(f.url)).slice(0, room).map((frame) => ({ frame, status: 'pending' }));
+    if (!added.length) { drawAll(); return; }
+    st.entries = [...st.entries, ...added].sort((p, q) => p.frame.mjd - q.frame.mjd);
+    refreshTimeline();
+    askBodies(added.map((e) => e.frame));
+    await readEntries(added);
+    measure();
+    drawAll();
+    refreshTimeline();
+  }
+
+  /** Read a list of visits, a few at a time. */
+  async function readEntries(list) {
+    await inPool(list, READERS, async (entry) => {
+      if (signal.aborted) return;
+      entry.status = 'reading';
+      try {
+        const stamp = await readStamp(toS3(entry.frame.url), grid, { signal });
+        if (signal.aborted) return;
+        if (!stamp) { entry.status = 'dropped'; return; }
+        entry.status = 'ready';
+        sky.addVisit(entry.frame, stamp);
+        if (sky.visits.length === 2 && st.mode === 'blink') play(true);
+        if (sky.visits.length === 3) { measure(); hunt(); } else if (sky.visits.length > 3) measure();
+        if (sky.marks.length && sky.visits.length >= 3) retrackMarks();
+      } catch {
+        if (!signal.aborted) entry.status = 'failed';
+      } finally {
+        st.done += 1;
+        if (!signal.aborted) { refreshTimeline(); drawNotice(); afterVisitChange(); }
+      }
+    });
+  }
+
+  /** Start the field from a list of frames. */
+  async function begin(frames) {
     st.frames = frames;
     st.all = groupVisits(frames, { ra, dec, band });
     const chosen = spread(st.all, VISITS).sort((p, q) => p.mjd - q.mjd);
@@ -1043,26 +1204,7 @@ export function openFieldVR(target, env) {
     if (baked?.depth && !st.depth) { depthView.setDepth(baked.depth.single); drawSide(); }
     askBodies(chosen);
     loadDepthData(chosen);
-
-    await inPool(st.entries, READERS, async (entry) => {
-      if (signal.aborted) return;
-      entry.status = 'reading';
-      try {
-        const stamp = await readStamp(toS3(entry.frame.url), grid, { signal });
-        if (signal.aborted) return;
-        if (!stamp) { entry.status = 'dropped'; return; }
-        entry.status = 'ready';
-        sky.addVisit(entry.frame, stamp);
-        if (sky.visits.length === 2 && st.mode === 'blink') play(true);
-        if (sky.visits.length === 3) { measure(); hunt(); }
-        if (sky.marks.length && sky.visits.length >= 3) retrackMarks();
-      } catch {
-        if (!signal.aborted) entry.status = 'failed';
-      } finally {
-        st.done += 1;
-        if (!signal.aborted) { refreshTimeline(); drawNotice(); afterVisitChange(); }
-      }
-    });
+    await readEntries(st.entries);
     if (signal.aborted) return;
     st.status = sky.visits.length ? 'ready' : 'none';
     sky.setAB(0, Math.max(0, sky.visits.length - 1));
@@ -1086,6 +1228,7 @@ export function openFieldVR(target, env) {
     }
     st.depth = per.length ? stackDepth(per) : null;
     st.sectors = sky.visits.length >= 3 ? scoreSectors(sky.visits, { sigmas }) : null;
+    timeline?.setSectors(st.sectors);
     if (st.depth) depthView.setDepth(st.depth.single);
   }
 
@@ -1217,6 +1360,8 @@ export function openFieldVR(target, env) {
     /** Once a frame: the dive, the blink on the frame clock, textures only when something changed. */
     update(dt, { head, gazeYaw }) {
       const now = performance.now();
+      // A retry's countdown, a second at a time.
+      if (st.list.retryAt && now - (st.listBeat ?? 0) > 1000) { st.listBeat = now; drawNotice(); drawSide(); }
       // The asking dot pulses: a redraw a few times a second, not every frame.
       if (marksPanel.animated && now - (st.marksBeat ?? 0) > 120) { st.marksBeat = now; drawMarks(); }
       if (st.anim) {
@@ -1234,7 +1379,7 @@ export function openFieldVR(target, env) {
       if (st.flipAnim) {
         const k = Math.min(1, (now - st.flipAnim.t0) / 200);
         st.veil = k < 0.5 ? k * 2 : 2 - k * 2;
-        if (k >= 0.5 && !st.flipAnim.swapped) { st.flipAnim.swapped = true; st.flipped = !st.flipped; stand(); drawBar(); env.onFlipped?.(st.flipped); }
+        if (k >= 0.5 && !st.flipAnim.swapped) { st.flipAnim.swapped = true; st.flipped = !st.flipped; stand(); drawBar(); if (!st.flipped) depthView.leave(); env.onFlipped?.(st.flipped); }
         if (k >= 1) { st.flipAnim = null; st.veil = 0; }
       }
       if (st.playing && !st.paused) {
@@ -1275,6 +1420,7 @@ export function openFieldVR(target, env) {
     },
     /** The screens in front again: the depth view turned back behind, at its own size. */
     resetView() {
+      depthView.leave();
       st.flipped = false;
       st.flipAnim = null;
       st.veil = 0;
@@ -1320,6 +1466,10 @@ export function openFieldVR(target, env) {
     clockTo: (years, play, dir) => depthView.clockTo(years, play, dir),
     get clockPanel() { return depthView.clockPanel; },
     scrub: (x, dt) => depthView.scrub(x, dt),
+    /** B in the depth view: true if it unwound something there. */
+    depthBack: () => depthView.back(),
+    depthCard: (on) => depthView.cardShown(on),
+    get depthMode() { return depthView.mode; },
     setMoved: (on) => depthView.setMoved(on),
     clearFocus: () => depthView.clearFocus(),
     get focusPhase() { return depthView.focusPhase; },
@@ -1330,6 +1480,7 @@ export function openFieldVR(target, env) {
     },
     close() {
       st.closed = true;
+      clearTimeout(st.list.timer);
       ctrl.abort();
       play(false);
       sky.ro?.disconnect();

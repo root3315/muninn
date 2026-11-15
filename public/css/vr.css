@@ -85,7 +85,29 @@ html, body.vr {
   pointer-events: none;
 }
 .vr__status { top: 40%; }
-.vr__hint { bottom: 4.2rem; color: var(--color-muted); font-size: var(--text-sm); }
+.vr__hint {
+  bottom: 4.2rem;
+  color: var(--color-muted);
+  font-size: var(--text-sm);
+  /* One compact line: it never covers the scene. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.35rem 0.5rem 0.35rem 0.9rem;
+  pointer-events: auto;
+}
+.vr__hint[hidden] { display: none; }
+.vr__hint-x {
+  font: 500 var(--text-sm) var(--font-mono);
+  color: var(--color-neutral);
+  background: transparent;
+  border: 0;
+  padding: 0 0.3rem;
+  cursor: pointer;
+}
 body[data-field="open"] .vr__hint { display: none; }
 body[data-field="open"] .vr__title { display: none; }
 

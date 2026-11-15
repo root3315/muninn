@@ -336,6 +336,9 @@ export function readPartial(body) {
     frames: Array.isArray(body?.frames) ? body.frames : [],
     partial: body?.partial === true || missing.length > 0 || warned,
     missing,
+    // Where the list came from, when the relay says: Muninn's own index, and its date.
+    ...(typeof body?.source === 'string' ? { source: body.source } : {}),
+    ...(typeof body?.indexDate === 'string' ? { indexDate: body.indexDate } : {}),
   };
 }
 

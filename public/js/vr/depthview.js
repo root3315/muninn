@@ -33,6 +33,7 @@ import {
 import { createPanel, FONTS, wrapText, fitText, wrapLines, button, chipWidth, roundRect } from './panel.js';
 import { LAYOUT, minTextPx } from './layout.js';
 import { lightTime } from './card.js';
+import { depthStep, DEPTH_IDLE } from './depthmodes.js';
 import { formatRA, formatDec } from '../catalog.js';
 import { tv } from './strings.js';
 
@@ -549,6 +550,20 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
   const pickables = { gaia: [], gaiaUnknown: [], bodies: [], galaxies: [], candidates: [], target: [] };
   /** The tape: the first thing measured from, and the line drawn to the second. */
   const tape = { from: null };
+  /** What the depth view is doing (depthmodes.js): one mode at a time, each ending the ones it must. */
+  let mode = { ...DEPTH_IDLE };
+  /** Take an action through the modes and carry out what it ends; the effects, for the caller. */
+  function go(action) {
+    const r = depthStep(mode, action);
+    mode = r.state;
+    if (r.effects.has('cancelTape')) tape.from = null;
+    if (r.effects.has('pauseClock')) clock.playing = false;
+    if (r.effects.has('resetClock')) { clock.anim = null; clock.playing = false; setYears(0); }
+    if (r.effects.has('clearFocus')) clearFocus();
+    if (r.effects.has('closeCard')) onAction?.('closeCard');
+    drawControls();
+    return r.effects;
+  }
   /** Time: the bodies on this day of their season. */
   const when = { mjd: null, bodies: null };
   /**
@@ -670,7 +685,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
         chip('dayNow', formatDay(new Date(((when.mjd ?? span.at) - MJD_UNIX) * 86400000)), when.mjd != null && Math.abs(when.mjd - span.at) > 0.5);
         chip('day', '›', false, '1');
       }
-      if (tape.from) chip('tapeClear', tv('vr.tapeClear'));
+      if (mode.tape) chip('tapeCancel', tv('vr.tapeArmed'), true);
+      if (layers.tape) chip('tapeClear', tv('vr.tapeClear'));
       if (state.moved) chip('home', tv('vr.backEarth'));
       // What a metre along the corridor is worth now, in distance.
       const decades = Math.log10((D.maxPc * AU_PER_PC) / D.minAU);
@@ -747,7 +763,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
     if (h.id === 'day') { stepBodies(Number(h.data)); return; }
     if (h.id === 'dayNow') { when.mjd = null; if (when.bodies) api.setBodies(...when.bodies); return; }
     if (h.id === 'reset') clearFocus();
-    if (h.id === 'tapeClear') { tape.from = null; clearLayer('tape'); drawControls(); return; }
+    if (h.id === 'tapeCancel') { go('tapeCancel'); return; }
+    if (h.id === 'tapeClear') { clearLayer('tape'); drawControls(); return; }
     onAction?.(h.id);
   };
   controls.mesh.userData.pickable = (uv) => Boolean(controls.hitAt(uv));
@@ -788,15 +805,21 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
 
   /** Play the clock toward the future (1) or the past (−1); the same way again pauses. From an end, it starts over from the other. */
   function playToward(dir) {
-    if (clock.playing && clock.dir === dir) { clock.playing = false; drawControls(); return; }
+    if (clock.playing && clock.dir === dir) { go('pause'); return; }
+    // At the end it runs toward, it first glides back to the other end: no jump.
+    const atEnd = dir > 0 ? clock.years >= STAR_YEARS : clock.years <= -STAR_YEARS;
+    if (atEnd) {
+      easeYears(-dir * STAR_YEARS);
+      clock.anim.then = dir;
+      return;
+    }
     clock.dir = dir;
     clock.dirU.value = dir;
     clock.anim = null;
+    go('play');
     clock.playing = true;
     clock.last = performance.now();
-    if (dir > 0 && clock.years >= STAR_YEARS) setYears(-STAR_YEARS);
-    else if (dir < 0 && clock.years <= -STAR_YEARS) setYears(STAR_YEARS);
-    else drawControls();
+    drawControls();
   }
 
   /** A step of the ‹ › buttons: a century at ×1, a millennium at ×10. */
@@ -811,6 +834,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
 
   /** A jump of the clock (a step, Today, the frame, a press on the slider), eased over READOUT_EASE_MS. */
   function easeYears(to) {
+    if (mode.playing) go('pause');
     clock.playing = false;
     clock.anim = { from: clock.years, to: Math.max(-STAR_YEARS, Math.min(STAR_YEARS, to)), t0: performance.now() };
     drawControls();
@@ -923,7 +947,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
     focus.ring.material.opacity = focus.phase === 'flying' ? 0.55 + 0.4 * Math.abs(Math.sin((performance.now() - focus.t0) / 240)) : 0.95;
     // The name keeps its size to the eye as the head comes close: never larger than it was made.
     focus.label.mesh.scale.setScalar(Math.max(0.05, Math.min(1, d / (focus.d0 * s))));
-    if (focus.phase === 'flying' && d < 1.1) focus.phase = 'there';
+    if (focus.phase === 'flying' && d < 1.1) { focus.phase = 'there'; go('arrive'); }
     else if (focus.phase === 'there' && d > 2.5) clearFocus();
   }
 
@@ -1022,7 +1046,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
     const content = it.card();
     const actions = [...(content.actions ?? [])];
     const lines = [...content.lines];
-    actions.push({ id: 'fly', label: tv('vr.flyTo'), run: () => { focusOn(it); onAction?.('fly', world); } });
+    actions.push({ id: 'fly', label: tv('vr.flyTo'), run: () => { go('fly'); focusOn(it); onAction?.('fly', world); } });
     if (it.path) {
       const shownPath = paths.has(it.key);
       actions.push({
@@ -1035,15 +1059,21 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
       });
     }
     if (it.pathNote) lines.push({ text: it.pathNote, tone: 'neutral' });
-    if (it.real?.au) {
-      if (tape.from && tape.from !== it) {
+    // The tape: armed from one thing, it measures to the next one opened, shows the result and is put down.
+    if (mode.tape && tape.from && tape.from !== it) {
+      if (it.real?.au) {
         const d = between(tape.from.real, it.real);
         lines.push({ text: tv('vr.tapeLine', { from: tape.from.name, d: apart(d) }), tone: 'accent' });
         drawTape(tape.from, it, apart(d));
-        actions.push({ id: 'tapeFrom', label: tv('vr.tapeFrom'), run: () => { tape.from = it; clearLayer('tape'); drawControls(); } });
-      } else if (tape.from !== it) {
-        actions.push({ id: 'tapeFrom', label: tv('vr.tapeFrom'), run: () => { tape.from = it; drawControls(); } });
+        tape.from = null;
+        go('tapeDone');
+      } else {
+        lines.push({ text: tv('vr.tapeNoDistance'), tone: 'neutral' });
       }
+    }
+    if (it.real?.au) {
+      if (mode.tape && tape.from === it) actions.push({ id: 'tapeFrom', label: tv('vr.tapeCancel'), run: () => go('tapeCancel') });
+      else actions.push({ id: 'tapeFrom', label: tv('vr.tapeFrom'), run: () => { if (mode.tape) go('tapeCancel'); tape.from = it; go('tapeArm'); } });
     }
     return { ...content, lines, actions };
   }
@@ -1145,16 +1175,26 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
     clockTo(years, play = false, dir = 1) { clock.playing = play; clock.dir = dir; clock.dirU.value = dir; clock.last = performance.now(); setYears(years); },
     /** For the checks: press a control by its id. */
     press(id, data = null) { controls.mesh.userData.pickAs?.(id, data); },
+    /** B in the depth view: one level unwound; true if it was used here, false to leave the view. */
+    back() { return !go('back').has('leaveDepth'); },
+    /** Out of the depth view: everything stopped, the clock back to today. */
+    leave() { go('leave'); },
+    /** The card shown or put away, so B knows. */
+    cardShown(on) { if (mode.card !== on) go(on ? 'cardOpen' : 'cardClose'); },
+    /** For the checks: the modes now. */
+    get mode() { return { ...mode }; },
     /** The clock as it runs, for its sound. */
     get clockState() { return clock; },
     /** The controls panel, for the stick to scrub the clock while a ray is on it. */
     get clockPanel() { return clock.uniform && state.gaia?.known ? controls.mesh : null; },
     /** The stick aside scrubs the clock: `x` −1…1 over `dt` seconds; any push stops it playing. */
     scrub(x, dt) {
-      if (Math.abs(x) < 0.15) return;
+      if (Math.abs(x) < 0.15) { if (mode.scrubbing) go('scrubEnd'); return; }
+      if (!mode.scrubbing || clock.playing) go('scrub');
       clock.playing = false;
       clock.anim = null;
-      clock.dirU.value = x > 0 ? 1 : -1;
+      // The trail turns only on a clear push, never on the stick's tremble.
+      if (Math.abs(x) > 0.3) clock.dirU.value = x > 0 ? 1 : -1;
       setYears(clock.years + x * dt * CLOCK_YPS * 4 * (clock.fast ? 10 : 1));
     },
     /** For the checks: where the `i`th pickable thing of a class stands, in the world. */
@@ -1508,10 +1548,12 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
         const k = Math.min(1, (performance.now() - clock.anim.t0) / READOUT_EASE_MS);
         const e = k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;
         const { from, to } = clock.anim;
+        const then = k >= 1 ? clock.anim.then : null;
         if (k >= 1) clock.anim = null;
         clock.dirU.value = to >= from ? 1 : -1;
         setYears(from + (to - from) * e);
         if (!clock.anim) drawControls();
+        if (then) playToward(then);
       }
       tickFocus(headWorld);
       if (clock.playing) {
@@ -1519,7 +1561,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
         const dt = Math.min(0.1, (now - clock.last) / 1000);
         clock.last = now;
         const next = clock.years + clock.dir * dt * CLOCK_YPS * (clock.fast ? 10 : 1);
-        if (Math.abs(next) >= STAR_YEARS) { clock.playing = false; setYears(Math.sign(next) * STAR_YEARS); drawControls(); } else setYears(next);
+        if (Math.abs(next) >= STAR_YEARS) { go('pause'); setYears(Math.sign(next) * STAR_YEARS); drawControls(); } else setYears(next);
       }
       // Every few frames, the names that would cover one another as seen
       // from where the viewer now stands: the more important one is shown.
