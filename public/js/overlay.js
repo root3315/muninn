@@ -108,21 +108,22 @@ export const CATALOGUES = {
         pmRA: 'pmra', pmDE: 'pmdec', Plx: 'parallax', e_Plx: 'parallax_error',
         VarFlag: 'phot_variable_flag', PQSO: 'classprob_dsc_combmod_quasar',
         PGal: 'classprob_dsc_combmod_galaxy', PSS: 'classprob_dsc_combmod_star',
+        RUWE: 'ruwe', IPDfmp: 'ipd_frac_multi_peak',
       },
     },
     vizier: {
       table: '"I/355/gaiadr3"', ra: 'RA_ICRS', dec: 'DE_ICRS', mag: 'Gmag',
-      columns: same('Source', 'RA_ICRS', 'DE_ICRS', 'Gmag', 'pmRA', 'pmDE', 'Plx', 'e_Plx', 'VarFlag', 'PQSO', 'PGal', 'PSS'),
+      columns: same('Source', 'RA_ICRS', 'DE_ICRS', 'Gmag', 'pmRA', 'pmDE', 'Plx', 'e_Plx', 'VarFlag', 'PQSO', 'PGal', 'PSS', 'RUWE', 'IPDfmp'),
     },
   },
   wise: {
     irsa: {
       table: 'allwise_p3as_psd', ra: 'ra', dec: 'dec', mag: 'w1mpro',
-      columns: { AllWISE: 'designation', RAJ2000: 'ra', DEJ2000: 'dec', W1mag: 'w1mpro', W2mag: 'w2mpro' },
+      columns: { AllWISE: 'designation', RAJ2000: 'ra', DEJ2000: 'dec', W1mag: 'w1mpro', W2mag: 'w2mpro', ccf: 'cc_flags', ex: 'ext_flg' },
     },
     vizier: {
       table: '"II/328/allwise"', ra: 'RAJ2000', dec: 'DEJ2000', mag: 'W1mag',
-      columns: same('AllWISE', 'RAJ2000', 'DEJ2000', 'W1mag', 'W2mag'),
+      columns: same('AllWISE', 'RAJ2000', 'DEJ2000', 'W1mag', 'W2mag', 'ccf', 'ex'),
     },
   },
   twomass: {
@@ -159,6 +160,13 @@ export function coneQuery(archive, { ra, dec, radiusDeg, limit = null, top }) {
     ORDER BY ${archive.mag}`;
 }
 
+/** A short tag for an archive's column list, which changes whenever a column is added or renamed. */
+export function columnsTag(archive) {
+  let h = 0;
+  for (const ch of Object.values(archive.columns).join(',')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return `_c${h.toString(36)}`;
+}
+
 /** An IRSA row under the shared names. A column the archive left out reads as ''. */
 export function renameRow(row, columns) {
   return Object.fromEntries(Object.entries(columns).map(([name, col]) => [name, row[col] ?? '']));
@@ -191,6 +199,7 @@ export function parseGaiaRow(r) {
     id: String(r.Source ?? '').trim(),
     ra: num(r.RA_ICRS) ?? NaN, dec: num(r.DE_ICRS) ?? NaN, mag: num(r.Gmag),
     pmRA: num(r.pmRA), pmDE: num(r.pmDE), plx: num(r.Plx), plxErr: num(r.e_Plx),
+    ruwe: num(r.RUWE), ipdMultiPeak: num(r.IPDfmp),
   });
 }
 
@@ -199,8 +208,52 @@ export function parseWiseRow(r) {
   return placed({
     id: String(r.AllWISE ?? '').trim(),
     ra: num(r.RAJ2000) ?? NaN, dec: num(r.DEJ2000) ?? NaN, mag: num(r.W1mag), w2: num(r.W2mag),
+    ccf: String(r.ccf ?? '').trim(), ex: num(r.ex),
   });
 }
+
+/**
+ * Whether an AllWISE source is a bright star's artefact rather than a source,
+ * by its contamination flags (cc_flags, one character per band, W1 first)
+ * and its extent flag (ext_flg). Only W1 and W2 are read: the overlay is cut
+ * and drawn in W1.
+ *
+ *   D H O P  upper case: AllWISE judged the detection itself spurious — a
+ *            diffraction spike, the halo, an optical ghost, persistence.
+ *            Never drawn.
+ *   d h o p  lower case: a real source whose flux the same light touched.
+ *            Kept, except inside a bright star's reach (`nearBright`) when
+ *            AllWISE also could not fit it as a point (ext_flg above 0).
+ *            Round Hamal those line up along its spikes and none has a Gaia
+ *            star under it; the lower-case sources beyond its reach mostly
+ *            do, and stay.
+ */
+export function wiseArtefact(row, { nearBright = false } = {}) {
+  const w1w2 = String(row.ccf ?? '').slice(0, 2);
+  if (/[DHOP]/.test(w1w2)) return true;
+  return nearBright && /[dhop]/.test(w1w2) && row.ex > 0;
+}
+
+/** Gaia's own sign of a confused image: RUWE above 1.4 with a tenth of its scans finding two peaks. */
+const RUWE_DOUBTFUL = 1.4;
+const MULTI_PEAK_DOUBTFUL = 10;
+
+/**
+ * Whether a Gaia source inside a bright star's reach is more likely its
+ * light than a star. Outside that reach nothing is judged. Inside it, a
+ * source Gaia could fit no parallax to (a two-parameter solution), or one
+ * whose astrometry fits badly (RUWE) on images that often showed two peaks
+ * (ipd_frac_multi_peak). A star with a clean five-parameter solution is
+ * always kept, however close: Gaia's own cuts and nothing stricter.
+ */
+export function gaiaArtefact(row, { nearBright = false } = {}) {
+  if (!nearBright) return false;
+  if (row.plx == null) return true;
+  return row.ruwe > RUWE_DOUBTFUL && row.ipdMultiPeak > MULTI_PEAK_DOUBTFUL;
+}
+
+/** The artefact test for one survey's rows. */
+export const ARTEFACT_TESTS = { gaia: gaiaArtefact, wise: wiseArtefact };
 
 /** CatWISE2020's motion-fit positions are for MJD 57170.0, about 2015.4. */
 export const CATWISE_EPOCH = epochOfMjd(57170);

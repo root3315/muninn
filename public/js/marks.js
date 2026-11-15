@@ -453,15 +453,19 @@ function answerLines(r, kind) {
       if (Number.isFinite(v)) phot.push(`${band} ${fmt(v, 1)}`);
     }
   }
-  if (r.wise) {
-    if (Number.isFinite(r.wise.w1)) phot.push(`W1 ${fmt(r.wise.w1, 1)}`);
-    if (Number.isFinite(r.wise.w2)) phot.push(`W2 ${fmt(r.wise.w2, 1)}`);
+  // AllWISE's only source here may be its own record of a bright star's spike
+  // or halo: said as that, and its magnitudes left out of the photometry.
+  const wise = r.wise && !r.wise.artefact ? r.wise : null;
+  if (wise) {
+    if (Number.isFinite(wise.w1)) phot.push(`W1 ${fmt(wise.w1, 1)}`);
+    if (Number.isFinite(wise.w2)) phot.push(`W2 ${fmt(wise.w2, 1)}`);
   }
   if (phot.length) {
-    const p = whoP(`${[r.tmass && '2MASS', r.wise && 'AllWISE'].filter(Boolean).join(' · ')}: ${phot.join(' · ')}`);
+    const p = whoP(`${[r.tmass && '2MASS', wise && 'AllWISE'].filter(Boolean).join(' · ')}: ${phot.join(' · ')}`);
     p.phot = true;
     lines.push(p);
   }
+  if (r.wise?.artefact) lines.push(whoP(t('mark.whoWiseArtefact', { flags: r.wise.ccf })));
 
   // A distance, only where the parallax is measured and not merely returned.
   const g = r.gaia;

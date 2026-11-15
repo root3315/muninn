@@ -28,7 +28,7 @@
 
 import { deadline, CATALOG_DEADLINE_MS, RELAY_DEADLINE_MS, SEARCH_DEADLINE_MS } from './net.js';
 import {
-  CATALOGUES, ROW_CAP, coneQuery, parseGaiaRow, parseWiseRow, parseCatwiseRow, measuredMotion, cutToCap,
+  CATALOGUES, ROW_CAP, coneQuery, parseGaiaRow, parseWiseRow, parseCatwiseRow, measuredMotion, cutToCap, wiseArtefact,
   propagate, GAIA_EPOCH, CATWISE_EPOCH,
 } from './overlay.js';
 import { parseCsv } from './csv.js';
@@ -671,11 +671,11 @@ async function irsaRows(kind, { ra, dec, radiusDeg, limit = null, top }, signal)
 const CFA_CONES = {
   gaia: {
     source: 'I/355/gaiadr3', mag: 'Gmag',
-    columns: Object.fromEntries(['Source', 'RA_ICRS', 'DE_ICRS', 'Gmag', 'pmRA', 'pmDE', 'Plx', 'e_Plx', 'VarFlag', 'PQSO', 'PGal', 'PSS'].map((n) => [n, n])),
+    columns: Object.fromEntries(['Source', 'RA_ICRS', 'DE_ICRS', 'Gmag', 'pmRA', 'pmDE', 'Plx', 'e_Plx', 'VarFlag', 'PQSO', 'PGal', 'PSS', 'RUWE', 'IPDfmp'].map((n) => [n, n])),
   },
   wise: {
     source: 'II/328/allwise', mag: 'W1mag',
-    columns: Object.fromEntries(['AllWISE', 'RAJ2000', 'DEJ2000', 'W1mag', 'W2mag'].map((n) => [n, n])),
+    columns: Object.fromEntries(['AllWISE', 'RAJ2000', 'DEJ2000', 'W1mag', 'W2mag', 'ccf', 'ex'].map((n) => [n, n])),
   },
   twomass: {
     source: 'II/246/out', mag: 'Jmag',
@@ -840,9 +840,22 @@ async function askTwoMass(ra, dec, signal, arcsec) {
 
 async function askWise(ra, dec, signal, arcsec) {
   const rows = (await nearby('wise', ra, dec, signal, ['RAJ2000', 'DEJ2000'], arcsec)).map(({ r, via, sep }) => ({
-    id: r.AllWISE, w1: num(r.W1mag), w2: num(r.W2mag), sep, via,
+    id: r.AllWISE, w1: num(r.W1mag), w2: num(r.W2mag), sep, via, ccf: String(r.ccf ?? '').trim(),
   }));
-  return brightest(rows, 'w1');
+  return wiseMatch(rows);
+}
+
+/**
+ * The AllWISE source a mark is, from the rows round it: the brightest clean
+ * one. A source AllWISE itself flags as a spike, halo, ghost or persistence
+ * (wiseArtefact) is named only when nothing else is there, and then says so
+ * (`artefact`), so the card does not give a bright star's spike a W1.
+ */
+export function wiseMatch(rows) {
+  const clean = rows.filter((r) => !wiseArtefact(r));
+  if (clean.length) return brightest(clean, 'w1');
+  const flagged = brightest(rows, 'w1');
+  return flagged && { ...flagged, artefact: true };
 }
 
 async function askVsx(ra, dec, signal, arcsec = 10) {
@@ -952,7 +965,8 @@ export async function identifySource({ ra, dec, epoch = 2026 }, { signal, onUpda
       if (!answer) out.pending.push(key);
       else if (!answer.ok) out.failed.push(key);
     }
-    out.any = IDENTIFY_KEYS.some((k) => out[k]);
+    // A source its own catalogue flags as a bright star's artefact identifies nothing.
+    out.any = IDENTIFY_KEYS.some((k) => out[k] && !out[k].artefact);
     out.moved = anchor ? { epoch } : null;
     return out;
   };

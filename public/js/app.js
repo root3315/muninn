@@ -2369,7 +2369,9 @@ function surveyLineText(kind) {
     name, n: sky.surveyShown[kind] ?? 0, band: SURVEY_BAND[kind], lim: fmt(found.reached, 1),
   });
   const via = found.via ? `${line} · ${t(`survey.via${found.via}`)}` : line;
-  return found.cut ? `${via} · ${t('survey.cut', { cap: ROW_CAP })}` : via;
+  const hidden = sky.surveyHidden?.[kind] ?? 0;
+  const said = hidden ? `${via} · ${t('survey.artefacts', { n: hidden })}` : via;
+  return found.cut ? `${said} · ${t('survey.cut', { cap: ROW_CAP })}` : said;
 }
 
 function surveyLine(kind, text) {

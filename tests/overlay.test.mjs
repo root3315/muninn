@@ -107,12 +107,12 @@ const flat = (query) => query.replace(/\s+/g, ' ');
 test('the queries are built from formatted numbers and nothing else', () => {
   const field = { ra: 269.4463, dec: 4.768, radiusDeg: 0.31641, limit: 17, top: ROW_CAP + 1 };
   assert.equal(flat(coneQuery(CATALOGUES.gaia.vizier, field)),
-    'SELECT TOP 301 Source, RA_ICRS, DE_ICRS, Gmag, pmRA, pmDE, Plx, e_Plx, VarFlag, PQSO, PGal, PSS'
+    'SELECT TOP 301 Source, RA_ICRS, DE_ICRS, Gmag, pmRA, pmDE, Plx, e_Plx, VarFlag, PQSO, PGal, PSS, RUWE, IPDfmp'
     + ' FROM "I/355/gaiadr3"'
     + " WHERE CONTAINS(POINT('ICRS', RA_ICRS, DE_ICRS), CIRCLE('ICRS', 269.446300, 4.768000, 0.31641)) = 1 AND Gmag <= 17.00"
     + ' ORDER BY Gmag');
   assert.equal(flat(coneQuery(CATALOGUES.wise.vizier, { ...field, limit: 14.5, top: 51 })),
-    'SELECT TOP 51 AllWISE, RAJ2000, DEJ2000, W1mag, W2mag FROM "II/328/allwise"'
+    'SELECT TOP 51 AllWISE, RAJ2000, DEJ2000, W1mag, W2mag, ccf, ex FROM "II/328/allwise"'
     + " WHERE CONTAINS(POINT('ICRS', RAJ2000, DEJ2000), CIRCLE('ICRS', 269.446300, 4.768000, 0.31641)) = 1 AND W1mag <= 14.50"
     + ' ORDER BY W1mag');
 });
@@ -121,14 +121,14 @@ test('the IRSA templates ask the NASA tables, in their own column names', () => 
   const field = { ra: 269.452, dec: 4.693, radiusDeg: 6 / 3600, top: 8 };
   assert.equal(flat(coneQuery(CATALOGUES.gaia.irsa, { ...field, limit: 17 })),
     'SELECT TOP 8 source_id, ra, dec, phot_g_mean_mag, pmra, pmdec, parallax, parallax_error, phot_variable_flag,'
-    + ' classprob_dsc_combmod_quasar, classprob_dsc_combmod_galaxy, classprob_dsc_combmod_star'
+    + ' classprob_dsc_combmod_quasar, classprob_dsc_combmod_galaxy, classprob_dsc_combmod_star, ruwe, ipd_frac_multi_peak'
     + " FROM gaia_dr3_source WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', 269.452000, 4.693000, 0.00167)) = 1"
     + ' AND phot_g_mean_mag <= 17.00 ORDER BY phot_g_mean_mag');
   // Without a limit there is no cut, only the cone; still brightest first.
   assert.equal(flat(coneQuery(CATALOGUES.twomass.irsa, field)),
     "SELECT TOP 8 designation, ra, dec, j_m, h_m, k_m FROM fp_psc WHERE CONTAINS(POINT('ICRS', ra, dec),"
     + " CIRCLE('ICRS', 269.452000, 4.693000, 0.00167)) = 1 ORDER BY j_m");
-  assert.ok(flat(coneQuery(CATALOGUES.wise.irsa, field)).startsWith('SELECT TOP 8 designation, ra, dec, w1mpro, w2mpro FROM allwise_p3as_psd'));
+  assert.ok(flat(coneQuery(CATALOGUES.wise.irsa, field)).startsWith('SELECT TOP 8 designation, ra, dec, w1mpro, w2mpro, cc_flags, ext_flg FROM allwise_p3as_psd'));
   assert.ok(flat(coneQuery(CATALOGUES.catwise.irsa, field)).startsWith(
     'SELECT TOP 8 source_name, ra_pm, dec_pm, pmra, pmdec, sigpmra, sigpmdec, w1mpro, w2mpro FROM catwise_2020'));
   // VizieR quotes the one column whose name starts with a digit.
@@ -153,9 +153,9 @@ test('a query refuses anything that is not a finite number', () => {
 });
 
 /* Recorded from IRSA TAP on 13 Nov 2026: Gaia DR3 near Barnard's Star, the IRSA template, top 3. */
-const IRSA_GAIA_CSV = `source_id,ra,dec,phot_g_mean_mag,pmra,pmdec,parallax,parallax_error,phot_variable_flag,classprob_dsc_combmod_quasar,classprob_dsc_combmod_galaxy,classprob_dsc_combmod_star
-4472835983521061248,269.45241699657,4.77473723896,14.975017,-1.843,-6.193,0.2183,0.0281,NOT_AVAILABLE,0.000000,0.000000,0.999987
-4472835876142910336,269.44852449166,4.76290250243,16.695990,-3.157,-0.535,0.4920,0.0631,NOT_AVAILABLE,0.000000,0.000000,0.999988
+const IRSA_GAIA_CSV = `source_id,ra,dec,phot_g_mean_mag,pmra,pmdec,parallax,parallax_error,phot_variable_flag,classprob_dsc_combmod_quasar,classprob_dsc_combmod_galaxy,classprob_dsc_combmod_star,ruwe,ipd_frac_multi_peak
+4472835983521061248,269.45241699657,4.77473723896,14.975017,-1.843,-6.193,0.2183,0.0281,NOT_AVAILABLE,0.000000,0.000000,0.999987,1.012,0
+4472835876142910336,269.44852449166,4.76290250243,16.695990,-3.157,-0.535,0.4920,0.0631,NOT_AVAILABLE,0.000000,0.000000,0.999988,0.987,0
 `;
 
 test('an IRSA row, renamed, reads exactly like a VizieR row', () => {
@@ -166,7 +166,7 @@ test('an IRSA row, renamed, reads exactly like a VizieR row', () => {
   assert.equal(rows[0].VarFlag, 'NOT_AVAILABLE');
   assert.deepEqual(parseGaiaRow(rows[0]), {
     id: '4472835983521061248', ra: 269.45241699657, dec: 4.77473723896, mag: 14.975017,
-    pmRA: -1.843, pmDE: -6.193, plx: 0.2183, plxErr: 0.0281,
+    pmRA: -1.843, pmDE: -6.193, plx: 0.2183, plxErr: 0.0281, ruwe: 1.012, ipdMultiPeak: 0,
   });
   // A column the archive did not send is empty, not undefined.
   assert.equal(renameRow({}, { Gmag: 'phot_g_mean_mag' }).Gmag, '');
@@ -201,7 +201,7 @@ test('a Gaia row keeps its 64-bit id as text and its gaps as null', () => {
   });
   assert.deepEqual(full, {
     id: '4472832130942575872', ra: 269.44850252544, dec: 4.73942005111, mag: 8.193974,
-    pmRA: -801.551, pmDE: 10362.394, plx: 546.9759, plxErr: 0.0401,
+    pmRA: -801.551, pmDE: 10362.394, plx: 546.9759, plxErr: 0.0401, ruwe: null, ipdMultiPeak: null,
   });
   // A two-parameter solution: a position and a brightness, no motion, no parallax.
   const bare = parseGaiaRow({ Source: '1', RA_ICRS: '10.5', DE_ICRS: '-3.25', Gmag: '19.1', pmRA: '', pmDE: '', Plx: '', e_Plx: '' });
@@ -220,7 +220,7 @@ test('a row with no position or no magnitude is dropped', () => {
 test('an AllWISE row carries W1 and W2', () => {
   assert.deepEqual(
     parseWiseRow({ AllWISE: 'J175747.94+044323.8', RAJ2000: '269.4497620', DEJ2000: '4.7232970', W1mag: '4.386', W2mag: '' }),
-    { id: 'J175747.94+044323.8', ra: 269.449762, dec: 4.723297, mag: 4.386, w2: null },
+    { id: 'J175747.94+044323.8', ra: 269.449762, dec: 4.723297, mag: 4.386, w2: null, ccf: '', ex: null },
   );
 });
 
@@ -284,14 +284,14 @@ test('with IRSA and CDS both down, a magnitude-cut overlay is drawn from the CfA
     + '</TABLEDATA></DATA></TABLE></RESOURCE></VOTABLE>';
   const mirror = {
     'I/355/gaiadr3': votable(
-      ['Source', 'RA_ICRS', 'DE_ICRS', 'Gmag', 'pmRA', 'pmDE', 'Plx', 'e_Plx', 'VarFlag', 'PQSO', 'PGal', 'PSS'],
-      [['1', '180.0', '0.0', '9.5', '1', '2', '3', '0.1', 'NOT_AVAILABLE', '0', '0', '1'],
-        ['2', '180.01', '0.0', '15.9', '', '', '', '', '', '', '', ''],
-        ['3', '180.02', '0.0', '16.4', '', '', '', '', '', '', '', '']],
+      ['Source', 'RA_ICRS', 'DE_ICRS', 'Gmag', 'pmRA', 'pmDE', 'Plx', 'e_Plx', 'VarFlag', 'PQSO', 'PGal', 'PSS', 'RUWE', 'IPDfmp'],
+      [['1', '180.0', '0.0', '9.5', '1', '2', '3', '0.1', 'NOT_AVAILABLE', '0', '0', '1', '1.0', '0'],
+        ['2', '180.01', '0.0', '15.9', '', '', '', '', '', '', '', '', '', ''],
+        ['3', '180.02', '0.0', '16.4', '', '', '', '', '', '', '', '', '', '']],
     ),
     'II/328/allwise': votable(
-      ['AllWISE', 'RAJ2000', 'DEJ2000', 'W1mag', 'W2mag'],
-      [['J120000.00+000000.0', '180.0', '0.0', '8.5', '8.4'], ['J120002.40+000000.0', '180.01', '0.0', '14.2', '']],
+      ['AllWISE', 'RAJ2000', 'DEJ2000', 'W1mag', 'W2mag', 'ccf', 'ex'],
+      [['J120000.00+000000.0', '180.0', '0.0', '8.5', '8.4', '0000', '0'], ['J120002.40+000000.0', '180.01', '0.0', '14.2', '', '0000', '0']],
     ),
   };
   const asked = [];
@@ -306,11 +306,11 @@ test('with IRSA and CDS both down, a magnitude-cut overlay is drawn from the CfA
     const gaia = await catalogueRows('gaia', { ra: 180, dec: 0, radiusDeg: 0.1, limit: 16, top: 50 });
     assert.equal(gaia.via, 'VizieR');
     assert.deepEqual(gaia.rows.map((r) => r.Source), ['1', '2']);
-    assert.deepEqual(Object.keys(gaia.rows[0]), ['Source', 'RA_ICRS', 'DE_ICRS', 'Gmag', 'pmRA', 'pmDE', 'Plx', 'e_Plx', 'VarFlag', 'PQSO', 'PGal', 'PSS']);
+    assert.deepEqual(Object.keys(gaia.rows[0]), ['Source', 'RA_ICRS', 'DE_ICRS', 'Gmag', 'pmRA', 'pmDE', 'Plx', 'e_Plx', 'VarFlag', 'PQSO', 'PGal', 'PSS', 'RUWE', 'IPDfmp']);
     assert.equal(asked.at(-1).get('Gmag'), '<=16.00');
 
     const wise = await catalogueRows('wise', { ra: 180, dec: 0, radiusDeg: 0.1, limit: 12, top: 50 });
-    assert.deepEqual(wise.rows, [{ AllWISE: 'J120000.00+000000.0', RAJ2000: '180.0', DEJ2000: '0.0', W1mag: '8.5', W2mag: '8.4' }]);
+    assert.deepEqual(wise.rows, [{ AllWISE: 'J120000.00+000000.0', RAJ2000: '180.0', DEJ2000: '0.0', W1mag: '8.5', W2mag: '8.4', ccf: '0000', ex: '0' }]);
     assert.equal(asked.at(-1).get('W1mag'), '<=12.00');
 
     const all = await catalogueRows('gaia', { ra: 180, dec: 0, radiusDeg: 0.1, top: 50 });
