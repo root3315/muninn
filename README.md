@@ -10,6 +10,8 @@ megabytes at a time.
 - **Talk** (ten slides and an appendix; slide 2 reads real frames as you watch):
   <https://muninn.mydevbox.xyz/talk.html> · PDF [English](https://muninn.mydevbox.xyz/talk.pdf),
   [Russian](https://muninn.mydevbox.xyz/talk.ru.pdf)
+- **VR:** press *Enter VR* on the sky or in a field in a headset's browser (Meta Quest 3 first, any
+  WebXR headset), or open <https://muninn.mydevbox.xyz/vr.html> on a computer to look round with the mouse.
 - **Run it:** `node server.js`, then open <http://127.0.0.1:5173> (Node 18+, nothing to install).
 - **Stack:** plain JavaScript modules, HTML and CSS in the browser; a dependency-free Node
   server that relays the NASA services without CORS. No build step, no framework.
@@ -45,8 +47,11 @@ A longer walk through every formula, data source and test, in Russian:
 
 ## What you can do with it
 
-- **Open a field** by name (`M51`, `Vega`, resolved through SIMBAD), by coordinates in decimal
-  or sexagesimal, from the sky map, by one of the ten ready fields, or at random.
+- **Open a field** by name (`M51`, `Vega`, resolved through SIMBAD and NED), by a catalogue id
+  (Gaia DR3, TIC, 2MASS, HD, HIP), by a star with planets or a planet's own name (`TRAPPIST-1 e`
+  opens its host), by an asteroid or comet (`433 Eros`, `1P/Halley`, through JPL; today's position,
+  and the page says so), by coordinates in decimal or sexagesimal, from the sky map, by one of the
+  ten ready fields, or at random.
 - **Compare visits:** *Blink* every visit in turn, *Wipe* two of them against each other with a
   draggable divider, take their *Difference* (violet where A is brighter, amber where B is, the
   colours of the A and B chips), look at a *Single* visit, or *Stack* a season.
@@ -99,10 +104,17 @@ stop filling at thirty visits instead of sixty. The stretch is a precomputed tab
 an `asinh` per pixel, run thumbnails are made once per size, canvases are resized only when the
 size changes, and a link straight to a field does not build the sky map behind it.
 
-**Saturated stars.** The pipeline blanks a saturated core. For display only, a blank enclosed by
-bright glow is filled from its rim, so a bright star is not a white disc with a black square in
-it; the measured data are not touched, and a mark there reads *saturated* and quotes no
-brightness or position.
+**Saturated stars.** The pipeline blanks a saturated core. For display only, a small blank
+enclosed by bright glow is filled from its rim, so a bright star is not a white disc with a black
+square in it; the measured data are not touched, and a mark there reads *saturated* and quotes no
+brightness or position. Around a star brighter than V 3 (Arcturus, Vega) the pipeline masks
+arcminutes of sky; that patch is drawn flat at the sky's level, outlined and labelled as masked,
+and a mark that comes and goes near such a star says that stray light does exactly that.
+
+**Learning it.** *How to read this* is sixteen short cards, each with a small demo to play with
+(drag the wipe, tap a star for its mark, slide a magnitude against the depth bar). The first
+field opened on a page load starts a guided tour of the screen; *Not clear* on any step opens
+that step's demo. Neither starts on a shared link.
 
 **The interface.** The plate is grey, so the picture never changes brightness with the hue; the
 chrome takes the hue of the band in view, from violet at D1 to red at D6. Each colour ramp rises
@@ -160,6 +172,45 @@ separate repository, [root3315/TIC-id](https://github.com/root3315/TIC-id)). Mun
 
 ---
 
+## VR: standing inside the sky
+
+`public/vr.html` and `public/js/vr/` put the same data around the viewer, on three.js 0.187
+(vendored, no CDN) over WebXR. *Enter VR* shows only in a headset's browser or on a computer that
+can drive one; on a flat screen `/vr.html` is the same scene with mouse or touch look.
+
+- **The sky:** the opening sky's 15 568 catalogue stars at their positions, the Milky Way as a
+  labelled model, the challenge targets and ready fields as rings. Point at any star (the ray
+  snaps within 1.2° and names it) and open a field there.
+- **The field on screens around you:** the frames blinking in front, Single, Wipe, Difference,
+  Stack, the bands and the field's size; the target's card on the left; the depth, known bodies
+  and Hunter X on the right; the visits on an arc below, placed where the Earth was on its orbit.
+  Screens can be grabbed, pushed, pulled and resized with two hands; released, they step clear of
+  each other.
+- **Marks as on the site:** trigger on a pixel, and the same code (`public/js/marks.js`) gives the
+  verdict, the catalogue identification, the light curve, the spectrum and the season link, drawn
+  on the image and in a marks panel.
+- **The field in depth, behind you:** every object of the field placed along its own direction at
+  its distance on a log axis in AU, from the Sun past the galaxies: Gaia DR3 stars by Bailer-Jones
+  distance or parallax, known asteroids at their JPL/SkyBoT distance on the date of each visit,
+  galaxies by redshift, and objects with no distance on a far shell said to be so. Distance shells
+  are labelled (Neptune, Planet X's predicted 400–800 AU, the Oort cloud, 1–100 pc, the Galactic
+  centre); a note says how many stars the narrow cone should hold and how many Gaia shows.
+- **In the depth:** walk and fly with the sticks, teleport, grab to move or scale the scene; tap
+  anything for its card (distance, source, light travel time and the year the light left);
+  *Fly there*, *Measure from here* (the true distance between two objects), *Show path* (a star's
+  proper motion, an asteroid's track through the season, a galaxy's recession); filters with
+  honest counts; a clock that runs the stars ±10 000 years by Gaia proper motion, both ways, with
+  *Today* and *Epoch of the frame*; *Back to Earth*.
+- **Comfort:** no camera roll, eased moves with a vignette, foveation, 72–90 fps on Quest 3 (about
+  55 draw calls; 7 ms a frame on a desktop GPU). A five-step guide opens with the first field;
+  *Open on the site* leaves VR for the same view on the page.
+
+What the data cannot give is said in the scene: Gaia rows here carry no radial velocities, so the
+clock moves stars across the sky but not toward or away; the sky's star list has no proper
+motions, so the constellations do not drift.
+
+---
+
 ## NASA data and services used
 
 | what | from | used for |
@@ -173,13 +224,14 @@ separate repository, [root3315/TIC-id](https://github.com/root3315/TIC-id)). Mun
 | 2MASS | IRSA TAP (`fp_psc`), raced against CDS VizieR | J, H and K of a marked source |
 | Gaia DR3 | ESA Gaia, through NASA MAST (one marked star, in a second or two), IRSA TAP (`gaia_dr3_source`) and CDS VizieR | what a faint marked star is and whether Gaia saw it vary; the overlay, carried by proper motion from J2016.0 to each visit; the Gaia model beside the frame |
 | Known solar-system objects | NASA/JPL Small-Body Identification (`sb_ident`), merged with SkyBoT (IMCCE) | naming asteroids and comets at the moment of each exposure; either service alone is enough |
+| Asteroids and comets by name | NASA/JPL SBDB and Horizons, relayed by `/api/smallbody` | finding a small body typed into the search, and its position today |
 | Stars with known planets | NASA Exoplanet Archive (NExScI, Caltech/IPAC), `pscomppars`, baked by `tools/planet-hosts.mjs` into `public/data/planet-hosts.json` | a star with planets within 90″ offers its system in [ExoVision](https://exovision.mydevbox.xyz), the team's exoplanet explorer |
 | Other telescopes of the field | Canadian Astronomy Data Centre, CAOM index (Argus TAP), relayed by `/api/archives` | how many science observations HST, JWST, TESS, Chandra, Gemini, CFHT, JCMT, SDSS, VLASS and the CSA's NEOSSat hold of the field; Barnard's Star has 572 NEOSSat frames from 2019 |
 
 Outside NASA: object names from SIMBAD / Sesame and variable stars from AAVSO VSX through
 VizieR (CDS Strasbourg), for which NASA has no equivalent; SkyBoT from IMCCE. Each catalogue is
-asked on its own: one that does not answer leaves the rest of the card standing, and the card
-names it. Muninn is not affiliated with NASA and adds nothing to the data it shows.
+asked on its own and raced across IRSA, CDS and the CfA mirror of VizieR, 25 s at most: one that
+does not answer leaves the rest of the card standing, and the card names it, with a retry. Muninn is not affiliated with NASA and adds nothing to the data it shows.
 
 Also used: distances by Bailer-Jones et al. 2021 (VizieR I/352) for the stars of the VR mode;
 the Lunar Reconnaissance Orbiter mosaic (NASA/GSFC/Arizona State University) for the Moon in the
@@ -474,7 +526,10 @@ Open (152) Atala, click the centre of the image and read the verdict: one visit,
 - **Cosmic rays look like transients.** The ones the pipeline caught are masked; the sharpness
   test catches the rest only from about 57σ, and a hit on a pixel corner can pass for a star.
 - **The relay is small:** 180 archive questions a minute per visitor, a cap on lookups in flight
-  per service, a 12-hour answer cache swept every ten minutes and held under 300 MB.
+  per service, a 12-hour answer cache swept every ten minutes and held under 300 MB. Visit lists
+  are kept per collection for 30 days: when IRSA fails, the last list is served and refreshed in
+  the background, a failed collection is asked again on its own, and one that is down never
+  fails a field the others cover.
 
 ---
 
@@ -482,18 +537,21 @@ Open (152) Atala, click the centre of the image and read the verdict: one visit,
 
 ```bash
 node server.js            # serves public/ and the relays on http://127.0.0.1:5173 (PORT, HOST to change)
-npm test                  # all offline tests (node --test, about 190); TEST_PORT sets the server tests' port
+npm test                  # all offline tests (node --test, about 240); TEST_PORT sets the server tests' port
 npm run bake              # refresh the frame indexes of the ten ready fields
 npm run probe             # check the WCS round trip against a live SPHEREx header
 node tools/sensitivity.mjs                        # the depth table above
 node tools/verify-mover.mjs 13.4194 3.8459 0.15   # the Atala SNR table
 node tools/hunter-benchmark.mjs --quick           # the Hunter X injection test, small run
 node tools/planet-hosts.mjs                       # refresh the planet-host list
+node tools/bake-visits.mjs                        # refresh the ready fields' visit lists, all collections
+node tools/bake-vr.mjs                            # the VR depth data of the demo fields
+node tools/talk-pdf.mjs                           # the talk's PDFs, with static fonts from tools/print-fonts
 ```
 
 The server serves the page and relays what the browser may not call itself, because those
 services send no CORS headers: `/api/search` (IRSA's frame index), `/api/tap` (IRSA TAP, and
-MAST for one Gaia star), `/api/sbident` (JPL), `/api/wise` (the AllWISE cutout) and
+MAST for one Gaia star), `/api/sbident` and `/api/smallbody` (JPL), `/api/wise` (the AllWISE cutout) and
 `/api/archives` (CADC). Each relay writes its query from a fixed template and checked numbers.
 Image data never passes through it. The live site runs `server.js`.
 
@@ -504,8 +562,8 @@ search only, with a 20 s wait and 400 rows per collection); there the catalogues
 VizieR alone and known asteroids from SkyBoT alone.
 
 `public/_headers` holds the content-security policy, naming every origin the page may reach: the
-S3 mirror, IRSA, CDS and its CfA mirrors (Sesame, SIMBAD, VizieR), IMCCE (SkyBoT), Google Fonts,
-and CADC's NEOSSat preview images. `server.js` reads the same file and sends the same policy.
+S3 mirror, IRSA, CDS and its CfA mirrors (Sesame, SIMBAD, VizieR), IMCCE (SkyBoT) and CADC's NEOSSat
+preview images. The typefaces are served by the site itself. `server.js` reads the same file and sends the same policy.
 
 **A new SPHEREx release** is a new IRSA collection on the same mirror: add its name to
 `public/js/release.js` (one list for the relay, the edge function and the bake script), run
@@ -522,9 +580,16 @@ public/          the site: index.html, talk.html, _headers, css/ (redesign.css i
                  picture:   render.js, sky.js, strip.js, stack.js, gaiasky.js, wise.js, gate.js, twilight.js
                  science:   depth.js, sectors.js, huntcore.js, hunt.js, seasons.js, sharpness.js,
                             spectrum.js, spectrum-view.js
-                 services:  catalog.js, overlay.js, sbident.js, archives.js, csv.js, votable.js
-                 page:      app.js (state and wiring), i18n.js, hash.js, export.js, suggest*.js, ephemeris.js, talk.js
-  data/          targets.json and fields/ (the ten ready fields), planet-hosts.json, sky/ (the sky map)
+                 services:  catalog.js, overlay.js, sbident.js, archives.js, csv.js, votable.js,
+                            lookup.js, names.js, smallbody.js, hosts.js, exovision.js, brightstars.js
+                 marks:     marks.js (shared with VR), markfacts.js
+                 page:      app.js (state and wiring), i18n.js, hash.js, export.js, suggest*.js, ephemeris.js,
+                            read.js (How to read), tour.js, device.js, talk.js
+    vr/          the VR mode: main.js, sky3d.js, field.js, markspanel.js, depthview.js, depth3d.js,
+                 windows.js, input.js, nav.js and the rest; vendor/ holds three.js
+  vr.html        the VR page
+  data/          targets.json and fields/ (the ten ready fields), planet-hosts.json, sky/ (the sky map),
+                 vr/ (the demo fields' depth data)
 functions/       the frame search for Cloudflare Pages
 tools/           measurement, bake and benchmark scripts
 tests/           npm test, offline
@@ -556,6 +621,14 @@ AWS по диапазонам байтов: заголовок, только н�
 находит и прямо об этом пишет. Hunter X — ранжирование кандидатов, а не проверенный детектор
 (см. [docs/hunter-benchmark.md](docs/hunter-benchmark.md)). Звезда с известными планетами
 открывает свою систему в ExoVision.
+
+**VR.** В браузере шлема (сначала Meta Quest 3, но подходит любой WebXR) кнопка «Войти в VR» есть
+на небе и в поле; на компьютере `/vr.html` открывает ту же сцену для мыши. Вокруг — настоящее небо
+каталога, перед вами — кадры поля на экранах (их можно брать, двигать и растягивать), метки
+работают как на сайте. За спиной то же поле стоит в глубину по настоящим расстояниям: звёзды Gaia,
+астероиды на дату захода, галактики по красному смещению, кольца от Нептуна и Планеты X до центра
+Галактики. Там можно ходить, лететь к объекту, мерить расстояние между двумя, показать путь
+объекта и прокрутить движение звёзд на ±10 000 лет.
 
 Подробное руководство: [docs/study-guide.ru.pdf](docs/study-guide.ru.pdf).
 Запуск: `node server.js`, затем <http://127.0.0.1:5173>. Зависимостей нет.
