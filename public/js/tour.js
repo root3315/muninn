@@ -134,6 +134,7 @@ function build() {
         </div>
       </div>
       <div class="tour__acts">
+        <button type="button" class="btn btn--quiet tour__back" hidden></button>
         <button type="button" class="btn btn--primary tour__next"></button>
         <button type="button" class="btn btn--quiet tour__toggle" aria-expanded="false" aria-controls="tour-more"></button>
         <button type="button" class="link tour__read" hidden></button>
@@ -147,9 +148,10 @@ function build() {
     wait: q('.tour__wait'),
     moreText: q('.tour__more-text'), clip: q('.tour__clip'), read: q('.tour__read'),
     demo: q('.tour__demo'), moreX: q('.tour__more-x'),
-    next: q('.tour__next'), toggle: q('.tour__toggle'),
+    next: q('.tour__next'), back: q('.tour__back'), toggle: q('.tour__toggle'),
   };
   ui.next.addEventListener('click', () => go(at + 1));
+  ui.back.addEventListener('click', back);
   ui.skip.addEventListener('click', end);
   ui.toggle.addEventListener('click', () => setExpanded(!expanded, { animate: true }));
   ui.moreX.addEventListener('click', () => { setExpanded(false, { animate: true }); ui.toggle.focus(); });
@@ -165,7 +167,7 @@ function onKey(e) {
   if (!ui || ui.root.hidden || $('about')?.open) return;
   if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); end(); return; }
   if (e.key === 'ArrowRight') { e.preventDefault(); e.stopPropagation(); go(at + 1); return; }
-  if (e.key === 'ArrowLeft') { e.preventDefault(); e.stopPropagation(); if (at > 0) go(at - 1); return; }
+  if (e.key === 'ArrowLeft') { e.preventDefault(); e.stopPropagation(); back(); return; }
   if (!ui.root.contains(e.target)) e.stopPropagation();
 }
 
@@ -303,6 +305,8 @@ function render() {
   ui.moreX.setAttribute('aria-label', t('tour.demoClose'));
   demo?.relabel();
   ui.next.textContent = t(last ? 'tour.finish' : 'tour.next');
+  ui.back.hidden = at === 0;
+  ui.back.textContent = t('tour.back');
   ui.toggle.textContent = t(expanded ? 'tour.less' : 'tour.more');
   ui.card.classList.remove('is-fresh');
   void ui.card.offsetWidth;
@@ -448,11 +452,29 @@ function waitFor(step) {
   }, WAIT_POLL_MS);
 }
 
-function go(i) {
+/**
+ * One step back. An open "Not clear" closes first, the way it would by its
+ * own button, and the frame then glides back to the part before.
+ */
+function back() {
+  if (!ui || at === 0) return;
+  const to = at - 1;
+  // Pressed again and again, Back stays under the finger until the first step.
+  const step = () => { go(to, -1); (ui.back.hidden ? ui.next : ui.back).focus({ preventScroll: true }); };
+  if (!expanded || STILL.matches) { step(); return; }
+  setExpanded(false, { animate: true });
+  setTimeout(step, 210);
+}
+
+/**
+ * Go to step i. A step whose part has gone is dropped and the walk goes on
+ * in the same direction: forward to the next, back to the one before.
+ */
+function go(i, dir = 1) {
   clearInterval(waitTimer);
   if (ui) ui.wait.hidden = true;
   if (i >= steps.length) { end(); return; }
-  at = i;
+  at = Math.max(0, i);
   const step = steps[at];
   // The part may have been folded away since the tour began.
   step.el = step.find();
@@ -460,7 +482,7 @@ function go(i) {
     if (step.waits && loading()) { waitFor(step); return; }
     steps.splice(at, 1);
     if (at >= steps.length) { end(); return; }
-    go(at);
+    go(dir < 0 && at > 0 ? at - 1 : at, dir);
     return;
   }
   if (expanded) setExpanded(false);
