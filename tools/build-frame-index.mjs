@@ -155,7 +155,11 @@ async function siaOnce(collection, t0, t1) {
   const url = `${SIA}?COLLECTION=${collection}&TIME=${t0}+${t1}&MAXREC=1000000&RESPONSEFORMAT=csv`;
   const { status, text } = await getSlowly(url, TAP_TIMEOUT_MS);
   if (status !== 200) throw Object.assign(new Error(`SIA HTTP ${status}`), { status });
-  if (text.trimStart().startsWith('<')) throw Object.assign(new Error('SIA answer is not a table'), { status: 200 });
+  // A VOTable instead of the CSV asked for is the SIA saying it failed (a timeout under load): asked again.
+  if (text.trimStart().startsWith('<')) {
+    const said = /QUERY_STATUS"\s+value="ERROR"\s*>([^<]*)/.exec(text)?.[1]?.trim() || text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 160);
+    throw new Error(`SIA answer is not a table: ${said}`);
+  }
   return parseCsv(text).filter((r) => r.dataproduct_subtype === 'science' && Number(r.calib_level) >= 2);
 }
 
