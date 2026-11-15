@@ -636,15 +636,16 @@ ecliptic pole where the deep fields crowd; the relay runs in a 160 MB heap
 
 ```bash
 node tools/build-frame-index.mjs --estimate   # one week, and the size of the whole (about 130 MB)
-node tools/build-frame-index.mjs --days 28 --parallel 2  # fetch what is missing, then pack
+node tools/build-frame-index.mjs --parallel 2   # fetch what is missing, a week a question, then pack
 node tools/build-frame-index.mjs --source sia --days 1   # the same through the SIA, when TAP is down
 MUNINN_COMPARE_IRSA=1 node --test tests/frame-index-irsa.test.mjs
 ```
 
-The build reads IRSA's TAP by windows of exposure time, as asynchronous jobs. Each costs IRSA a
-scan of the table whatever its length (under a minute when IRSA is well, 18 minutes when it is
-loaded), so a window of four weeks is no slower than one of a week. It waits out bursts of 502
-for up to two hours a window, and resumes from the windows it has. Stopped and started again, it asks only for what
+The build reads IRSA's TAP a week of exposure time at a time, as asynchronous jobs: under a
+minute each when IRSA is well, 18 minutes when it is loaded (82 weeks: from an hour to half a
+day). Longer windows are not faster: under load IRSA cancels a four-week job. A cancelled job
+is asked again; bursts of 502 are waited out for up to two hours a week; the build resumes
+from the weeks it has. Stopped and started again, it asks only for what
 is missing. It writes to `.index/` (not in git), or to
 `MUNINN_INDEX_DIR`. On a server, keep the index outside the app's folder, which a deploy
 replaces:
