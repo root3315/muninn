@@ -23,7 +23,7 @@
 
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { brotliCompress, gzip, gunzip, constants as zlib } from 'node:zlib';
 import { promisify } from 'node:util';
 import { readFile, writeFile, mkdir, stat, readdir, unlink } from 'node:fs/promises';
@@ -403,31 +403,79 @@ const INDEX_CELLS_MAX_BYTES = envMs('MUNINN_INDEX_CACHE_BYTES', 32 * 1024 * 1024
 let indexCellBytes = 0;
 const gunzipCell = promisify(gunzip);
 
-async function loadOwnIndex() {
-  try {
-    const meta = JSON.parse(await readFile(join(INDEX_DIR, 'meta.json'), 'utf8'));
-    if (meta.format !== 1 || !Array.isArray(meta.collections)) return;
-    // A rebuilt index replaces the cells read from the one before.
-    if (ownIndex?.meta.builtAt !== meta.builtAt) { indexCells.clear(); indexCellBytes = 0; }
-    ownIndex = { meta };
-  } catch {
-    /* no index here: the search has IRSA's routes only */
-  }
+/** What a usable meta.json holds; anything less is no index at all. */
+function indexMetaProblem(meta) {
+  if (meta?.format !== 1) return 'not format 1';
+  if (!Array.isArray(meta.collections) || !Array.isArray(meta.versions)) return 'no collections or versions';
+  if (!Number.isFinite(meta.reachDeg) || meta.reachDeg <= 0 || meta.reachDeg > 10) return 'no frame reach';
+  if (typeof meta.builtAt !== 'string' || Number.isNaN(Date.parse(meta.builtAt))) return 'no build date';
+  if (!meta.counts || typeof meta.counts !== 'object') return 'no counts';
+  return null;
 }
 
+let indexComplaint = '';
+
+/** Said once per distinct problem, not every ten minutes. */
+function complainAboutIndex(text) {
+  if (text === indexComplaint) return;
+  indexComplaint = text;
+  console.warn(`  own frame index: ${text}`);
+}
+
+/**
+ * The index's meta.json, read at start and every ten minutes. A missing
+ * folder is no index; an unreadable or incomplete one (a copy cut short) is
+ * no index and said in the log; the search then has IRSA's routes only.
+ */
+async function loadOwnIndex() {
+  let meta;
+  try {
+    meta = JSON.parse(await readFile(join(INDEX_DIR, 'meta.json'), 'utf8'));
+    await stat(join(INDEX_DIR, 'tiles'));
+  } catch (err) {
+    if (ownIndex) indexCells.clear();
+    ownIndex = null;
+    if (err.code !== 'ENOENT' || existsSync(INDEX_DIR)) complainAboutIndex(`not usable in ${INDEX_DIR} (${err.code ?? err.message})`);
+    return;
+  }
+  const problem = indexMetaProblem(meta);
+  if (problem) {
+    ownIndex = null;
+    complainAboutIndex(`meta.json in ${INDEX_DIR}: ${problem}`);
+    return;
+  }
+  indexComplaint = '';
+  // A rebuilt index replaces the cells read from the one before.
+  if (ownIndex?.meta.builtAt !== meta.builtAt) { indexCells.clear(); indexCellBytes = 0; }
+  ownIndex = { meta };
+}
+
+/**
+ * One sky cell's rows, from memory or from disk. A cell with no file has no
+ * frames (the build writes no empty cells). A file that cannot be read (cut
+ * short, not gzip, not JSON) fails the own-index route for this question,
+ * logged, and is not kept: the search goes on to IRSA's TAP.
+ */
 async function readCell(id) {
   let cell = indexCells.get(id);
   if (cell) {
     indexCells.delete(id);
   } else {
     let text = '[]';
+    let rows;
     try {
       text = String(await gunzipCell(await readFile(join(INDEX_DIR, 'tiles', id.split('-')[0], `${id}.json.gz`))));
+      rows = JSON.parse(text);
+      if (!Array.isArray(rows) || rows.some((r) => !Array.isArray(r) || !Array.isArray(r[ROW.corners]))) throw new Error('not a list of frames');
     } catch (err) {
-      if (err.code !== 'ENOENT') throw err;
+      if (err.code !== 'ENOENT') {
+        console.warn(`  own frame index: cell ${id} unreadable (${err.code ?? err.message})`);
+        throw new Error(`cell ${id} unreadable`);
+      }
+      rows = [];
     }
     // Parsed rows take a few times their JSON's length.
-    cell = { rows: JSON.parse(text), bytes: text.length * 3 };
+    cell = { rows, bytes: text.length * 3 };
     indexCellBytes += cell.bytes;
   }
   indexCells.set(id, cell);

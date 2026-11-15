@@ -9,7 +9,7 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { request, createServer } from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { mkdir, rm, writeFile, utimes as touch } from 'node:fs/promises';
+import { mkdir, rm, writeFile, readFile, utimes as touch } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { gzipSync } from 'node:zlib';
@@ -646,7 +646,7 @@ describe('frame search with an own frame index', () => {
   async function writeIndex() {
     const meta = { collections: COLLECTIONS, versions: ['l2b-test'] };
     const cells = new Map();
-    for (const ra of [120.5, 131.5]) {
+    for (const ra of [120.5, 131.5, 140.5]) {
       const tag = String(ra).replace('.', '');
       const rows = [
         obscoreRow(`2025W30_1A_${tag}_1`, 'spherex_dr1', ra + 1, 10.5),
@@ -678,7 +678,7 @@ describe('frame search with an own frame index', () => {
       const collection = url.searchParams.get('COLLECTION');
       const ra = Number(url.searchParams.get('POS').split(' ')[1]);
       hits.set(ra, (hits.get(ra) ?? 0) + 1);
-      const step = plan.get(ra) ?? { status: 200 };
+      const step = plan.get(`${collection} ${ra}`) ?? plan.get(ra) ?? { status: 200 };
       setTimeout(() => {
         if (res.destroyed) return;
         if (step.status !== 200) { res.writeHead(step.status); res.end('Bad gateway'); return; }
@@ -699,7 +699,7 @@ describe('frame search with an own frame index', () => {
         MUNINN_CACHE_DIR: cacheDir,
         MUNINN_RETRY_MS: '20,40',
         MUNINN_ATTEMPT_MS: '5000',
-        MUNINN_RETRY_LATER_MS: '60000',
+        MUNINN_RETRY_LATER_MS: '150',
         MUNINN_INDEX_AFTER_MS: '300',
       },
       stdio: ['ignore', 'pipe', 'inherit'],
@@ -720,8 +720,8 @@ describe('frame search with an own frame index', () => {
     await rm(indexDir, { recursive: true, force: true });
   });
 
-  const search = async (ra, dec) => {
-    const res = await fetch(`${INDEX_BASE}/api/search?ra=${ra}&dec=${dec}`);
+  const search = async (ra, dec, extra = "") => {
+    const res = await fetch(`${INDEX_BASE}/api/search?ra=${ra}&dec=${dec}${extra}`);
     return { res, body: await res.json() };
   };
 
@@ -759,9 +759,184 @@ describe('frame search with an own frame index', () => {
     assert.equal(hits.get(131.5), 4);
   });
 
-  test('search: IRSA answering in time is answered with, the own index unused', async () => {
+  test('search: IRSA answering in time is answered with, at once, the own index unused', async () => {
+    const began = Date.now();
     const { body } = await search(122.5, 10);
+    assert.ok(Date.now() - began < 250, `a healthy SIA waited ${Date.now() - began} ms`);
     assert.equal(body.source, 'irsa');
     assert.equal(body.frames.length, 12);
+  });
+
+  test('search: a frame IRSA has and the index does not appears on the next ask, once IRSA is back', async () => {
+    plan.set(140.5, { status: 502 });
+    const first = await search(140.5, 10);
+    assert.equal(first.body.source, 'own-index');
+    assert.equal(first.body.indexDate, BUILT);
+    assert.ok(!first.body.frames.some((f) => f.obsId === 'spherex_dr1_0'));
+    // IRSA recovers; the relay's own retry behind the answer keeps its list.
+    plan.set(140.5, { status: 200 });
+    const before = hits.get(140.5);
+    await waitUntil(() => hits.get(140.5) >= before + 4);
+    await new Promise((r) => { setTimeout(r, 100); });
+    const second = await search(140.5, 10);
+    assert.equal(second.body.source, 'irsa');
+    assert.ok(second.body.frames.some((f) => f.obsId === 'spherex_dr1_0'), 'the frame only IRSA lists');
+    assert.equal(second.body.frames.length, 12);
+  });
+
+  test('search: one collection from the index beside three from IRSA is said, collection by collection', async () => {
+    plan.set('spherex_qr3 120.5', { status: 502 });
+    plan.delete(120.5);
+    const { res, body } = await search(120.5, 10, '&radius=0.007');
+    assert.equal(body.source, 'own-index');
+    assert.deepEqual(body.fromIndex, ['spherex_qr3']);
+    assert.equal(body.partial, false);
+    assert.deepEqual(body.frames.map((f) => f.collection).sort(),
+      ['spherex_dr1', 'spherex_dr1', 'spherex_dr1', 'spherex_dr1_deep', 'spherex_dr1_deep', 'spherex_dr1_deep',
+        'spherex_qr3', 'spherex_qr3_deep', 'spherex_qr3_deep', 'spherex_qr3_deep']);
+    assert.equal(res.headers.get('cache-control'), 'no-cache');
+  });
+});
+
+async function waitUntil(check, ms = 5000) {
+  const until = Date.now() + ms;
+  while (!check() && Date.now() < until) await new Promise((r) => { setTimeout(r, 20); });
+}
+
+describe('frame search with a missing or broken own index', () => {
+  const base = join(tmpdir(), `muninn-broken-index-${process.pid}`);
+  let fake;
+
+  /** The fake IRSA: the SIA always 502, TAP one DR1 frame over every position, the mirror one version. */
+  before(async () => {
+    fake = createServer(async (req, res) => {
+      const url = new URL(req.url, 'http://fake');
+      if (url.pathname.startsWith('/S3')) {
+        res.writeHead(200, { 'content-type': 'application/xml' });
+        res.end(`<ListBucketResult><CommonPrefixes><Prefix>${url.searchParams.get('prefix')}l2b-test/</Prefix></CommonPrefixes></ListBucketResult>`);
+        return;
+      }
+      if (url.pathname.startsWith('/TAP')) {
+        let body = '';
+        for await (const chunk of req) body += chunk;
+        const query = new URLSearchParams(body).get('QUERY') ?? '';
+        const ra = Number(/CIRCLE\('ICRS', ([\d.]+),/.exec(query)?.[1]);
+        if (!query.includes("'spherex_dr1'")) { res.writeHead(503); res.end(); return; }
+        res.writeHead(200, { 'content-type': 'text/csv' });
+        res.end(obscoreCsv([obscoreRow('2025W30_1A_0009_1', 'spherex_dr1', ra + 0.5, 10)]));
+        return;
+      }
+      res.writeHead(502);
+      res.end('Bad gateway');
+    });
+    await new Promise((resolve) => { fake.listen(0, '127.0.0.1', resolve); });
+  });
+
+  after(async () => {
+    fake?.closeAllConnections?.();
+    fake?.close();
+    await rm(base, { recursive: true, force: true });
+  });
+
+  /** A relay on its own port and index folder; everything it logs, collected. */
+  async function relayWith(port, indexDir) {
+    const logs = [];
+    const proc = spawn(process.execPath, ['server.js'], {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      env: {
+        ...process.env,
+        PORT: String(port),
+        HOST: '127.0.0.1',
+        MUNINN_SIA_URL: `http://127.0.0.1:${fake.address().port}/SIA`,
+        MUNINN_TAP_URL: `http://127.0.0.1:${fake.address().port}/TAP/sync`,
+        MUNINN_S3_URL: `http://127.0.0.1:${fake.address().port}/S3/`,
+        MUNINN_INDEX_DIR: indexDir,
+        MUNINN_CACHE_DIR: join(base, `cache-${port}`),
+        MUNINN_RETRY_MS: '20,40',
+        MUNINN_RETRY_LATER_MS: '60000',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    proc.stderr.on('data', (c) => logs.push(String(c)));
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('relay did not start')), 10000);
+      proc.stdout.on('data', (c) => {
+        logs.push(String(c));
+        if (String(c).includes(`:${port}`)) { clearTimeout(timer); resolve(); }
+      });
+    });
+    return { proc, logs, text: () => logs.join('') };
+  }
+
+  /** IRSA's SIA failing, the answer comes from the TAP route, and the relay is still up. */
+  async function fallsBackToTap(port, relay, ra) {
+    const body = await (await fetch(`http://127.0.0.1:${port}/api/search?ra=${ra}&dec=10`)).json();
+    assert.equal(body.ok, true);
+    assert.equal(body.source, 'irsa-tap');
+    assert.deepEqual(body.frames.map((f) => f.obsId), ['2025W30_1A_0009_1']);
+    assert.equal(relay.proc.exitCode, null, 'still up');
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/search?ra=13.4194&dec=3.8459`)).status, 200);
+  }
+
+  async function writeGoodIndex(dir) {
+    const row = indexRowFromObscore(obscoreRow('2025W30_1A_0001_1', 'spherex_dr1', 160.5, 10), COLLECTIONS, 0);
+    const tile = tileOf(row[ROW.ra], row[ROW.dec]);
+    await mkdir(join(dir, 'tiles', tile.split('-')[0]), { recursive: true });
+    await writeFile(join(dir, 'tiles', tile.split('-')[0], `${tile}.json.gz`), gzipSync(JSON.stringify([row])));
+    const counts = Object.fromEntries(COLLECTIONS.map((c) => [c, 1]));
+    await writeFile(join(dir, 'meta.json'), JSON.stringify({
+      format: 1, builtAt: '2026-11-14T10:00:00.000Z', reachDeg: 2.6, collections: COLLECTIONS, versions: ['l2b-test'], counts, rows: 1,
+    }));
+    return join(dir, 'tiles', tile.split('-')[0], `${tile}.json.gz`);
+  }
+
+  const cases = [
+    ['no index folder at all', async () => join(base, 'nowhere'), /No own frame index/],
+    ['an empty folder', async () => { const d = join(base, 'empty'); await mkdir(d, { recursive: true }); return d; }, /own frame index: not usable/],
+    ['a meta.json cut short', async () => {
+      const d = join(base, 'partial-meta');
+      await writeGoodIndex(d);
+      const meta = await readFile(join(d, 'meta.json'), 'utf8');
+      await writeFile(join(d, 'meta.json'), meta.slice(0, meta.length >> 1));
+      return d;
+    }, /own frame index: not usable/],
+    ['a meta.json with no build date', async () => {
+      const d = join(base, 'thin-meta');
+      await writeGoodIndex(d);
+      await writeFile(join(d, 'meta.json'), JSON.stringify({ format: 1, collections: COLLECTIONS, versions: [], reachDeg: 2.6, counts: {} }));
+      return d;
+    }, /meta\.json .*no build date/],
+  ];
+
+  for (const [i, [name, make, said]] of cases.entries()) {
+    test(`search: ${name} is no index, said in the log, and IRSA's routes answer`, async () => {
+      const port = PORT + 4 + i;
+      const relay = await relayWith(port, await make());
+      try {
+        await waitUntil(() => said.test(relay.text()));
+        assert.match(relay.text(), said);
+        await fallsBackToTap(port, relay, 160.5);
+      } finally {
+        relay.proc.kill();
+      }
+    });
+  }
+
+  test('search: a cell file cut short fails the index route, logged, and TAP answers', async () => {
+    const port = PORT + 4 + cases.length;
+    const dir = join(base, 'cut-cell');
+    const cell = await writeGoodIndex(dir);
+    const whole = await readFile(cell);
+    await writeFile(cell, whole.subarray(0, whole.length >> 1));
+    const relay = await relayWith(port, dir);
+    try {
+      await waitUntil(() => /Own frame index of 2026-11-14/.test(relay.text()));
+      assert.match(relay.text(), /Own frame index of 2026-11-14/);
+      await fallsBackToTap(port, relay, 160.5);
+      await waitUntil(() => /unreadable/.test(relay.text()));
+      assert.match(relay.text(), /own frame index: cell \d+-\d+ unreadable/);
+    } finally {
+      relay.proc.kill();
+    }
   });
 });
