@@ -12,6 +12,63 @@
 <link rel="modulepreload" href="js/vendor/three.core.js">
 <link rel="modulepreload" href="js/vendor/three.module.js">
 <link rel="modulepreload" href="js/vr/main.js">
+<!-- The whole module graph at once: six levels of imports found one after another cost six round trips. -->
+<link rel="modulepreload" href="js/i18n.js">
+<link rel="modulepreload" href="js/gate.js">
+<link rel="modulepreload" href="js/ephemeris.js">
+<link rel="modulepreload" href="js/vr/skydata.js">
+<link rel="modulepreload" href="js/vr/sky3d.js">
+<link rel="modulepreload" href="js/render.js">
+<link rel="modulepreload" href="js/ranges.js">
+<link rel="modulepreload" href="js/vr/panel.js">
+<link rel="modulepreload" href="js/vr/layout.js">
+<link rel="modulepreload" href="js/vr/strings.js">
+<link rel="modulepreload" href="js/vr/card.js">
+<link rel="modulepreload" href="js/net.js">
+<link rel="modulepreload" href="js/overlay.js">
+<link rel="modulepreload" href="js/csv.js">
+<link rel="modulepreload" href="js/sbident.js">
+<link rel="modulepreload" href="js/names.js">
+<link rel="modulepreload" href="js/smallbody.js">
+<link rel="modulepreload" href="js/votable.js">
+<link rel="modulepreload" href="js/wcs.js">
+<link rel="modulepreload" href="js/catalog.js">
+<link rel="modulepreload" href="js/vr/markers.js">
+<link rel="modulepreload" href="js/vr/targets3d.js">
+<link rel="modulepreload" href="js/vr/input.js">
+<link rel="modulepreload" href="js/stack.js">
+<link rel="modulepreload" href="js/exovision.js">
+<link rel="modulepreload" href="js/visits.js">
+<link rel="modulepreload" href="js/depth.js">
+<link rel="modulepreload" href="js/brightstars.js">
+<link rel="modulepreload" href="js/sectors.js">
+<link rel="modulepreload" href="js/fits.js">
+<link rel="modulepreload" href="js/spectrum.js">
+<link rel="modulepreload" href="js/rice.js">
+<link rel="modulepreload" href="js/stamp.js">
+<link rel="modulepreload" href="js/sharpness.js">
+<link rel="modulepreload" href="js/sky.js">
+<link rel="modulepreload" href="js/hunt.js">
+<link rel="modulepreload" href="js/huntcore.js">
+<link rel="modulepreload" href="js/wise.js">
+<link rel="modulepreload" href="js/vr/stamps.js">
+<link rel="modulepreload" href="js/vr/depth3d.js">
+<link rel="modulepreload" href="js/vr/orbit.js">
+<link rel="modulepreload" href="js/vr/timeline.js">
+<link rel="modulepreload" href="js/vr/depthmodes.js">
+<link rel="modulepreload" href="js/seasons.js">
+<link rel="modulepreload" href="js/marks.js">
+<link rel="modulepreload" href="js/vr/markdepth.js">
+<link rel="modulepreload" href="js/vr/depthview.js">
+<link rel="modulepreload" href="js/vr/spectrumpanel.js">
+<link rel="modulepreload" href="js/vr/markspanel.js">
+<link rel="modulepreload" href="js/vr/windows.js">
+<link rel="modulepreload" href="js/vr/pagespanel.js">
+<link rel="modulepreload" href="js/hash.js">
+<link rel="modulepreload" href="js/vr/distances.js">
+<link rel="modulepreload" href="js/vr/field.js">
+<link rel="modulepreload" href="js/vr/nav.js">
+<link rel="modulepreload" href="js/vr/sound.js">
 <link rel="stylesheet" href="css/fonts.css">
 <link rel="stylesheet" href="css/tokens.css">
 <link rel="stylesheet" href="css/redesign.css">
@@ -30,6 +87,7 @@
 </header>
 
 <p id="vr-status" class="vr__status" role="status" hidden></p>
+<p id="vr-problem" class="vr__problem" role="alert" hidden><span id="vr-problem-text"></span> <button id="vr-problem-do" class="vr__problem-do" type="button" hidden></button></p>
 <p id="vr-hint" class="vr__hint" hidden><span id="vr-hint-text"></span><button id="vr-hint-x" class="vr__hint-x" type="button" aria-label="Close">×</button></p>
 
 <footer class="vr__foot">
@@ -43,6 +101,7 @@
 </footer>
 <pre id="vr-diag-out" class="vr__diag" hidden></pre>
 
+<script src="js/vr/boot.js"></script>
 <script type="module" src="js/vr/main.js"></script>
 </body>
 </html>

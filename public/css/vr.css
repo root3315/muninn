@@ -85,6 +85,31 @@ html, body.vr {
   pointer-events: none;
 }
 .vr__status { top: 40%; }
+.vr__problem {
+  position: fixed;
+  left: 50%;
+  top: 38%;
+  transform: translateX(-50%);
+  margin: 0;
+  max-width: min(36rem, calc(100% - 2rem));
+  padding: 0.8rem 1.1rem;
+  border-radius: var(--radius-sm);
+  background: var(--gate-chip);
+  color: var(--color-ink);
+  text-align: center;
+  z-index: 5;
+}
+.vr__problem[hidden] { display: none; }
+.vr__problem-do {
+  margin-left: 0.6rem;
+  font: 500 var(--text-sm) var(--font-body, inherit);
+  color: var(--color-accent-ink, #141420);
+  background: var(--color-accent);
+  border: 0;
+  border-radius: 999px;
+  padding: 0.35rem 0.9rem;
+  cursor: pointer;
+}
 .vr__hint {
   bottom: 4.2rem;
   color: var(--color-muted);

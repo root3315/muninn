@@ -685,6 +685,116 @@ function hedged(first, second, ms) {
   });
 }
 
+/* --------------------------------------------- the headset's depth catalogues */
+
+/**
+ * What the headset's depth view needs besides Gaia, through the box, so it is
+ * kept for days and still answered when the archives are down:
+ *
+ *   kind=bj        Bailer-Jones geometric distances (VizieR I/352), asked at
+ *                  the CfA's VizieR mirror and at CDS's TAP at once
+ *   kind=galaxies  SIMBAD's galaxies with a spectroscopic redshift, asked at
+ *                  the CDS and CfA SIMBADs at once
+ *
+ * Only these, only at these hosts, only for a position and a radius: nothing
+ * in the request names a host or a query. An answer is fresh for three days;
+ * past that it is asked again, and if the archives fail the kept one is sent,
+ * marked stale, for up to a month.
+ */
+const DEPTH_UPSTREAM = {
+  vizierCfa: process.env.MUNINN_VIZIER_CFA_URL || 'https://vizier.cfa.harvard.edu/viz-bin/votable',
+  vizierTap: process.env.MUNINN_VIZIER_TAP_URL || 'https://tapvizier.cds.unistra.fr/TAPVizieR/tap/sync',
+  simbadCds: process.env.MUNINN_SIMBAD_CDS_URL || 'https://simbad.cds.unistra.fr/simbad/sim-tap/sync',
+  simbadCfa: process.env.MUNINN_SIMBAD_CFA_URL || 'https://simbad.cfa.harvard.edu/simbad/sim-tap/sync',
+};
+const DEPTH_FRESH_MS = 3 * 24 * 3600 * 1000;
+const DEPTH_KEEP_MS = 30 * 24 * 3600 * 1000;
+const DEPTH_TIMEOUT_MS = Number(process.env.MUNINN_DEPTH_TIMEOUT_MS) || 40_000;
+const DEPTH_KINDS = new Set(['bj', 'galaxies']);
+const depthInflight = new Map();
+
+async function handleDepth(url, res) {
+  const kind = url.searchParams.get('kind') ?? '';
+  if (!DEPTH_KINDS.has(kind)) return json(res, 400, { ok: false, error: 'kind must be bj or galaxies' });
+  const at = position(url);
+  if (!at) return json(res, 400, BAD_POSITION);
+  const radius = param(url, 'r');
+  if (!Number.isFinite(radius)) return json(res, 400, { ok: false, error: 'r (degrees) is required' });
+  const field = { ...at, radiusDeg: Number(clamp(radius, 0.005, 1).toPrecision(2)) };
+  const key = safeKey(`depth_${kind}_${field.ra.toFixed(4)}_${field.dec.toFixed(4)}_${field.radiusDeg}`);
+  const kept = await readEntry(key, DEPTH_KEEP_MS);
+  if (kept && Date.now() - kept.at < DEPTH_FRESH_MS) return json(res, 200, { ok: true, cached: true, ...kept.value });
+  let pending = depthInflight.get(key);
+  if (!pending) {
+    pending = (kind === 'bj' ? askDistances(field) : askGalaxies(field)).finally(() => depthInflight.delete(key));
+    depthInflight.set(key, pending);
+  }
+  try {
+    const value = await pending;
+    await writeCache(key, value);
+    return json(res, 200, { ok: true, cached: false, ...value });
+  } catch (err) {
+    // The archives down: what was kept, however old, rather than nothing.
+    if (kept) return json(res, 200, { ok: true, cached: true, stale: true, staleAgeS: Math.round((Date.now() - kept.at) / 1000), ...kept.value });
+    return json(res, 502, { ok: false, error: String(err.message ?? err) });
+  }
+}
+
+/** The first of several answers; the first failure if none comes. */
+async function firstOf(asks) {
+  try {
+    return await Promise.any(asks);
+  } catch (err) {
+    throw err.errors?.[0] ?? err;
+  }
+}
+
+/** Bailer-Jones distances in a cone, nearest the centre first: rows [source_id, r, lo, hi] in parsecs. */
+function askDistances({ ra, dec, radiusDeg }) {
+  const read = (rows) => rows
+    .filter((row) => Number(row.rgeo) > 0)
+    .slice(0, 2000)
+    .map((row) => [String(row.Source).trim(), Number(row.rgeo), Number(row.b_rgeo) || Number(row.rgeo), Number(row.B_rgeo) || Number(row.rgeo)]);
+  const cone = new URLSearchParams({
+    '-source': 'I/352/gedr3dis', '-c': `${ra.toFixed(6)} ${dec >= 0 ? '+' : ''}${dec.toFixed(6)}`,
+    '-c.rd': radiusDeg.toFixed(4), '-out': 'Source,rgeo,b_rgeo,B_rgeo', '-out.max': '2000', '-out.add': '_r', '-sort': '_r',
+  });
+  const cfa = withTimeout(`${DEPTH_UPSTREAM.vizierCfa}?${cone}`, DEPTH_TIMEOUT_MS)
+    .then(async (r2) => {
+      if (!r2.ok) throw new Error(`VizieR (CfA) ${r2.status}`);
+      const { status, message, rows } = parseVOTable(await r2.text());
+      if (status === 'ERROR') throw new Error(`VizieR (CfA): ${message}`);
+      return { bj: read(rows), via: 'VizieR CfA' };
+    });
+  const adql = `SELECT TOP 2000 Source, rgeo, b_rgeo, B_rgeo,
+    DISTANCE(POINT('ICRS', RA_ICRS, DE_ICRS), POINT('ICRS', ${ra.toFixed(6)}, ${dec.toFixed(6)})) AS d
+    FROM "I/352/gedr3dis"
+    WHERE CONTAINS(POINT('ICRS', RA_ICRS, DE_ICRS), CIRCLE('ICRS', ${ra.toFixed(6)}, ${dec.toFixed(6)}, ${radiusDeg.toFixed(5)})) = 1
+    ORDER BY d`;
+  const cds = withTimeout(`${DEPTH_UPSTREAM.vizierTap}?${new URLSearchParams({ request: 'doQuery', lang: 'adql', format: 'csv', query: adql })}`, DEPTH_TIMEOUT_MS)
+    .then(async (r2) => {
+      const text = await r2.text();
+      if (!r2.ok || text.trimStart().startsWith('<')) throw new Error(`VizieR TAP (CDS) ${r2.status}`);
+      return { bj: read(parseCsv(text)), via: 'VizieR CDS' };
+    });
+  return firstOf([cfa, cds]);
+}
+
+/** SIMBAD's galaxies with a spectroscopic redshift in a cone: rows [name, otype, ra, dec, z]. */
+function askGalaxies({ ra, dec, radiusDeg }) {
+  const adql = `SELECT TOP 80 main_id, otype, ra, dec, rvz_redshift FROM basic
+    WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', ${ra.toFixed(6)}, ${dec.toFixed(6)}, ${radiusDeg.toFixed(5)})) = 1
+    AND rvz_redshift > 0 AND rvz_qual IN ('A', 'B', 'C') ORDER BY nbref DESC`;
+  const query = new URLSearchParams({ request: 'doQuery', lang: 'adql', format: 'json', query: adql });
+  const ask = (base, via) => withTimeout(`${base}?${query}`, DEPTH_TIMEOUT_MS).then(async (r2) => {
+    if (!r2.ok) throw new Error(`${via} ${r2.status}`);
+    const body = await r2.json();
+    if (!Array.isArray(body?.data)) throw new Error(`${via}: no data`);
+    return { rows: body.data, via };
+  });
+  return firstOf([ask(DEPTH_UPSTREAM.simbadCds, 'SIMBAD CDS'), ask(DEPTH_UPSTREAM.simbadCfa, 'SIMBAD CfA')]);
+}
+
 /* ------------------------------------------------------- Gaia DR3 at MAST */
 
 /** The Gaia DR3 the challenge's resources point to: MAST, at STScI. */
@@ -1261,6 +1371,7 @@ const server = createServer(async (req, res) => {
   try {
     if (url.pathname === '/api/search') return await handleSearch(url, res);
     if (url.pathname === '/api/tap') return await handleTap(url, res);
+    if (url.pathname === '/api/depth') return await handleDepth(url, res);
     if (url.pathname === '/api/sbident') return await handleSbIdent(url, res);
     if (url.pathname === '/api/smallbody') return await handleSmallBody(url, req, res);
     if (url.pathname === '/api/wise') return await handleWise(url, res);
@@ -1294,9 +1405,10 @@ async function sweepCache() {
     try {
       const info = await stat(file);
       if (!info.isFile()) continue;
-      // A frame list is kept for weeks, as the answer to fall back on while
-      // IRSA is down; everything else for as long as it is trusted.
-      const keep = name.startsWith('frames_') ? SEARCH_KEEP_MS : CACHE_TTL_MS;
+      // A frame list, and the depth view's catalogues, are kept for weeks, as
+      // the answer to fall back on while the archives are down; everything
+      // else for as long as it is trusted.
+      const keep = name.startsWith('frames_') ? SEARCH_KEEP_MS : name.startsWith('depth_') ? DEPTH_KEEP_MS : CACHE_TTL_MS;
       if (now - info.mtimeMs > keep) await unlink(file);
       else kept.push({ file, at: info.mtimeMs, size: info.size });
     } catch { /* gone already, or busy: the next sweep has it */ }

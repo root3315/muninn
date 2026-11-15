@@ -22,7 +22,7 @@
 import * as THREE from '../vendor/three.module.js';
 import { t, fmt } from '../i18n.js';
 import { seasonChunks, chunkAt, forStack } from '../stack.js';
-import { searchFrames, askMissingFrames, groupVisits, bandsPresent, toS3, skybotCone, knownBodies, surveySources } from '../catalog.js';
+import { searchFrames, askMissingFrames, groupVisits, bandsPresent, toS3, skybotCone, knownBodies, surveySources, findHeldVisit } from '../catalog.js';
 import { planetHostNear, systemUrl } from '../exovision.js';
 import { spread, VISITS_PER_BATCH, mergeFrames } from '../visits.js';
 import { TangentGrid, deltaRA } from '../wcs.js';
@@ -33,7 +33,7 @@ import { rankCandidates } from '../hunt.js';
 import { stackDepth } from '../depth.js';
 import { magLimit, searchRadius, epochOfMjd, properMotion } from '../overlay.js';
 import { loadWise } from '../wise.js';
-import { readStamp, inPool } from './stamps.js';
+import { readStamp, inPool, WORKERS } from './stamps.js';
 import { createPanel, placePanel, readLook, FONTS, wrapText, button, roundRect, chipWidth } from './panel.js';
 import { LAYOUT, SCREENS, screenPose, typeFor, minTextPx } from './layout.js';
 import { eclipticLatitude, PLANET_X_V, PLANET_X_MAX_BETA } from './depth3d.js';
@@ -49,6 +49,7 @@ import {
 } from '../marks.js';
 import { geometricDistances, galaxiesWithRedshift, bakedAnswers } from './distances.js';
 import { tv } from './strings.js';
+import { markDepth } from './markdepth.js';
 
 const D2R = Math.PI / 180;
 /** The texture the field is drawn into: as sharp as the screen can show at 2 m, no sharper. */
@@ -58,7 +59,8 @@ const MAIN_CSS_W = 320;
 const ASPECT = SCREENS.main.w / SCREENS.main.h;
 /** Visits read for the headset: the site's first batch. */
 const VISITS = VISITS_PER_BATCH;
-const READERS = 3;
+/** Visits read at once: as many as the workers that read them. */
+const READERS = WORKERS;
 const SKYBOT_AT_ONCE = 2;
 /** SkyBoT's position and SPHEREx's agree within two detector pixels for the same body. */
 const SAME_BODY_ARCSEC = 12.3;
@@ -73,6 +75,10 @@ const breathe = () => new Promise((r) => { setTimeout(r, 0); });
 const FOV_SIZES = [0.15, 0.3, 0.6];
 /** When the list of frames is asked again on its own, seconds after each failure. */
 const LIST_RETRY_S = [5, 15, 45];
+/** When a depth catalogue that failed is asked again on its own, seconds after each failure. */
+const DEPTH_RETRY_S = [5, 15, 45];
+/** When frames that failed to read are read again, seconds after the field's reading ends. */
+const FRAME_RETRY_S = [20, 60];
 /** The guide's five steps, by their strings' names. */
 const GUIDE = ['Point', 'Field', 'Mark', 'Depth', 'Move'];
 /** The site's "How to read this" cards that hold in the headset, in its order. */
@@ -113,7 +119,14 @@ export function openFieldVR(target, env) {
   const fov = target.fov ?? 0.3;
   const { ra, dec } = target;
 
+  /** The depth view's pieces waiting for an idle moment (depthLater), and the idle callback that will run the next. */
+  const depthWaiting = new Map();
+  let depthIdle = 0;
+  const idle = globalThis.requestIdleCallback ?? ((fn) => setTimeout(() => fn({ timeRemaining: () => 8 }), 50));
+  const cancelIdle = globalThis.cancelIdleCallback ?? clearTimeout;
   const st = {
+    /** When the field opened, its first picture showed, its depth view was ready and its last visit landed (ms, page time). */
+    times: { open: performance.now(), list: null, firstFrame: null, depthReady: null, allFrames: null },
     status: 'searching', all: [], entries: [], done: 0,
     playing: false, clock: 0, mode: 'blink', more: false, hoverBtn: null,
     sectors: null, hunt: null, hunting: false, depth: null,
@@ -337,6 +350,11 @@ export function openFieldVR(target, env) {
       if (id === 'back') env.onBack?.();
       else if (id === 'fly') env.onFly?.(data);
       else if (id === 'closeCard') env.onCloseCard?.();
+      else if (id === 'markRetry') markAct('retry', data - 1);
+      else if (id === 'retrySource') {
+        const kind = Object.keys(DEPTH_NAMES).find((k) => DEPTH_NAMES[k] === data);
+        if (kind) askDepth(kind, true);
+      }
       else if (id === 'sound') {
         if (data.kind === 'step') env.sound?.step(data.dir);
         else if (data.kind === 'body' && data.world) env.sound?.tick3d(data.world);
@@ -506,7 +524,36 @@ export function openFieldVR(target, env) {
 
   /** The depth view flips to the front (for a viewer who cannot turn round), and back, through a short fade. */
   function flip() {
+    // Whatever the depth view still had waiting is built now, under the veil.
+    if (!st.flipped) flushDepth();
     st.flipAnim = { t0: performance.now(), swapped: false };
+  }
+
+  /**
+   * The depth view's building, while it stands behind the viewer, is done in
+   * the main thread's idle moments, one piece per moment, the latest of each
+   * kind only: drawn the moment it arrived, its thousands of points and
+   * names cost a visible stall while the first picture was landing. Facing
+   * it, it is built at once.
+   */
+  function depthLater(key, fn) {
+    if (st.flipped || st.flipAnim) { depthWaiting.delete(key); fn(); return; }
+    depthWaiting.set(key, fn);
+    if (!depthIdle) depthIdle = idle(runDepthPiece, { timeout: 1500 });
+  }
+  function runDepthPiece() {
+    depthIdle = 0;
+    if (st.closed) return;
+    const [key, fn] = depthWaiting.entries().next().value ?? [];
+    if (!fn) return;
+    depthWaiting.delete(key);
+    fn();
+    if (depthWaiting.size) depthIdle = idle(runDepthPiece, { timeout: 1500 });
+  }
+  function flushDepth() {
+    if (depthIdle) { cancelIdle(depthIdle); depthIdle = 0; }
+    for (const fn of [...depthWaiting.values()]) fn();
+    depthWaiting.clear();
   }
 
   /**
@@ -576,8 +623,19 @@ export function openFieldVR(target, env) {
     undo = null;
   }
 
+  /** What the depth view's catalogues answered, kept for redrawing (the stars) and for the marks' distances. */
+  const depthKept = { rows: null, reached: null, bj: null, galaxies: null, epoch: 2026 };
+  /** The marks in the depth view: a beam each, where the catalogues or the rate put it (markdepth.js). */
+  function depthMarks() {
+    depthLater('marks', () => depthView.setMarks(sky.marks.map((m, i) => ({
+      ...markDepth(m, i + 1, { bj: depthKept.bj, galaxies: depthKept.galaxies }),
+      folded: m.open === false,
+    }))));
+  }
+
   function drawMarks() {
     if (st.closed) return;
+    depthMarks();
     const was = marksPanel.mesh.visible;
     marksPanel.mesh.visible = sky.marks.length > 0 || Boolean(undo);
     if (!was && marksPanel.mesh.visible) windows.settle(marksPanel.mesh, st.head);
@@ -620,6 +678,10 @@ export function openFieldVR(target, env) {
       m.whoStop?.abort();
       m.who = null;
       askWho(m);
+    } else if (id === 'depth' && m) {
+      // Round to the depth view, and along the mark's beam once there.
+      st.flyToMark = i + 1;
+      if (!st.flipped) flip();
     }
     drawMarks();
   }
@@ -1069,6 +1131,10 @@ export function openFieldVR(target, env) {
     // A field is centred where its target is best seen: the target's own position is the one to look up, as on the site.
     planetHostNear(target.target?.ra ?? ra, target.target?.dec ?? dec).then((h) => { if (!st.closed && h) { st.host = h; drawCard(); } });
     bakedAsk = bakedAnswers(target.key, signal);
+    leadAsk = presetLead();
+    // The depth view's catalogues are asked now, beside the list of frames:
+    // ready by the time the viewer turns round, not asked only then.
+    startDepth();
     let answer = null;
     try {
       answer = await searchFrames({ ra, dec }, { signal });
@@ -1084,11 +1150,25 @@ export function openFieldVR(target, env) {
       return;
     }
     noteList(answer);
+    st.times.list ??= performance.now();
     await begin(answer.frames);
   }
 
   /** The baked answers' question, asked once. */
   let bakedAsk = null;
+  /** The visit a preset's card shows ({ mjd, band }), or null: read first, so the screen opens on it. */
+  let leadAsk = null;
+  async function presetLead() {
+    if (!target.key) return null;
+    try {
+      const res = await fetch('data/thumbs.json', { signal });
+      const thumb = res.ok ? (await res.json())[target.key] : null;
+      const mjd = thumb?.iso ? Date.parse(`${thumb.iso}Z`) / 86400000 + 40587 : NaN;
+      return Number.isFinite(mjd) ? { mjd, band: thumb.band } : null;
+    } catch {
+      return null;
+    }
+  }
 
   /**
    * What the list of frames said besides its frames: whether some collections
@@ -1169,19 +1249,24 @@ export function openFieldVR(target, env) {
     refreshTimeline();
   }
 
-  /** Read a list of visits, a few at a time. */
-  async function readEntries(list) {
-    await inPool(list, READERS, async (entry) => {
+  /**
+   * Read a list of visits, a few at a time. `lead`, if given, starts alone and
+   * the rest once its header is in (or it failed): its rows are well on the way
+   * before theirs, so the first picture is not one of six sharing the line.
+   */
+  async function readEntries(list, lead = null) {
+    const readOne = async (entry, onHeader) => {
       if (signal.aborted) return;
       entry.status = 'reading';
       try {
-        const stamp = await readStamp(toS3(entry.frame.url), grid, { signal });
+        const stamp = await readStamp(toS3(entry.frame.url), grid, { signal, onHeader });
         if (signal.aborted) return;
         if (!stamp) { entry.status = 'dropped'; return; }
         entry.status = 'ready';
         sky.addVisit(entry.frame, stamp);
+        st.times.firstFrame ??= performance.now();
         if (sky.visits.length === 2 && st.mode === 'blink') play(true);
-        if (sky.visits.length === 3) { measure(); hunt(); } else if (sky.visits.length > 3) measure();
+        if (sky.visits.length === 3) { measure(); hunt(); } else if (sky.visits.length > 3) measureSoon();
         if (sky.marks.length && sky.visits.length >= 3) retrackMarks();
       } catch {
         if (!signal.aborted) entry.status = 'failed';
@@ -1189,14 +1274,28 @@ export function openFieldVR(target, env) {
         st.done += 1;
         if (!signal.aborted) { refreshTimeline(); drawNotice(); afterVisitChange(); }
       }
-    });
+    };
+    if (!lead || !list.includes(lead)) {
+      await inPool(list, READERS, (entry) => readOne(entry));
+      return;
+    }
+    let headerIn;
+    const started = new Promise((resolve) => { headerIn = resolve; });
+    const first = readOne(lead, headerIn).finally(headerIn);
+    await started;
+    await Promise.all([first, inPool(list.filter((e) => e !== lead), READERS - 1, (entry) => readOne(entry))]);
   }
 
   /** Start the field from a list of frames. */
   async function begin(frames) {
     st.frames = frames;
     st.all = groupVisits(frames, { ra, dec, band });
-    const chosen = spread(st.all, VISITS).sort((p, q) => p.mjd - q.mjd);
+    const chosen = spread(st.all, VISITS);
+    // The visit a preset's card shows is read with the rest, and first.
+    const held = await leadAsk;
+    const leadFrame = st.all[findHeldVisit(st.all, held)] ?? null;
+    if (leadFrame && !chosen.includes(leadFrame)) chosen.push(leadFrame);
+    chosen.sort((p, q) => p.mjd - q.mjd);
     st.entries = chosen.map((frame) => ({ frame, status: 'pending' }));
     if (!chosen.length) { st.status = 'none'; drawAll(); return; }
     st.status = 'reading';
@@ -1205,9 +1304,11 @@ export function openFieldVR(target, env) {
     baked = await bakedAsk;
     if (baked?.depth && !st.depth) { depthView.setDepth(baked.depth.single); drawSide(); }
     askBodies(chosen);
-    loadDepthData(chosen);
-    await readEntries(st.entries);
+    depthEpoch(chosen);
+    const lead = st.entries.find((e) => e.frame === leadFrame) ?? st.entries[0];
+    await readEntries(st.entries, lead);
     if (signal.aborted) return;
+    st.times.allFrames = performance.now();
     st.status = sky.visits.length ? 'ready' : 'none';
     sky.setAB(0, Math.max(0, sky.visits.length - 1));
     if (st.mode === 'blink') play(true);
@@ -1217,9 +1318,40 @@ export function openFieldVR(target, env) {
     if (sky.marks.length) retrackMarks();
     await hunt();
     updateDepthBodies(true);
+    retryFramesLater();
+  }
+
+  /**
+   * Frames whose read failed (a network error, a cut-off file) are crossed out
+   * on their tile and read again a little later, twice at most.
+   */
+  function retryFramesLater() {
+    const failed = st.entries.filter((e) => e.status === 'failed');
+    const delay = FRAME_RETRY_S[st.frameTries ?? 0];
+    if (!failed.length || delay == null || st.closed) return;
+    st.frameTries = (st.frameTries ?? 0) + 1;
+    clearTimeout(st.frameTimer);
+    st.frameTimer = setTimeout(async () => {
+      if (st.closed) return;
+      for (const e of failed) e.status = 'pending';
+      refreshTimeline();
+      await readEntries(failed);
+      if (st.closed) return;
+      measure();
+      drawAll();
+      refreshTimeline();
+      retryFramesLater();
+    }, delay * 1000);
+  }
+
+  /** measure() once the visits landing together have landed: one scoring of the sectors, not one per visit. */
+  function measureSoon() {
+    if (st.measureIdle) return;
+    st.measureIdle = idle(() => { st.measureIdle = 0; if (!st.closed) measure(); }, { timeout: 1000 });
   }
 
   function measure() {
+    if (st.measureIdle) { cancelIdle(st.measureIdle); st.measureIdle = 0; }
     const per = [];
     const sigmas = [];
     for (const v of sky.visits) {
@@ -1264,7 +1396,7 @@ export function openFieldVR(target, env) {
       const cos = Math.cos(c.dec * D2R);
       return !bodies.some((b) => Math.hypot(deltaRA(b.ra, c.ra) * cos, b.dec - c.dec) * 3600 < SAME_BODY_ARCSEC);
     });
-    depthView.setCandidates(unexplained);
+    depthLater('candidates', () => depthView.setCandidates(unexplained));
   }
 
   /** SkyBoT for every planned visit, two at a time; JPL (through the box) only where SkyBoT failed. */
@@ -1333,21 +1465,65 @@ export function openFieldVR(target, env) {
         .sort((p, q) => p.mjd - q.mjd);
       tracks.set(name, season);
     }
-    depthView.setBodies(bodies, tracks);
+    depthLater('bodies', () => depthView.setBodies(bodies, tracks));
   }
 
-  async function loadDepthData(chosen) {
+  /**
+   * The depth view's catalogues, each on its own: what comes is drawn, what
+   * fails is named in the depth view with a countdown, asked again after 5,
+   * 15 and 45 s, and can be asked again at once. A demonstration field's
+   * kept answers stand in for whatever they hold.
+   */
+  const DEPTH_NAMES = { gaia: 'Gaia DR3', bj: 'Bailer-Jones', galaxies: 'SIMBAD' };
+  const depthTry = { gaia: { tries: 0, timer: 0 }, bj: { tries: 0, timer: 0 }, galaxies: { tries: 0, timer: 0 } };
+  function drawGaia() {
+    if (depthKept.rows) depthLater('gaia', () => depthView.setGaia(depthKept.rows, { bj: depthKept.bj, epoch: depthKept.epoch, detected, limit: depthKept.reached }));
+  }
+  async function askDepth(kind, now = false) {
+    const d = depthTry[kind];
+    clearTimeout(d.timer);
+    if (now) d.tries = 0;
+    depthView.sourceAsking(DEPTH_NAMES[kind]);
+    try {
+      baked = baked ?? await bakedAsk;
+      if (kind === 'gaia') {
+        const g = baked?.gaia ?? await surveySources('gaia', { ra, dec, radiusDeg, limit: magLimit(grid.fovHeightDeg) }, { signal });
+        depthKept.rows = g.rows;
+        depthKept.reached = g.reached;
+        drawGaia();
+      } else if (kind === 'bj') {
+        depthKept.bj = baked?.bj ? new Map(baked.bj.map(([id, r, lo, hi]) => [id, { r, lo, hi }])) : await geometricDistances({ ra, dec, radiusDeg }, signal);
+        drawGaia();
+      } else {
+        depthKept.galaxies = baked?.galaxies ?? await galaxiesWithRedshift({ ra, dec, radiusDeg }, signal);
+        depthLater('galaxies', () => depthView.setGalaxies(depthKept.galaxies));
+      }
+      if (signal.aborted) return;
+      depthView.sourceOk(DEPTH_NAMES[kind]);
+      d.ok = true;
+      if (Object.values(depthTry).every((x) => x.ok)) st.times.depthReady ??= performance.now();
+      // A mark's star or galaxy may have its distance now.
+      depthMarks();
+    } catch {
+      if (signal.aborted || st.closed) return;
+      const delay = DEPTH_RETRY_S[d.tries];
+      d.tries += 1;
+      if (delay != null) d.timer = setTimeout(() => askDepth(kind), delay * 1000);
+      depthView.sourceFailed(DEPTH_NAMES[kind], delay != null ? performance.now() + delay * 1000 : null);
+      // No Gaia at all yet: the view says so rather than waiting for ever.
+      if (kind === 'gaia' && !depthKept.rows) depthView.setGaia(new Error('Gaia DR3'));
+    }
+  }
+  /** The depth view's three catalogues, asked as the field opens. */
+  function startDepth() {
+    for (const kind of ['gaia', 'bj', 'galaxies']) askDepth(kind);
+  }
+  /** The visits' own epoch, once they are known: the stars drawn where they were then. */
+  function depthEpoch(chosen) {
     const epoch = epochOfMjd(chosen[Math.floor(chosen.length / 2)].mjd);
-    const gaiaAsk = baked?.gaia ? Promise.resolve(baked.gaia)
-      : surveySources('gaia', { ra, dec, radiusDeg, limit: magLimit(grid.fovHeightDeg) }, { signal });
-    const bjAsk = baked?.bj ? Promise.resolve(new Map(baked.bj.map(([id, r, lo, hi]) => [id, { r, lo, hi }])))
-      : geometricDistances({ ra, dec, radiusDeg }, signal).catch(() => null);
-    Promise.all([gaiaAsk, bjAsk])
-      .then(([g, bj]) => { if (!signal.aborted) depthView.setGaia(g.rows, { bj, epoch, detected, limit: g.reached }); })
-      .catch((err) => { if (!signal.aborted) depthView.setGaia(err instanceof Error ? err : new Error(String(err))); });
-    (baked?.galaxies ? Promise.resolve(baked.galaxies) : galaxiesWithRedshift({ ra, dec, radiusDeg }, signal))
-      .then((list) => { if (!signal.aborted) depthView.setGalaxies(list); })
-      .catch((err) => { if (!signal.aborted) depthView.setGalaxies(err instanceof Error ? err : new Error(String(err))); });
+    if (epoch === depthKept.epoch) return;
+    depthKept.epoch = epoch;
+    drawGaia();
   }
 
   load();
@@ -1364,6 +1540,7 @@ export function openFieldVR(target, env) {
       const now = performance.now();
       // A retry's countdown, a second at a time.
       if (st.list.retryAt && now - (st.listBeat ?? 0) > 1000) { st.listBeat = now; drawNotice(); drawSide(); }
+      if (depthView.retrying && now - (st.depthBeat ?? 0) > 1000) { st.depthBeat = now; depthView.redrawSign(); }
       // The asking dot pulses: a redraw a few times a second, not every frame.
       if (marksPanel.animated && now - (st.marksBeat ?? 0) > 120) { st.marksBeat = now; drawMarks(); }
       if (st.anim) {
@@ -1382,7 +1559,11 @@ export function openFieldVR(target, env) {
         const k = Math.min(1, (now - st.flipAnim.t0) / 200);
         st.veil = k < 0.5 ? k * 2 : 2 - k * 2;
         if (k >= 0.5 && !st.flipAnim.swapped) { st.flipAnim.swapped = true; st.flipped = !st.flipped; stand(); drawBar(); if (!st.flipped) depthView.leave(); env.onFlipped?.(st.flipped); }
-        if (k >= 1) { st.flipAnim = null; st.veil = 0; }
+        if (k >= 1) {
+          st.flipAnim = null;
+          st.veil = 0;
+          if (st.flipped && st.flyToMark) { depthView.flyToMark(st.flyToMark); st.flyToMark = null; }
+        }
       }
       if (st.playing && !st.paused) {
         st.clock += dt;
@@ -1472,6 +1653,13 @@ export function openFieldVR(target, env) {
     depthBack: () => depthView.back(),
     depthCard: (on) => depthView.cardShown(on),
     get depthMode() { return depthView.mode; },
+    get depthSources() { return depthView.sources; },
+    /** How long the field took to open: the list, the first picture, the depth view, every visit (ms from opening). */
+    get timings() {
+      const since = (t) => (t == null ? null : Math.round(t - st.times.open));
+      return { list: since(st.times.list), firstFrame: since(st.times.firstFrame), depthReady: since(st.times.depthReady), allFrames: since(st.times.allFrames) };
+    },
+    get depthMarks() { return depthView.marksShown; },
     setMoved: (on) => depthView.setMoved(on),
     clearFocus: () => depthView.clearFocus(),
     get focusPhase() { return depthView.focusPhase; },
@@ -1482,6 +1670,10 @@ export function openFieldVR(target, env) {
     },
     close() {
       st.closed = true;
+      if (depthIdle) cancelIdle(depthIdle);
+      if (st.measureIdle) cancelIdle(st.measureIdle);
+      clearTimeout(st.frameTimer);
+      for (const d of Object.values(depthTry)) clearTimeout(d.timer);
       clearTimeout(st.list.timer);
       ctrl.abort();
       play(false);

@@ -8,7 +8,7 @@
  *     -> { mesh, render(view), hover(uv), dispose() }
  *
  * `view` is { marks, visits, undo, target, bright (brightstars.js) }; `onAct(id, index)`
- * gets fold, remove, link, arc, jump, spectrum, retry, clear, undo, up, down.
+ * gets fold, remove, link, arc, jump, spectrum, depth, retry, clear, undo, up, down.
  */
 import { createPanel, FONTS, wrapLines, button, roundRect, chipWidth } from './panel.js';
 import { minTextPx } from './layout.js';
@@ -74,7 +74,7 @@ export function createMarksPanel({ look, widthM, heightM, pxPerM, dist, onAct })
     L.push({ text: `${formatRA(m.ra)} ${formatDec(m.dec)}`, tone: 'muted', mono: true });
 
     // The season link, unless SkyBoT has named a body here: that one moves too fast for any arc.
-    const acts = [{ id: 'spectrum', label: tv('vr.markSpectrum') }];
+    const acts = [{ id: 'spectrum', label: tv('vr.markSpectrum') }, { id: 'depth', label: tv('vr.markInDepth') }];
     if (!m.known && m.link?.state !== 'reading') {
       acts.unshift({ id: 'link', label: tv(m.link && m.link.state !== 'single' ? 'link.again' : 'link.run') });
     }

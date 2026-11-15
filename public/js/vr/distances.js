@@ -1,10 +1,13 @@
 /**
  * distances.js — how far the things in a field are, from whoever measured it.
  *
- * Asked straight of the archives from the browser, never through the box:
- * Gaia DR3's geometric distances (Bailer-Jones et al. 2021, VizieR I/352),
- * from the CfA's VizieR mirror and CDS's TAP service at once, the first
- * answer taken; and SIMBAD's galaxies that have a spectroscopic redshift.
+ * Asked through the box first (server.js /api/depth), which races the
+ * mirrors, keeps the answers for days and still has them when the archives
+ * are down; straight of the archives from the browser only when the box
+ * cannot be reached (a static copy of the site): Gaia DR3's geometric
+ * distances (Bailer-Jones et al. 2021, VizieR I/352), from the CfA's VizieR
+ * mirror and CDS's TAP service at once, the first answer taken; and SIMBAD's
+ * galaxies that have a spectroscopic redshift.
  *
  * For the fields a demonstration opens, the answers are also kept as files
  * with the site (data/vr/<key>.json, written by tools/bake-vr.mjs), so the
@@ -20,11 +23,32 @@ import { deadline } from '../net.js';
 const VIZIER_CFA = 'https://vizier.cfa.harvard.edu/viz-bin/votable';
 const VIZIER_TAP = 'https://tapvizier.cds.unistra.fr/TAPVizieR/tap/sync';
 const ASK_MS = 25_000;
+/** The box races the mirrors itself, and may wait on them: a little longer. */
+const BOX_MS = 50_000;
 
 const num = (v) => (v === '' || v == null || !Number.isFinite(Number(v)) ? null : Number(v));
 
+/** One of the box's depth answers, or an Error to fall back on the archives. */
+async function viaBox(kind, { ra, dec, radiusDeg }, signal) {
+  const res = await fetch(`api/depth?kind=${kind}&ra=${ra.toFixed(6)}&dec=${dec.toFixed(6)}&r=${radiusDeg.toFixed(5)}`, { signal: deadline(signal, BOX_MS) });
+  if (!(res.headers.get('content-type') ?? '').includes('json')) throw new Error(`relay ${res.status}`);
+  const body = await res.json();
+  if (!body.ok) throw new Error(body.error ?? `relay ${res.status}`);
+  return body;
+}
+
 /** Bailer-Jones geometric distances in a cone: Map source_id → { r, lo, hi } in parsecs (16th–84th percentiles). */
-export async function geometricDistances({ ra, dec, radiusDeg }, signal) {
+export async function geometricDistances(field, signal) {
+  try {
+    const body = await viaBox('bj', field, signal);
+    return new Map(body.bj.map(([id, r, lo, hi]) => [id, { r, lo, hi }]));
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    return askDistancesDirect(field, signal);
+  }
+}
+
+async function askDistancesDirect({ ra, dec, radiusDeg }, signal) {
   const read = (rows) => {
     const out = new Map();
     for (const r of rows) {
@@ -62,11 +86,19 @@ export async function geometricDistances({ ra, dec, radiusDeg }, signal) {
  * C): [{ name, family, ra, dec, z }]. A star's radial velocity sits in the
  * same column, so only what SIMBAD calls a galaxy is kept.
  */
-export async function galaxiesWithRedshift({ ra, dec, radiusDeg }, signal) {
-  const body = await simbadTap(`SELECT TOP 80 main_id, otype, ra, dec, rvz_redshift FROM basic
-    WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', ${ra.toFixed(6)}, ${dec.toFixed(6)}, ${radiusDeg.toFixed(5)})) = 1
-    AND rvz_redshift > 0 AND rvz_qual IN ('A', 'B', 'C') ORDER BY nbref DESC`, 'json', signal);
-  return (body.data ?? [])
+export async function galaxiesWithRedshift(field, signal) {
+  const { ra, dec, radiusDeg } = field;
+  let data;
+  try {
+    data = (await viaBox('galaxies', field, signal)).rows;
+  } catch (err) {
+    if (signal?.aborted) throw err;
+    const body = await simbadTap(`SELECT TOP 80 main_id, otype, ra, dec, rvz_redshift FROM basic
+      WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', ${ra.toFixed(6)}, ${dec.toFixed(6)}, ${radiusDeg.toFixed(5)})) = 1
+      AND rvz_redshift > 0 AND rvz_qual IN ('A', 'B', 'C') ORDER BY nbref DESC`, 'json', signal);
+    data = body.data;
+  }
+  return (data ?? [])
     .map(([name, otype, ora, odec, z]) => ({
       name: String(name).trim().replace(/\s+/g, ' ').replace(/^NAME /, ''),
       family: simbadFamily(String(otype ?? '').trim()), ra: Number(ora), dec: Number(odec), z: Number(z),
