@@ -37,6 +37,7 @@ import { planetHostNear, systemUrl } from '../exovision.js';
 import { clearOf } from './windows.js';
 import { brightStars } from '../brightstars.js';
 import { pageSound } from './sound.js';
+import { createTour, TOUR_SEEN } from './tour.js';
 
 const D2R = Math.PI / 180;
 const EYE_HEIGHT = 1.6;
@@ -259,6 +260,37 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   /* ---- a card for whatever was chosen, and any star on the sky -------- */
   const card = createCard({ look });
   scene.add(card.mesh);
+
+  /* ---- the walk-through (tour.js), and what it watches for ------------ */
+  const tour = createTour({ look, sound, flat: () => !renderer.xr.isPresenting });
+  scene.add(tour.mesh, tour.ring);
+  /** B pressed, and flights taken: counted for the walk-through. */
+  const done = { backs: 0, flights: 0 };
+  const tourFlat = { steps: 0, marks: 0, drops: 0, flipped: false, tapes: 0, clockPlaying: false };
+  const tourTmp = new THREE.Vector3();
+  /** The room as the walk-through needs it this frame. */
+  function tourFacts(h, d, gazeYaw, snapped) {
+    let marker = null;
+    if (!field) {
+      // The target ring nearest the gaze, for "point" and "open".
+      let best = Infinity;
+      for (const m of markers.markers) {
+        const w = toWorld(m.v);
+        const a = w.angleTo(d);
+        if (a < best) { best = a; marker = m; }
+      }
+      marker = marker ? toWorld(marker.v).normalize().multiplyScalar(10).add(h) : null;
+    }
+    const thing = field ? (field.depthPlace('bodies', 0) ?? field.depthPlace('gaia', 0)) : null;
+    return {
+      yaw: gazeYaw, snapped: Boolean(snapped), fieldOpen: Boolean(field), marker,
+      ...(field?.tourFacts ?? tourFlat),
+      flights: done.flights, backs: done.backs,
+      cardAt: card.visible ? tourTmp.copy(card.mesh.position) : null,
+      depthThing: field?.flipped ? thing : null,
+      control: (name, id) => field?.control(name, id) ?? null,
+    };
+  }
   const showCard = (content, at) => {
     const { head: h, dir: d } = headPose();
     card.show(content, at ?? h.clone().addScaledVector(d, 2), h);
@@ -541,6 +573,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       sound,
       onHome: flyHome,
       onLeave: leaveTo,
+      onGuide: () => tour.start({ welcome: false }),
     });
     dimTo(LAYOUT.dive.skyDim);
     markers.setDim(0.45);
@@ -589,6 +622,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
 
   /** B: from the depth view back to the screens; from the screens back to the sky. */
   function goBack() {
+    done.backs += 1;
     // B unwinds one level: an open card first, then the depth view's own modes, then the view.
     if (card.visible) { card.hide(); cardBefore = false; field?.depthCard(false); return; }
     if (!field) return;
@@ -614,7 +648,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   function hitOf(ray) {
     raycaster.set(ray.origin, ray.dir);
     raycaster.far = 40;
-    for (const own of [chevron.mesh, card.mesh]) {
+    for (const own of [tour.mesh, chevron.mesh, card.mesh]) {
       if (!own.visible) continue;
       const c = raycaster.intersectObject(own, false)[0];
       if (c && own.userData.solid?.(c.uv) !== false) return { kind: 'mesh', object: own, uv: c.uv, distance: c.distance, hit: c };
@@ -826,6 +860,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   /** A flight to something in the depth view: there in a short eased glide, the vignette closed. */
   let flight = null;
   function flyTo(world) {
+    done.flights += 1;
     card.hide();
     sound.tone(world);
     const v = world.clone().sub(headPose().head);
@@ -1123,6 +1158,8 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     screens: () => returnToScreens(),
     pointers,
     diagLines,
+    /** For the checks: the walk-through, to read its state and press its buttons. */
+    tour,
     /** For the checks: every shown panel whose text or buttons overlap or run past its plate. */
     layout: (opts) => layoutReport(opts),
     info: () => ({ calls: renderer.info.render.calls, textures: renderer.info.memory.textures, geometries: renderer.info.memory.geometries }),
@@ -1136,6 +1173,8 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     },
   };
   window.muninnVR = api;
+  // The first time in the room, the walk-through opens on its welcome; put away, it stays away.
+  try { if (!localStorage.getItem(TOUR_SEEN)) tour.start(); } catch { /* storage refused: no tour by itself */ }
 
   renderer.setAnimationLoop((now) => {
     const t0 = performance.now();
@@ -1253,6 +1292,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     }
     for (const id of [...hovered.keys()]) if (!seen.has(id)) { setHover(id, null); hovered.delete(id); }
     showSnapName(snapped);
+    tour.update(tourFacts(h, d, gazeYaw, snapped), h, headQuat, gazeYaw);
     field?.setMoved(walked.lengthSq() > 0.04);
     // A ray on the stars' clock: the stick aside scrubs it instead of walking or turning.
     const clockPanel = field?.clockPanel ?? null;

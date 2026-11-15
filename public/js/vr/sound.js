@@ -431,6 +431,8 @@ function buildEngine(ctx, gain) {
     tick: (t, k = 1) => click(t, { hiHz: 6200, loHz: 2200, body: 0.2, level: 0.25 * k, ms: 9 }),
     open: (t) => bell(t, 1046, 0.06, 0.9),
     close: (t) => bell(t, 784, 0.05, 0.7),
+    // A step of the tour done: two soft bells, a fifth apart.
+    chime: (t) => { bell(t, 1319, 0.035, 1.2); bell(t + 0.11, 1976, 0.03, 1.4); },
     mark: (t) => { click(t, { hiHz: 2800, loHz: 700, body: 0.6, level: 0.5, ms: 26 }); },
     verdict(t, kind) {
       if (kind === 'moving' || kind === 'transient') { bell(t, 784, 0.05, 0.8); bell(t + 0.12, 1175, 0.05, 1.0); } else if (kind === 'fixed' || kind === 'saturated' || kind === 'intermittent') bell(t, 659, 0.055, 1.1);
@@ -631,6 +633,7 @@ export function createSound() {
     },
     open() { if (ready()) e.open(now()); },
     close() { if (ready()) e.close(now()); },
+    chime() { if (ready()) e.chime(now()); },
     mark() { if (ready()) e.mark(now()); },
     verdict(kind) { if (ready()) e.verdict(now(), kind); },
     swish() { if (ready()) e.swish(now()); },

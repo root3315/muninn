@@ -100,6 +100,7 @@ export function createWindows({ group, minGapDeg = 1.2, onMoved = () => {} }) {
   const gap = (minGapDeg * Math.PI) / 180;
   const windows = new Map();
   const grabs = new Map();
+  let drops = 0;
 
   function pose(mesh) {
     return { position: mesh.position.clone(), quaternion: mesh.quaternion.clone(), scale: mesh.scale.x };
@@ -161,11 +162,14 @@ export function createWindows({ group, minGapDeg = 1.2, onMoved = () => {} }) {
       const g = grabs.get(id);
       grabs.delete(id);
       if (!g) return;
+      drops += 1;
       delete g.mesh.userData.scale0;
       clear(g.mesh, head);
       KEPT.set(g.mesh.name, pose(g.mesh));
       onMoved();
     },
+    /** How many times a window has been carried and let go, this field. */
+    get drops() { return drops; },
     /** Whether any window stands elsewhere than it first did. */
     get moved() { return KEPT.size > 0; },
     /** Every window back where it first stood, and nothing remembered. */

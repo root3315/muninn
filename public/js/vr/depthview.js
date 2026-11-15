@@ -998,6 +998,9 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     return true;
   }
 
+  /** How many measurements the tape has made: for the walk-through. */
+  let tapesDone = 0;
+
   /** Beams and paths whose pulse runs with the clock; one gone from the scene drops out. */
   const pulsing = new Set();
 
@@ -1087,6 +1090,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
         drawTape(tape.from, it, apart(d));
         tape.from = null;
         go('tapeDone');
+        tapesDone += 1;
       } else {
         lines.push({ text: tv('vr.tapeNoDistance'), tone: 'neutral' });
       }
@@ -1325,6 +1329,9 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
       onAction?.('fly', world);
       return true;
     },
+    get tapesDone() { return tapesDone; },
+    /** The controls' panel, for the walk-through's ring. */
+    get controlsPanel() { return controls; },
     /** For the checks: how the marks stand in depth. */
     get marksShown() { return { markers: markFx.items.length, beams: pickables.marks.length, asking: markFx.asking.length, words: layers.marks?.labels.length ?? 0 }; },
     /** A catalogue being asked (again): its failure no longer said. */
