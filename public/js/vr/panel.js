@@ -55,11 +55,20 @@ export function createPanel({ widthM, heightM, pxPerM = 700, canvas = null, tran
         this.hits = [];
         ctx.save();
         ctx.clearRect(0, 0, cv.width, cv.height);
-        fn(ctx, cv.width, cv.height, this.hits);
-        ctx.restore();
+        const rec = recordLayout(ctx);
+        try {
+          fn(ctx, cv.width, cv.height, this.hits);
+        } finally {
+          rec.stop();
+          ctx.restore();
+        }
+        this.layout = layoutIssues(rec.texts, this.hits, rec.plate(cv.width, cv.height));
+        if (this.layout.length && LAYOUT_LOG) console.warn(`[layout] ${name}:`, this.layout.slice(0, 4).map((v) => v.what).join(' | '));
       }
       texture.needsUpdate = true;
     },
+    /** What the last drawing got wrong: text or buttons over each other, or past the plate's edge. */
+    layout: [],
     /** The canvas changed under it (drawn by someone else): send it again. */
     dirty() { texture.needsUpdate = true; },
     /** The pressable thing under a point of the screen, by its texture coordinate. */
@@ -75,6 +84,7 @@ export function createPanel({ widthM, heightM, pxPerM = 700, canvas = null, tran
     /** A point of the screen in canvas pixels. */
     toCanvas(uv) { return [uv.x * cv.width, (1 - uv.y) * cv.height]; },
     dispose() {
+      livePanels.delete(panel);
       texture.dispose();
       material.dispose();
       geometry.dispose();
@@ -83,7 +93,102 @@ export function createPanel({ widthM, heightM, pxPerM = 700, canvas = null, tran
     },
   };
   mesh.userData.panel = panel;
+  livePanels.add(panel);
   return panel;
+}
+
+/* ------------------------------------------------------- the layout check */
+
+/** Every panel alive, for the layout check. */
+const livePanels = new Set();
+/** Violations are said in the console on a local or diagnostic run. */
+const LAYOUT_LOG = typeof location !== 'undefined'
+  && (/^(localhost|127\.0\.0\.1)$/.test(location.hostname) || new URLSearchParams(location.search).has('diag'));
+/** A box overlapping another by less than this many pixels is a touch, not an overlap. */
+const SLACK = 2;
+
+/**
+ * While a panel draws: every line of text it writes, as the box its ink
+ * covers on the canvas, and the largest rounded rectangle, taken for its plate.
+ */
+function recordLayout(ctx) {
+  const texts = [];
+  let plate = null;
+  const fillText = ctx.fillText;
+  const roundRectOf = ctx.roundRect;
+  const { save, restore, clip } = ctx;
+  // Text drawn under a clip (a rolling digit) is cut on purpose: not checked.
+  const clipped = [false];
+  ctx.save = function rec() { clipped.push(clipped.at(-1)); return save.call(this); };
+  ctx.restore = function rec() { if (clipped.length > 1) clipped.pop(); return restore.call(this); };
+  ctx.clip = function rec(...args) { clipped[clipped.length - 1] = true; return clip.apply(this, args); };
+  ctx.fillText = function record(text, x, y, maxWidth) {
+    const m = this.measureText(text);
+    const t = this.getTransform();
+    const scale = Math.hypot(t.a, t.b) || 1;
+    const w = maxWidth != null ? Math.min(m.actualBoundingBoxRight + m.actualBoundingBoxLeft, maxWidth) : m.actualBoundingBoxRight + m.actualBoundingBoxLeft;
+    if (String(text).trim() && t.b === 0 && t.c === 0 && !clipped.at(-1)) {
+      texts.push({
+        x: t.a * (x - m.actualBoundingBoxLeft) + t.e, y: t.d * (y - m.actualBoundingBoxAscent) + t.f,
+        w: w * scale, h: (m.actualBoundingBoxAscent + m.actualBoundingBoxDescent) * scale, text: String(text),
+      });
+    }
+    return fillText.call(this, text, x, y, maxWidth);
+  };
+  ctx.roundRect = function record(x, y, w, h, r) {
+    const t = this.getTransform();
+    const box = { x: t.a * x + t.e, y: t.d * y + t.f, w: w * t.a, h: h * t.d };
+    if (!plate || box.w * box.h > plate.w * plate.h) plate = box;
+    return roundRectOf.call(this, x, y, w, h, r);
+  };
+  return {
+    texts,
+    stop() { for (const k of ['fillText', 'roundRect', 'save', 'restore', 'clip']) delete ctx[k]; },
+    /** The plate: the largest rounded rectangle if it covers a good part of the canvas, else the canvas. */
+    plate: (W, H) => (plate && plate.w * plate.h > 0.3 * W * H ? plate : { x: 0, y: 0, w: W, h: H }),
+  };
+}
+
+const overlaps = (a, b) => Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x) > SLACK
+  && Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > SLACK;
+const inside = (a, b) => a.x >= b.x - SLACK && a.y >= b.y - SLACK && a.x + a.w <= b.x + b.w + SLACK && a.y + a.h <= b.y + b.h + SLACK;
+
+/**
+ * Text and buttons over each other or past the plate: `{ what, a, b }` each.
+ * A label inside its own button is not an overlap; nor is text drawn twice in
+ * one place (a shadow), nor anything wholly inside another.
+ */
+export function layoutIssues(texts, hits, plate) {
+  const boxes = [...texts.map((b) => ({ ...b, kind: 'text' })), ...hits.map((h) => ({ x: h.x, y: h.y, w: h.w, h: h.h, kind: 'button', text: `[${h.id}]` }))];
+  const out = [];
+  for (const b of boxes) {
+    if (b.w <= 0 || b.h <= 0) continue;
+    if (!inside(b, plate)) out.push({ what: `clipped: ${b.text.slice(0, 40)}`, a: b });
+  }
+  for (let i = 0; i < boxes.length; i++) {
+    for (let j = i + 1; j < boxes.length; j++) {
+      const a = boxes[i];
+      const b = boxes[j];
+      if (!overlaps(a, b) || inside(a, b) || inside(b, a)) continue;
+      out.push({ what: `overlap: ${a.text.slice(0, 30)} × ${b.text.slice(0, 30)}`, a, b });
+    }
+  }
+  return out;
+}
+
+/** For the checks: every live panel shown now that has a layout problem, by name. */
+export function layoutReport({ shownOnly = true } = {}) {
+  const out = [];
+  for (const p of livePanels) {
+    if (shownOnly && !shownInScene(p.mesh)) continue;
+    if (p.layout.length) out.push({ name: p.mesh.name, issues: p.layout.map((v) => v.what) });
+  }
+  return out;
+}
+
+function shownInScene(o) {
+  for (let n = o; n; n = n.parent) if (!n.visible) return false;
+  return Boolean(o.parent);
 }
 
 /** Stand a screen at a pose from layout.js. */

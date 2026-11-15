@@ -37,6 +37,7 @@ import { depthStep, DEPTH_IDLE } from './depthmodes.js';
 import { formatRA, formatDec } from '../catalog.js';
 import { tv } from './strings.js';
 import { markWords } from './markdepth.js';
+import { createBeam, createRibbon } from './beam.js';
 
 const D2R = Math.PI / 180;
 const D = LAYOUT.depth;
@@ -594,12 +595,14 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     applyTime();
   }
 
-  const controls = createPanel({ widthM: 1.2, heightM: 1.2, pxPerM: 760, name: 'depth-controls', opaque: true });
+  // Drawn as tall as what it holds; the canvas leaves room for the most it can hold.
+  const controls = createPanel({ widthM: 1.5, heightM: 1.5, pxPerM: 760, name: 'depth-controls', opaque: true });
   {
     // Across the corridor's mouth from the sign, a little below the eyes and
     // within a flat screen's width: pressed often, never read looking down.
-    const p = v3(frame.f).multiplyScalar(1.5).addScaledVector(v3(frame.r), 1.05);
-    p.y = -0.7;
+    const p = v3(frame.f).multiplyScalar(1.5).addScaledVector(v3(frame.r), 1.2);
+    // Its top a little under the eyes, where it always was; it grows downward.
+    p.y = -0.1 - 0.75;
     controls.mesh.position.copy(p);
     controls.mesh.lookAt(0, -0.3, 0);
     group.add(controls.mesh);
@@ -644,14 +647,20 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
       }
       const g = state.gaia;
       chip('filter', tv('vr.filterStars', { n: g?.known ?? 0, m: (g?.known ?? 0) + (g?.unknown ?? 0) }), shown.stars, 'stars');
-      bodyNoteY = y + bh + Math.round(px * 0.85);
       if (state.bodies.length) chip('filter', tv('vr.filterBodies', { n: state.bodies.length }), shown.bodies, 'bodies');
       else laid.push({ x, y, w: chipWidth(ctx, font, tv('vr.filterBodies', { n: 0 }), bh, 0.09 * 760), h: bh, label: tv('vr.filterBodies', { n: 0 }), id: 'none', font, tone: 'neutral', disabled: true }), (x += chipWidth(ctx, font, tv('vr.filterBodies', { n: 0 }), bh, 0.09 * 760) + 12);
       chip('filter', tv('vr.filterGalaxies', { n: state.galaxies?.length ?? 0, m: state.galaxyCount ?? 0 }), shown.galaxies, 'galaxies');
       chip('filter', tv('vr.filterUnknown', { n: (g?.unknown ?? 0) + state.candidates.length }), shown.unknown, 'unknown');
       row();
-      // Room for the line that says why there are no bodies.
-      if (!state.bodies.length) y += Math.round(px * 1.1);
+      // Why there are no bodies: a line of its own under the filters, wrapped to the panel.
+      const noteFont = `400 ${Math.round(px * 0.8)}px ${FONTS.body}`;
+      const noteLh = Math.round(px * 1.0);
+      const noteRow = (text) => {
+        const lines = wrapLines(noteFont, text, W - 36, 6);
+        laid.push({ note: lines, y: y - 12 });
+        y += lines.length * noteLh + 12;
+      };
+      if (!state.bodies.length) noteRow(tv(state.bodiesFailed ? 'vr.bodiesFailed' : state.bodyAsked ? 'vr.bodiesNone' : 'vr.bodiesAsking'));
       // Time: the stars along their own motion; the bodies along their season.
       if (state.gaia?.known) {
         // Back and on: play either way (a second tap pauses), or a step at a time.
@@ -667,11 +676,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
         clockBox = { x: 18, y, w: W - 36, h: bh };
         y += bh + 8;
         laid.push({ readout: true, y, h: Math.round(px * 1.9) });
-        y += Math.round(px * 1.9);
-        const note = wrapLines(`400 ${Math.round(px * 0.8)}px ${FONTS.body}`, tv('vr.timeNote'), W - 36, 6);
-        laid.push({ note, y });
-        y += note.length * Math.round(px * 1.0) + 6;
-        row();
+        y += Math.round(px * 1.9) + 12;
+        noteRow(tv('vr.timeNote'));
       }
       const span = bodySpan();
       if (span) {
@@ -688,7 +694,9 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
       const perM = 10 ** (decades / (D.farM - D.nearM) / scaleNow);
       const f = perM >= 100 ? Math.round(perM).toLocaleString('en-US').replace(/,/g, ' ') : perM.toFixed(1);
       const small = Math.round(px * 0.9);
-      const scaleY = y + bh + 12 + small;
+      // The last row of chips, if any, then the scale under it.
+      const lastChipBottom = laid.reduce((m, c) => (c.id ? Math.max(m, c.y + c.h) : m), 0);
+      const scaleY = Math.max(y, lastChipBottom + 12) + small;
       const bottom = Math.min(H - 2, scaleY + 18);
       roundRect(ctx, 2, 2, W - 4, bottom - 2, 24);
       ctx.fillStyle = look.paper;
@@ -715,18 +723,13 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
         if (b.slider) { drawSlider(ctx, hits, b); continue; }
         if (b.readout) { year = b; continue; }
         if (b.note) {
-          ctx.font = `400 ${Math.round(px * 0.8)}px ${FONTS.body}`;
+          ctx.font = noteFont;
           ctx.fillStyle = look.neutral;
-          b.note.forEach((l, k) => ctx.fillText(l, 18, b.y + Math.round(px * 0.8) + k * Math.round(px * 1.0)));
+          b.note.forEach((l, k) => ctx.fillText(l, 18, b.y + Math.round(px * 0.8) + k * noteLh));
           continue;
         }
         if (b.disabled) { button(ctx, [], look, b); continue; }
         button(ctx, hits, look, b);
-      }
-      if (!state.bodies.length) {
-        ctx.font = `400 ${Math.round(px * 0.8)}px ${FONTS.body}`;
-        ctx.fillStyle = look.neutral;
-        ctx.fillText(tv(state.bodiesFailed ? 'vr.bodiesFailed' : state.bodyAsked ? 'vr.bodiesNone' : 'vr.bodiesAsking'), 18, bodyNoteY);
       }
       yearAt = year;
       ctx.font = `400 ${small}px ${FONTS.mono}`;
@@ -838,7 +841,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
 
   /** The year, large, on its own small panel so it can roll every frame without redrawing the controls. */
   const RPX = minTextPx(760, 1.9);
-  const readout = createPanel({ widthM: 1.2 - 0.06, heightM: Math.ceil(RPX * 1.9) / 760, pxPerM: 760, name: 'depth-year' });
+  const readout = createPanel({ widthM: controls.widthM - 0.06, heightM: Math.ceil(RPX * 1.9) / 760, pxPerM: 760, name: 'depth-year' });
   readout.mesh.visible = false;
   readout.mesh.renderOrder = 12;
   readout.mesh.material.depthTest = false;
@@ -995,7 +998,35 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     return true;
   }
 
-  /** An arrowhead at the end of a polyline, pointing on along its last step. */
+  /** How many measurements the tape has made: for the walk-through. */
+  let tapesDone = 0;
+
+  /** Beams and paths whose pulse runs with the clock; one gone from the scene drops out. */
+  const pulsing = new Set();
+
+  /**
+   * A path as it is shown when asked for: the object's colour, a bright core
+   * in a glow sleeve with a dark rim (beam.js), a pulse running the way it
+   * moves, an arrowhead at its end and a bright tick at each dated point.
+   */
+  function pathRibbon(pts, css, { ticks = null } = {}) {
+    const rib = createRibbon(pts, { color: css });
+    group.add(rib.mesh);
+    pulsing.add(rib);
+    const out = [rib.mesh, arrowAt(pts, css)];
+    if (ticks?.length) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(ticks.flat(), 3));
+      const dots = new THREE.Points(geo, new THREE.PointsMaterial({ color: color(css), size: 9, sizeAttenuation: false, transparent: true, depthWrite: false, toneMapped: false }));
+      dots.renderOrder = 11;
+      dots.frustumCulled = false;
+      group.add(dots);
+      out.push(dots);
+    }
+    return out;
+  }
+
+  /** An arrowhead at the end of a polyline, pointing on along its last step: a chevron in the path's own style. */
   function arrowAt(points, css) {
     const a = v3(points.at(-2));
     const b = v3(points.at(-1));
@@ -1007,15 +1038,11 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     side.setLength(len * 0.5);
     const l = b.clone().add(back).add(side);
     const rr = b.clone().add(back).sub(side);
-    return lines([...b.toArray(), ...l.toArray(), ...b.toArray(), ...rr.toArray()], css, 0.95);
+    const head = createRibbon([l.toArray(), b.toArray(), rr.toArray()], { color: css, pulse: 0, near: 1, far: 1, k: 1.3 });
+    group.add(head.mesh);
+    return head.mesh;
   }
 
-  /** A polyline through points, as line segments. */
-  function polyline(points, css, opacity = 0.9) {
-    const seg = [];
-    for (let k = 1; k < points.length; k++) seg.push(...points[k - 1], ...points[k]);
-    return lines(seg, css, opacity);
-  }
 
   /* ---- the tape, the flight, and time ------------------------------- */
 
@@ -1063,6 +1090,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
         drawTape(tape.from, it, apart(d));
         tape.from = null;
         go('tapeDone');
+        tapesDone += 1;
       } else {
         lines.push({ text: tv('vr.tapeNoDistance'), tone: 'neutral' });
       }
@@ -1131,7 +1159,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
 
   /* ---- the marks: a beam each along its direction, a marker where a distance is known ---- */
   /** The markers, one instanced mesh for all; each pulses once when it first appears. */
-  const markFx = { mesh: null, items: [], born: new Map(), asking: [], sig: '' };
+  const markFx = { mesh: null, items: [], born: new Map(), asking: [], sig: '', beams: [] };
   const MARK_PULSE_MS = 1400;
   /** A marker's size: a constant 0.5 degree at whatever distance it stands. */
   const markerSize = (r) => r * Math.tan(0.5 * D2R);
@@ -1172,14 +1200,18 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     if (markFx.mesh) { markFx.mesh.removeFromParent(); markFx.mesh.geometry.dispose(); markFx.mesh.material.dispose(); markFx.mesh = null; }
     markFx.items = [];
     markFx.asking = [];
+    markFx.beams = [];
     pickables.marks = [];
     const layer = { objects: [], labels: [] };
     layers.marks = layer;
-    const glow = (pts, css, opacity) => {
-      const o = lines(pts, css, opacity);
-      o.material.blending = THREE.AdditiveBlending;
-      o.renderOrder = 9;
-      layer.objects.push(o);
+    // A beam (beam.js): the mark's colour, a core and a glow sleeve, a dark rim against bright sky,
+    // and a pulse running out along it toward where the mark is.
+    const shaft = (from, to, css, opts) => {
+      const b = createBeam({ color: css, widthM: 0, ...opts });
+      b.set(from, to);
+      group.add(b.mesh);
+      layer.objects.push(b.mesh);
+      markFx.beams.push(b);
     };
     const farM = unknownShell();
     const seen = new Set();
@@ -1188,12 +1220,17 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
       const u = unit(dirOf(d.ra, d.dec));
       const at = (m) => [u[0] * m, u[1] * m, u[2] * m];
       // The beam: from the viewer's end of the corridor through all of it.
-      glow([...at(D.nearM * 0.6), ...at(farM)], css, d.faint ? 0.22 : 0.5);
+      // To a marker, the beam runs bright to it and on, quieter, through the rest of the corridor.
+      const stopM = d.show === 'at' ? depthMetres(d.au) : farM;
+      shaft(at(D.nearM * 0.6), at(stopM), css, d.faint
+        ? { k: 0.5, widthAng: 0.003, near: 0.8, far: 0.3, rim: 0.35 }
+        : { k: 1, widthAng: 0.0045, near: 1, far: d.show === 'at' ? 0.9 : 0.45, pulse: 1, rim: 0.5 });
+      if (stopM < farM) shaft(at(stopM), at(farM), css, { k: 0.45, widthAng: 0.0028, near: 0.6, far: 0.2, rim: 0.3 });
       let end = at(farM);
       if (d.show === 'range' || d.show === 'ceiling') {
         // The part of the beam the measurement allows, brighter.
         const b = depthMetres(d.farAU);
-        glow([...at(depthMetres(d.nearAU)), ...at(b)], css, 0.95);
+        shaft(at(depthMetres(d.nearAU)), at(b), css, { k: 1.3, widthAng: 0.0065, near: 1, far: 1, pulse: 1, rim: 0.55 });
         end = at(b);
       } else if (d.show === 'at') {
         end = at(depthMetres(d.au));
@@ -1205,9 +1242,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
       if (d.track?.length > 1 && d.show !== 'far') {
         const m = depthMetres(d.show === 'at' ? d.au : d.farAU);
         const pts = d.track.map((q) => { const v = unit(dirOf(q.ra, q.dec)); return [v[0] * m, v[1] * m, v[2] * m]; });
-        const seg = [];
-        for (let k = 1; k < pts.length; k++) seg.push(...pts[k - 1], ...pts[k]);
-        glow(seg, css, 0.9);
+        layer.objects.push(...pathRibbon(pts, css, { ticks: pts }));
       }
       const words = markWords(d, tv);
       // A folded mark keeps its beam and its one line; an open one says where the distance is from.
@@ -1294,6 +1329,9 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
       onAction?.('fly', world);
       return true;
     },
+    get tapesDone() { return tapesDone; },
+    /** The controls' panel, for the walk-through's ring. */
+    get controlsPanel() { return controls; },
     /** For the checks: how the marks stand in depth. */
     get marksShown() { return { markers: markFx.items.length, beams: pickables.marks.length, asking: markFx.asking.length, words: layers.marks?.labels.length ?? 0 }; },
     /** A catalogue being asked (again): its failure no longer said. */
@@ -1491,7 +1529,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
           path: it.path ? (layerOut) => {
             const pts = [];
             for (let k = 0; k <= 16; k++) pts.push(placeAt(five(it), ((k / 8) - 1) * STAR_YEARS));
-            layerOut.objects.push(polyline(pts, look.accent), arrowAt(pts, look.accent));
+            layerOut.objects.push(...pathRibbon(pts, look.accent, { ticks: [pts[0], pts[8], pts[16]] }));
           } : null,
         };
         if (it.path) followers.push({ path: five(it), pick });
@@ -1579,10 +1617,10 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
         path: (tracks.get(b.name) ?? []).length >= 2 ? (layerOut) => {
           const track = tracks.get(b.name);
           const pts = track.map((p) => placeAlong(dirOf(p.ra, p.dec), p.au));
-          layerOut.objects.push(polyline(pts, look.counter), arrowAt(pts, look.counter));
+          layerOut.objects.push(...pathRibbon(pts, look.counter, { ticks: pts }));
           const day = (mjd) => formatDay(new Date((mjd - MJD_UNIX) * 86400000));
-          layerOut.labels.push(addLabel([day(track[0].mjd)], pts[0], { tone: 'counter', width: 10, priority: 7 }));
-          layerOut.labels.push(addLabel([day(track.at(-1).mjd)], pts.at(-1), { tone: 'counter', width: 10, priority: 7 }));
+          layerOut.labels.push(addLabel([day(track[0].mjd)], pts[0], { tone: 'counter', width: 13, priority: 8 }));
+          layerOut.labels.push(addLabel([day(track.at(-1).mjd)], pts.at(-1), { tone: 'counter', width: 13, priority: 8 }));
         } : null,
         card: () => ({
           title: b.num ? `(${b.num}) ${b.name}` : b.name,
@@ -1644,7 +1682,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
           const a = items[i].pos;
           const u = unit(a);
           const b = [a[0] + u[0] * 0.25, a[1] + u[1] * 0.25, a[2] + u[2] * 0.25];
-          layerOut.objects.push(lines([...a, ...b], look.accent, 0.9), arrowAt([a, b], look.accent));
+          layerOut.objects.push(...pathRibbon([a, b], look.accent));
         } : null,
         card: () => ({
           title: o.g.name,
@@ -1695,6 +1733,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
       if (markFx.items.some((it) => nowMs - (markFx.born.get(it.n) ?? 0) < MARK_PULSE_MS + 100)) placeMarkers(nowMs);
       // "Identifying" breathes while the catalogues are out.
       for (const l of markFx.asking) l.mesh.material.opacity = 0.55 + 0.45 * Math.sin(nowMs / 300) ** 2;
+      for (const b of markFx.beams) b.tick(nowMs / 1000);
+      for (const b of pulsing) { if (b.mesh.parent) b.tick(nowMs / 1000); else pulsing.delete(b); }
       if (clock.playing) {
         const now = performance.now();
         const dt = Math.min(0.1, (now - clock.last) / 1000);

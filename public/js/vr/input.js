@@ -28,6 +28,7 @@
  */
 
 import * as THREE from '../vendor/three.module.js';
+import { createBeam } from './beam.js';
 
 const RAY_LENGTH = 8;
 const DRAG_PX = 6;
@@ -45,8 +46,6 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
   // distance, turned to the head, bright over something that can be pressed,
   // an open ring while the trigger or the pinch is held. The two hands are
   // tinted apart. Nothing here is made anew per frame.
-  const RAY_VERTEX = 'attribute float fade; varying float vF; void main() { vF = fade; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }';
-  const RAY_FRAGMENT = 'uniform vec3 tint; uniform float k; varying float vF; void main() { gl_FragColor = vec4(tint, vF * k); }';
   const RETICLE_VERTEX = 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }';
   const RETICLE_FRAGMENT = `uniform vec3 tint; uniform float glow; uniform float held; varying vec2 vUv;
     void main() {
@@ -54,7 +53,7 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
       float w = fwidth(r) * 1.5;
       float ring = smoothstep(0.62 - w, 0.62, r) * (1.0 - smoothstep(0.9, 0.9 + w, r));
       float dot = (1.0 - smoothstep(0.2, 0.2 + w, r)) * (1.0 - held);
-      float a = max(ring, dot) * mix(0.75, 1.0, glow);
+      float a = max(ring, dot) * mix(0.92, 1.0, glow);
       if (a < 0.01) discard;
       gl_FragColor = vec4(mix(tint, vec3(1.0), glow * 0.35), a);
     }`;
@@ -66,6 +65,7 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
   const headQuat = new THREE.Quaternion();
   const vA = new THREE.Vector3();
   const vB = new THREE.Vector3();
+  const vEnd = new THREE.Vector3();
 
   const controllers = [];
   const walk = [0, 0];
@@ -79,16 +79,11 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
     const hand = renderer.xr.getHand(i);
     scene.add(hand);
     const tint = new THREE.Color(TINTS[i]);
-    const lineGeo = new THREE.BufferGeometry();
-    lineGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
-    lineGeo.setAttribute('fade', new THREE.BufferAttribute(new Float32Array([0.9, 0]), 1));
-    const lineMat = new THREE.ShaderMaterial({
-      uniforms: { tint: { value: tint }, k: { value: 0.35 } },
-      vertexShader: RAY_VERTEX, fragmentShader: RAY_FRAGMENT, transparent: true, depthTest: false, depthWrite: false,
-    });
-    const line = new THREE.Line(lineGeo, lineMat);
-    line.frustumCulled = false;
-    line.renderOrder = 50;
+    // The ray: a bright core in a glow sleeve with a dark rim (beam.js), bright at the hand, fading out.
+    const beam = createBeam({ color: TINTS[i], k: 0.8, widthM: 0.0025, widthAng: 0.0022, near: 1, far: 0.25, rim: 0.45, renderOrder: 50 });
+    beam.mesh.material.depthTest = false;
+    const line = beam.mesh;
+    line.userData.beam = beam;
     line.visible = false;
     scene.add(line);
     const reticleMat = new THREE.ShaderMaterial({
@@ -394,12 +389,10 @@ export function createPointers({ renderer, scene, camera, dom, look, onPress, on
       const { line, reticle } = ray.entry;
       // The ray ends where it lands, or a few metres out on the sky.
       const d = distance ?? AIM_DEFAULT_M;
-      const pos = line.geometry.attributes.position;
-      pos.setXYZ(0, ray.origin.x, ray.origin.y, ray.origin.z);
-      pos.setXYZ(1, ray.origin.x + ray.dir.x * d, ray.origin.y + ray.dir.y * d, ray.origin.z + ray.dir.z * d);
-      pos.needsUpdate = true;
+      vEnd.copy(ray.origin).addScaledVector(ray.dir, d);
+      line.userData.beam.set(ray.origin, vEnd);
       line.visible = ray.entry.source?.targetRayMode !== 'gaze';
-      line.material.uniforms.k.value = pickable ? 0.9 : 0.4;
+      line.material.uniforms.k.value = pickable ? 1 : 0.7;
       // The reticle: on whatever the ray landed on, the same size to the eye, turned to the head.
       reticle.visible = line.visible;
       reticle.position.copy(ray.origin).addScaledVector(ray.dir, d);

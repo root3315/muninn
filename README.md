@@ -203,7 +203,10 @@ can drive one; on a flat screen `/vr.html` is the same scene with mouse or touch
   *Today* and *Epoch of the frame*; *Back to Earth*.
 - **Comfort:** no camera roll, eased moves with a vignette, foveation. On a headset it asks for
   90 Hz when a frame's own work takes 9 ms or less, otherwise 72 Hz; in a Quest 3 emulator on a
-  desktop GPU the median frame took about 7 ms and 54 draw calls. A five-step guide opens with the first field;
+  desktop GPU the median frame took about 7 ms and 54 draw calls. On the first visit a walk-through opens:
+  a welcome, then eleven hands-on steps, each lighting the real control and waiting for it (look round,
+  point at a star, open a field, blink, mark, carry a screen, turn to depth, fly, measure, run time, come
+  back with B), then the controls on one card; skip or step back at any time, reopen from *How to use*.
   *Open on the site* leaves VR for the same view on the page.
 - **Sound, synthesised in the browser** (Web Audio, no audio files): air that follows the speed of
   a flight or a walk, in stereo and capped in pitch, with its own switch; soft clicks, ticks and

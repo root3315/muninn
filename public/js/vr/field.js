@@ -79,12 +79,8 @@ const LIST_RETRY_S = [5, 15, 45];
 const DEPTH_RETRY_S = [5, 15, 45];
 /** When frames that failed to read are read again, seconds after the field's reading ends. */
 const FRAME_RETRY_S = [20, 60];
-/** The guide's five steps, by their strings' names. */
-const GUIDE = ['Point', 'Field', 'Mark', 'Depth', 'Move'];
 /** The site's "How to read this" cards that hold in the headset, in its order. */
 const READ = ['sky', 'blink', 'modes', 'north', 'mark', 'verdicts', 'ring', 'spec', 'wise', 'depth', 'hunt', 'seasons'];
-/** Remembered once the guide has been seen, so it opens by itself only the first time. */
-const GUIDE_SEEN = 'muninn.vrGuide';
 
 /* The grid as the site cuts it: ~2.5 samples per 6.15″ detector pixel. */
 const gridHeightFor = (fovDeg) => Math.min(768, Math.max(360, Math.round(((fovDeg * 3600) / 6.15) * 2.5)));
@@ -417,7 +413,8 @@ export function openFieldVR(target, env) {
       env.sound.setVolume(steps[k < 0 ? 0 : k]);
       drawCard();
     }
-    else if (id === 'guide') showPages(tv('vr.guide'), GUIDE.map((k) => ({ heading: tv(`vr.guide${k}H`), text: k === 'Point' ? `${tv(`vr.guide${k}P`)} ${tv('vr.soundGuide')}` : tv(`vr.guide${k}P`) })));
+    // "How to use": the walk-through, from the field's own steps (tour.js).
+    else if (id === 'guide') env.onGuide?.();
     else if (id === 'read') showPages(t('about.title'), READ.map((k) => ({ heading: t(`about.${k}H`), text: t(`about.${k}P`) })));
     // Another band or another size is another field: opened again, the site's way.
     else if (id === 'band' && data !== band) env.onReopen?.({ ...target, band: data });
@@ -481,6 +478,7 @@ export function openFieldVR(target, env) {
 
   function step(d) {
     if (!sky.visits.length) return;
+    st.stepped = (st.stepped ?? 0) + 1;
     if (st.mode === 'wipe' || st.mode === 'difference') {
       sky.setAB(null, ((sky.b + d) % sky.visits.length + sky.visits.length) % sky.visits.length);
     } else if (st.mode === 'stack') {
@@ -794,6 +792,17 @@ export function openFieldVR(target, env) {
     ctx.stroke();
   }
 
+  /**
+   * The same ground, drawn under what is already on the canvas and only as
+   * tall as it: a screen laid out as a flow is as long as its content.
+   */
+  function groundUnder(ctx, W, bottom) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-over';
+    panelGround(ctx, W, Math.min(ctx.canvas.height, Math.ceil(bottom)));
+    ctx.restore();
+  }
+
   const hov = (p, id, data = '') => st.hoverBtn === `${p}:${id}:${data}`;
 
   function drawBar() {
@@ -850,8 +859,9 @@ export function openFieldVR(target, env) {
   }
 
   function drawCard() {
+    // A flow, top to bottom: the ways back, the hint, the name and what it is,
+    // the visits, the buttons, then the turn; the ground drawn last, under it, to fit.
     card.draw((ctx, W, H, hits) => {
-      panelGround(ctx, W, H);
       const x = 34;
       const w = W - 68;
       const T = TYPE.card;
@@ -910,7 +920,8 @@ export function openFieldVR(target, env) {
       }
       ctx.font = `500 ${T.body}px ${FONTS.body}`;
       ctx.fillStyle = look.accent;
-      wrapText(ctx, `↻ ${tv('vr.turn')}`, x, H - 34 - T.body * 1.3, w, T.body * 1.3, 2);
+      const end = wrapText(ctx, `↻ ${tv('vr.turn')}`, x, by + bh + 28 + T.body, w, T.body * 1.3, 2);
+      groundUnder(ctx, W, end - T.body * 1.3 + 34);
     });
   }
 
@@ -1118,14 +1129,6 @@ export function openFieldVR(target, env) {
 
   function drawAll() { drawBar(); drawCard(); drawSide(); drawNotice(); }
   drawAll();
-  // The first field ever opened in the headset starts with the guide.
-  try {
-    if (!localStorage.getItem(GUIDE_SEEN)) {
-      localStorage.setItem(GUIDE_SEEN, '1');
-      act('guide');
-    }
-  } catch { /* storage refused: no guide by itself */ }
-
   /* ---- reading the field -------------------------------------------- */
   async function load() {
     // A field is centred where its target is best seen: the target's own position is the one to look up, as on the site.
@@ -1654,6 +1657,29 @@ export function openFieldVR(target, env) {
     depthCard: (on) => depthView.cardShown(on),
     get depthMode() { return depthView.mode; },
     get depthSources() { return depthView.sources; },
+    /** For the walk-through: what has been done here so far. */
+    get tourFacts() {
+      return {
+        steps: st.stepped ?? 0, marks: sky.marks.length, drops: windows.drops, flipped: st.flipped,
+        tapes: depthView.tapesDone, clockPlaying: Boolean(depthView.clockState?.playing),
+      };
+    },
+    /**
+     * Where one of the field's controls stands, in the world: a panel's centre,
+     * or one of its buttons by id. Null if it is not shown.
+     */
+    control(name, id = null) {
+      const p = { main, bar, card, side, depthControls: depthView.controlsPanel }[name];
+      if (!p?.mesh.visible) return null;
+      const h = id ? p.hits.find((x) => x.id === id) : null;
+      if (id && !h) return null;
+      const W = p.canvas.width;
+      const H = p.canvas.height;
+      const u = h ? (h.x + h.w / 2) / W : 0.5;
+      const v = h ? (h.y + h.h / 2) / H : 0.5;
+      p.mesh.updateMatrixWorld();
+      return p.mesh.localToWorld(new THREE.Vector3((u - 0.5) * p.widthM, (0.5 - v) * p.heightM, 0));
+    },
     /** How long the field took to open: the list, the first picture, the depth view, every visit (ms from opening). */
     get timings() {
       const since = (t) => (t == null ? null : Math.round(t - st.times.open));
