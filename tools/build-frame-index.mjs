@@ -40,14 +40,15 @@ import {
   ROW, TILE_DEG, tileOf, indexRowFromObscore, footprintReach, folderOf, folderVersions, versionIn, s3List,
 } from '../public/js/frameindex.js';
 
-const TAP = 'https://irsa.ipac.caltech.edu/TAP/sync';
+const TAP_ASYNC = 'https://irsa.ipac.caltech.edu/TAP/async';
 const USER_AGENT = 'Muninn/1.0 (frame index)';
 /** The first SPHEREx survey exposure in DR1 starts on MJD 60789.75. */
 const FIRST_MJD = 60789;
 /** The index is not packed past this size on disk; it is reported instead. */
 const MAX_BYTES = 1.5 * 1024 ** 3;
-const TAP_TIMEOUT_MS = 10 * 60 * 1000;
-const RETRY_WAITS_MS = [10_000, 30_000, 90_000, 180_000, 300_000];
+const TAP_TIMEOUT_MS = 30 * 60 * 1000;
+/** IRSA's bursts of 502 last minutes to an hour: a week is asked again for about two hours before the build stops. */
+const RETRY_WAITS_MS = [10_000, 30_000, 90_000, 180_000, 300_000, ...Array(10).fill(600_000)];
 const COLUMNS = 'obs_id,obs_collection,energy_bandpassname,em_min,em_max,t_min,t_exptime,s_ra,s_dec,s_region';
 /** Cells are packed this many Dec bands at a time, so the build never holds the whole sky. */
 const BANDS_PER_PASS = 15;
@@ -80,20 +81,44 @@ const log = (...words) => console.log(new Date().toISOString().slice(11, 19), ..
 
 /* ------------------------------------------------------------------ IRSA */
 
+/**
+ * A question to IRSA's TAP as an asynchronous job: submitted, its phase
+ * asked every few seconds, its table read once it is done. A loaded TAP can
+ * take longer than an HTTP client waits for the first byte of a synchronous
+ * answer; a job has no such limit, and is deleted once read.
+ */
 async function tapOnce(query) {
-  const res = await fetch(TAP, {
+  const submitted = await fetch(TAP_ASYNC, {
     method: 'POST',
     headers: { 'user-agent': USER_AGENT },
-    body: new URLSearchParams({ LANG: 'ADQL', FORMAT: 'csv', MAXREC: '5000000', QUERY: query }),
-    signal: AbortSignal.timeout(TAP_TIMEOUT_MS),
+    body: new URLSearchParams({ LANG: 'ADQL', FORMAT: 'csv', MAXREC: '5000000', PHASE: 'RUN', QUERY: query }),
+    redirect: 'manual',
+    signal: AbortSignal.timeout(120_000),
   });
-  const text = await res.text();
-  if (!res.ok) throw Object.assign(new Error(`TAP HTTP ${res.status}`), { status: res.status });
-  if (text.trimStart().startsWith('<')) {
-    const reason = /QUERY_STATUS" value="ERROR">([^<]*)/.exec(text)?.[1]?.trim() ?? 'not a table';
-    throw Object.assign(new Error(`TAP: ${reason}`), { status: 200 });
+  const job = submitted.headers.get('location');
+  if (!job) throw Object.assign(new Error(`TAP job not accepted: HTTP ${submitted.status}`), { status: submitted.status >= 300 ? submitted.status : 503 });
+  const until = Date.now() + TAP_TIMEOUT_MS;
+  try {
+    for (;;) {
+      // A phase that cannot be read (the gateway's 502) is asked again; the job runs on.
+      const phase = await fetch(`${job}/phase`, { signal: AbortSignal.timeout(60_000) })
+        .then(async (res) => (res.ok ? (await res.text()).trim() : 'UNKNOWN'), () => 'UNKNOWN');
+      if (phase === 'COMPLETED') break;
+      if (phase === 'ERROR' || phase === 'ABORTED') {
+        const detail = await (await fetch(`${job}/error`, { signal: AbortSignal.timeout(60_000) })).text().catch(() => '');
+        throw Object.assign(new Error(`TAP job ${phase}: ${detail.replace(/<[^>]+>/g, ' ').trim().slice(0, 200)}`), { status: 200 });
+      }
+      if (Date.now() > until) throw new Error(`TAP job still ${phase} after ${TAP_TIMEOUT_MS / 60000} minutes`);
+      await sleep(5000);
+    }
+    const res = await fetch(`${job}/results/result`, { signal: AbortSignal.timeout(300_000) });
+    const text = await res.text();
+    if (!res.ok) throw Object.assign(new Error(`TAP result HTTP ${res.status}`), { status: res.status });
+    if (text.trimStart().startsWith('<')) throw Object.assign(new Error('TAP result is not a table'), { status: 200 });
+    return parseCsv(text);
+  } finally {
+    fetch(job, { method: 'DELETE', signal: AbortSignal.timeout(30_000) }).catch(() => {});
   }
-  return parseCsv(text);
 }
 
 const worthRetry = (err) => err.status === undefined || [429, 500, 502, 503, 504].includes(err.status);
