@@ -412,8 +412,10 @@ source over ten visits).
 **Cosmic rays the pipeline missed.** A real source spreads over several 6.15″ pixels; a cosmic
 ray or hot pixel puts its light in one. A one-visit flash is read on the detector's own pixels
 for the share of its 3×3 light in the brightest pixel (`public/js/sharpness.js`). Over every
-DR1 and QR3 visit of the Atala field, 932 unflagged stars above 15σ never put more than 0.87 in
-one pixel; flagged hits sit at 0.93–1.0, the 6 July pixel at 1.00, Atala on 25 Dec at 0.42. A
+DR1 and QR3 visit of the Atala field (rerun 15 Nov 2026), 926 of 927 unflagged maxima above 15σ
+put no more than 0.87 in one pixel; the one exception, a 15σ peak in D2 on 7 July 2025, sits at
+0.94, far too faint for a verdict, and above 50σ the highest is 0.86. Flagged hits above 100σ
+have a median of 1.00, the 6 July pixel 1.00, Atala on 25 Dec 0.42. A
 flash is called *too sharp for a star* when its neighbours fall three noise widths short of what
 a star leaves, which needs about 57σ; fainter flashes are left unjudged. Such flashes stay on the
 page and are never ranked.
@@ -481,7 +483,8 @@ Star (saturated) and WISE 0855−0714 qualify; a typical nearby brown dwarf (0.1
 The opening field was found by searching real SPHEREx frames along the ecliptic for catalogued
 objects bright enough to detect (`tools/find-mover.mjs`) and checked photometrically
 (`tools/verify-mover.mjs`). RA 13.4194, Dec +3.8459, band D2 (1.10–1.65 µm), fifteen D2 visits
-over 369 days in DR1 and QR3. Signal-to-noise at the field centre, visit by visit:
+over 369 days in DR1 and QR3. Signal-to-noise at the field centre, visit by visit (rerun 15 Nov 2026;
+a later data release can change the frame list and these values):
 
 ```
 2025-07-06T11:41:24     1.2   █
@@ -489,15 +492,15 @@ over 369 days in DR1 and QR3. Signal-to-noise at the field centre, visit by visi
 2025-07-09T03:23:15     0.5   █
 2025-07-19T11:04:07     1.6   ██
 2025-12-24T11:12:16     2.2   ██
-2025-12-25T16:33:36   374.3   ████████████████████████████████████████
+2025-12-25T16:33:36   373.9   ████████████████████████████████████████
 2026-01-01T01:44:29     1.5   ██
 2026-01-01T08:21:29     0.9   █
 2026-01-03T05:59:11     2.4   ██
-2026-01-04T14:32:35     0.8   █
+2026-01-04T14:32:35     0.9   █
 2026-07-03T09:52:56     1.9   ██
 2026-07-03T19:44:45     1.4   █
 2026-07-04T18:27:55     1.3   █
-2026-07-05T05:58:03     1.2   █
+2026-07-05T05:58:03     1.3   █
 2026-07-10T06:30:49     0.9   █
 ```
 
