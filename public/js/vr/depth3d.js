@@ -225,3 +225,41 @@ export function matchTarget(target, rows, epoch, { maxArcsec = 3, pmTol = 0.2 } 
   }
   return null;
 }
+
+/**
+ * A star's path in the depth view over the clock's span, by its proper
+ * motion alone: `n` samples from −span to +span (`posAt(f)` gives RA and Dec
+ * at a fraction f of it, −1 … 1), each sent through the view's own mapping
+ * from the sky to a direction (`dirOf`), the same one the star's place takes.
+ * The distance is held (no radial velocity), so the path lies on the star's
+ * shell. Where the path would leave the corridor (`axis`, half-angle
+ * `coneRad`) it stops at the edge, both ways from now, and `shortened` says so.
+ *
+ * Returns `{ dirs, keys, shortened }`: `n` unit directions in time order
+ * over the part of the span inside the corridor, and the five places the
+ * clock moves the star between (−span, −span/2, now, +span/2, +span), each
+ * held at the edge if past it.
+ */
+export function motionPath(posAt, { dirOf, axis, coneRad, n = 33 }) {
+  const unit = (d) => { const l = Math.hypot(d[0], d[1], d[2]); return [d[0] / l, d[1] / l, d[2] / l]; };
+  const ax = unit(axis);
+  const dirAt = (f) => { const p = posAt(f); return unit(dirOf(p.ra, p.dec)); };
+  const inside = (d) => Math.acos(Math.max(-1, Math.min(1, d[0] * ax[0] + d[1] * ax[1] + d[2] * ax[2]))) <= coneRad;
+  // How far either way it stays in the corridor: the whole span, or up to the edge, found by halving.
+  const reach = (sign) => {
+    if (inside(dirAt(sign))) return sign;
+    let lo = 0;
+    let hi = 1;
+    for (let k = 0; k < 40; k++) { const m = (lo + hi) / 2; if (inside(dirAt(sign * m))) lo = m; else hi = m; }
+    return sign * lo;
+  };
+  const fLo = reach(-1);
+  const fHi = reach(1);
+  const dirs = Array.from({ length: n }, (_, i) => dirAt(fLo + ((fHi - fLo) * i) / (n - 1)));
+  const held = (f) => dirAt(Math.max(fLo, Math.min(fHi, f)));
+  return {
+    dirs,
+    keys: [-1, -0.5, 0, 0.5, 1].map(held),
+    shortened: fLo > -1 || fHi < 1,
+  };
+}
