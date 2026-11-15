@@ -285,6 +285,9 @@ export function openFieldVR(target, env) {
     return url.href;
   }
 
+  // The screens whose coming and going is heard.
+  const soundMeshes = [marksPanel.mesh, spectrum.mesh, pages.mesh];
+
   // Every screen can be taken by the grip and put elsewhere (windows.js).
   const windows = createWindows({ group: screens, onMoved: () => drawCard() });
   for (const m of [main.mesh, bar.mesh, card.mesh, side.mesh, marksPanel.mesh, spectrum.mesh]) windows.add(m);
@@ -321,6 +324,10 @@ export function openFieldVR(target, env) {
     onAction: (id, data) => {
       if (id === 'back') env.onBack?.();
       else if (id === 'fly') env.onFly?.(data);
+      else if (id === 'sound') {
+        if (data.kind === 'step') env.sound?.step(data.dir);
+        else if (data.kind === 'body' && data.world) env.sound?.tick3d(data.world);
+      }
       else if (id === 'home') env.onHome?.();
       else if (id === 'screens') env.onBring?.();
       else if (id === 'flip') flip();
@@ -367,7 +374,16 @@ export function openFieldVR(target, env) {
     else if (id === 'layout') { windows.reset(); drawCard(); }
     else if (id === 'planets' && st.host) env.onLeave?.(systemUrl(st.host, label, lang));
     else if (id === 'site') env.onLeave?.(siteUrl());
-    else if (id === 'guide') showPages(tv('vr.guide'), GUIDE.map((k) => ({ heading: tv(`vr.guide${k}H`), text: tv(`vr.guide${k}P`) })));
+    else if (id === 'sound' && env.sound) { env.sound.start(); env.sound.setEnabled(!env.sound.enabled); drawCard(); }
+    else if (id === 'volume' && env.sound) {
+      // Four steps round: quiet, the modest default, clear, full.
+      const steps = [0.15, 0.35, 0.6, 1];
+      const k = steps.findIndex((v) => v > env.sound.volume + 1e-3);
+      env.sound.start();
+      env.sound.setVolume(steps[k < 0 ? 0 : k]);
+      drawCard();
+    }
+    else if (id === 'guide') showPages(tv('vr.guide'), GUIDE.map((k) => ({ heading: tv(`vr.guide${k}H`), text: k === 'Point' ? `${tv(`vr.guide${k}P`)} ${tv('vr.soundGuide')}` : tv(`vr.guide${k}P`) })));
     else if (id === 'read') showPages(t('about.title'), READ.map((k) => ({ heading: t(`about.${k}H`), text: t(`about.${k}P`) })));
     // Another band or another size is another field: opened again, the site's way.
     else if (id === 'band' && data !== band) env.onReopen?.({ ...target, band: data });
@@ -490,11 +506,14 @@ export function openFieldVR(target, env) {
     const m = { ra: at[0], dec: at[1], obsId: v?.frame.obsId ?? null, track: [], analysis: null, known: null };
     sky.marks.push(m);
     while (sky.marks.length > MAX_MARKS) sky.marks.shift();
+    env.sound?.mark();
     // The newest mark opens; the ones before it fold to a line.
     for (const k of sky.marks) k.open = k === m;
     dropUndo();
     marksPanel.reveal();
     retrackMarks();
+    // What it is, in a short chime, once measured.
+    setTimeout(() => env.sound?.verdict(m.analysis?.kind ?? 'none'), 140);
     // A detection in the visit on the screen is felt in the hand.
     if (v && m.track.some((p) => p.obsId === v.frame.obsId && (p.saturated || p.snr >= 5))) env.haptic?.('select');
   }
@@ -800,6 +819,7 @@ export function openFieldVR(target, env) {
         ['guide', tv('vr.guide')],
         ['read', t('about.title')],
         ['site', `${tv('vr.onSite')} →`],
+        ...(env.sound ? [['sound', env.sound.enabled ? tv('vr.soundOn') : tv('vr.soundOff')], ['volume', tv('vr.volume', { n: Math.round(env.sound.volume * 100) })]] : []),
         ...(st.host ? [['planets', `${t('card.planets', { n: st.host[2] })} →`]] : []),
       ];
       let bx = x;
@@ -1280,6 +1300,10 @@ export function openFieldVR(target, env) {
     markAct: (id, i) => markAct(id, i),
     /** For the checks: press any of the field's own buttons by its id. */
     act: (id, data) => act(id, data),
+    /** How many of the screens stand shown now: for a soft tone when one comes or goes. */
+    get shownCount() { let n = 0; for (const m of soundMeshes) if (m.visible) n += 1; return n; },
+    /** The stars' clock, for its sound. */
+    get clockState() { return depthView.clockState; },
     /** For the checks: how bright the field’s screen is around a texture point (0–255, a 121 × 121 mean). */
     shade(u, v) {
       showOnMain();

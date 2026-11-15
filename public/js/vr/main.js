@@ -36,6 +36,7 @@ import { tv } from './strings.js';
 import { planetHostNear, systemUrl } from '../exovision.js';
 import { clearOf } from './windows.js';
 import { brightStars } from '../brightstars.js';
+import { createSound } from './sound.js';
 
 const D2R = Math.PI / 180;
 const EYE_HEIGHT = 1.6;
@@ -101,6 +102,9 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   scene.add(camera);
 
   /* ---- the sky ----------------------------------------------------- */
+  /** Every sound, made on the device (sound.js); started by the first gesture. */
+  const sound = createSound();
+  ui.sound?.(sound);
   ui.status(tv('vr.loadingSky'));
   const [stars, targets] = await Promise.all([
     loadStars().catch(() => null),
@@ -451,6 +455,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     const at = found ? pointers.reticleAt(found.id) : null;
     if (!at) { snapLabel.mesh.visible = false; snapText = null; return; }
     if (found.text !== snapText) {
+      sound.tick();
       snapText = found.text;
       snapLabel.draw((ctx, W, H) => {
         const px = Math.round(H * 0.5);
@@ -479,6 +484,9 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     snapLabel.mesh.visible = true;
   }
 
+  let shownBefore = 0;
+  let cardBefore = false;
+
   /** The open field's picture on the sky, at its own place. */
   let skyPatch = null;
 
@@ -498,6 +506,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       pointers.setFlatView({ yaw: yawDeg * D2R, pitch: -0.06, fov: Math.min(100, Math.max(80, wide)) });
     }
     markers.burst(marker);
+    sound.dive();
     card.hide();
     field = openFieldVR(marker.target, {
       scene, head: h, baseYawDeg: yawDeg, fromDir: world.clone().normalize(), lang: getLanguage(), pxPerDeg, haptic, showCard, brightList,
@@ -506,6 +515,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       onFlipped: (flipped) => { view = flipped ? 'depth' : 'field'; },
       onReopen: (next) => openTarget({ ...marker, target: next }),
       onFly: flyTo,
+      sound,
       onHome: flyHome,
       onLeave: leaveTo,
     });
@@ -629,16 +639,19 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       const hit = hitOf(ray);
       if (!hit) return;
       if (hit.kind === 'marker') { haptic('select'); openTarget(hit.marker); return; }
-      if (hit.kind === 'depth') { haptic('select'); showCard(hit.depth.card, hit.depth.at); return; }
+      if (hit.kind === 'depth') { haptic('select'); showCard(hit.depth.card, hit.depth.at); sound.tone(hit.depth.at); return; }
       if (hit.kind === 'star' || hit.kind === 'sky') {
         haptic('select');
         const content = skyCard(hit.dir, hit.star);
         const at = toWorld([hit.dir.x, hit.dir.y, hit.dir.z]).multiplyScalar(10).add(headPose().head);
         showCard(content, at);
+        // A star's tone from its colour (B−V); a bare point of sky has none.
+        if (hit.star >= 0) sound.tone(at, stars.bv[hit.star]);
         if (hit.star >= 0) offerPlanets(content, at, stars.ra[hit.star], stars.dec[hit.star], named.get(hit.star)?.name ?? '');
         return;
       }
       if (was?.object && was.object !== hit.object) return;
+      if (hit.object.userData.pickable?.(hit.uv) ?? Boolean(hit.object.userData.pick)) sound.click();
       hit.object.userData.pick?.(hit.uv, hit.hit);
     },
     onBack: goBack,
@@ -775,6 +788,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
 
   /** Step to where the arc of pointer `id` landed: the head comes down over that spot, through a short fade. */
   function stepTo(id) {
+    if (landing.has(id)) sound.swish();
     const at = landing.get(id);
     if (!at) return;
     const h = headPose().head;
@@ -785,6 +799,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   let flight = null;
   function flyTo(world) {
     card.hide();
+    sound.tone(world);
     const v = world.clone().sub(headPose().head);
     const d = v.length();
     // Stopped short, so the thing is in front, not inside the head.
@@ -804,11 +819,13 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       const k = Math.min(1, (performance.now() - flight.t0) / FLY_MS);
       const e = k < 0.5 ? 2 * k * k : 1 - (-2 * k + 2) ** 2 / 2;
       const want = flight.total.clone().multiplyScalar(e);
-      moveBy(want.clone().sub(flight.done));
+      const step = want.clone().sub(flight.done);
+      moveBy(step);
+      sound.motion(step.length() / Math.max(1e-3, dt));
       flight.done.copy(want);
       vignette.material.uniforms.k.value = LAYOUT.move.vignette;
       vignette.visible = true;
-      if (k >= 1) flight = null;
+      if (k >= 1) { flight = null; sound.motion(0); }
       return;
     }
     // A window in hand takes the sticks: they push it away and bring it near.
@@ -826,6 +843,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     const target = speed > 0.01 ? LAYOUT.move.vignette : 0;
     vignette.material.uniforms.k.value += (target - vignette.material.uniforms.k.value) * Math.min(1, dt * 8);
     vignette.visible = vignette.material.uniforms.k.value > 0.01;
+    sound.motion(speed);
     if (speed > 0.01) moveBy(v.multiplyScalar(dt));
   }
 
@@ -935,6 +953,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       diag.frameRate = s.frameRate ?? null;
       drawFirst();
       ui.inXR(true);
+      sound.start();
     } catch (err) {
       session = null;
       ui.status(tv('vr.failed', { why: err?.message ?? String(err) }));
@@ -958,6 +977,8 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
 
   function onSessionEnd() {
     session = null;
+    sound.motion(0);
+    sound.suspend();
     ui.ended?.();
     renderer.xr.setReferenceSpaceType('local-floor');
     ui.inXR(false);
@@ -967,7 +988,11 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
 
   document.addEventListener('visibilitychange', () => {
     if (!session) field?.pause(document.hidden);
+    if (document.hidden) sound.suspend();
+    else if (sound.started && sound.enabled) sound.resume();
   });
+  // On a flat screen the first press is the gesture that may start sound.
+  canvas.addEventListener('pointerdown', () => sound.start(), { once: true });
 
   /* ---- diagnostics, in the headset too ------------------------------ */
   let diagOn = ui.diagOn();
@@ -1044,6 +1069,8 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     close: () => closeField(true),
     get field() { return field; },
     get view() { return view; },
+    /** For the checks: the sounds. */
+    sound,
     back: () => goBack(),
     flip: () => field?.flipView(),
     screens: () => returnToScreens(),
@@ -1128,6 +1155,14 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     if (skyPatch && field && skyPatch.material.map !== field.picture) { skyPatch.material.map = field.picture; skyPatch.material.needsUpdate = true; }
     else markers.keepClear(clearZones(h));
     markers.tick(now, { growMs: LAYOUT.dive.ms, grow: LAYOUT.dive.markerGrow });
+    sound.listen(h, headQuat);
+    sound.ambience(view === 'field' ? 'field' : view);
+    // A window that comes or goes, a soft tone up or down; the chosen thing's tone ends with its card.
+    const shown = (card.visible ? 1 : 0) + (field?.shownCount ?? 0);
+    if (shown !== shownBefore) { if (shown > shownBefore) sound.open(); else sound.close(); shownBefore = shown; }
+    if (card.visible !== cardBefore) { cardBefore = card.visible; if (!card.visible && !flight) sound.toneOff(); }
+    const c = field?.clockState;
+    sound.clock(Boolean(c?.playing), Boolean(c?.fast), c?.dir ?? 1);
 
     locomote(dt);
     grabDepth();
@@ -1306,6 +1341,21 @@ function bootPage() {
     try { return new URLSearchParams(location.search).has('diag') || localStorage.getItem('muninn.vrDiag') === '1'; } catch { return false; }
   };
   const ui = {
+    /** The page's own sound switch and level, kept with the headset's (sound.js). */
+    sound: (s) => {
+      const b = $('vr-sound');
+      const r = $('vr-volume');
+      if (!b || !r) return;
+      const show = () => {
+        b.textContent = tv(s.enabled ? 'vr.soundOn' : 'vr.soundOff');
+        b.setAttribute('aria-pressed', String(s.enabled));
+        r.value = String(Math.round(s.volume * 100));
+      };
+      show();
+      b.addEventListener('click', () => { s.start(); s.setEnabled(!s.enabled); show(); });
+      r.addEventListener('input', () => { s.start(); s.setVolume(Number(r.value) / 100); });
+      r.setAttribute('aria-label', tv('vr.volumeLabel'));
+    },
     status: (text) => say($('vr-status'), text),
     field: (name) => { document.body.dataset.field = name ? 'open' : ''; },
     inXR: (on) => {
