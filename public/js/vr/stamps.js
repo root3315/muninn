@@ -4,13 +4,16 @@
  * In the headset a frame that takes too long is not a stutter but a lurch, so
  * the resampling the site does in workers (stamp-worker.js, the same file) is
  * never done here on the drawing thread unless workers cannot start at all.
- * Two workers: the headset draws on the same processor, and the frames come
- * over the network faster than two can resample them only on a fast line.
+ * As many workers as the site reads with at once (app.js): each worker also
+ * waits on the network for its frame, and two of them left the line idle
+ * while each fetched its header, then its rows, one after the other.
  */
 
 import { loadStamp } from '../stamp.js';
 
-const WORKERS = 2;
+const MODEST = (globalThis.navigator?.hardwareConcurrency || 4) <= 4 || (globalThis.navigator?.deviceMemory ?? 8) <= 4;
+/** The site's own concurrency: four on a modest device (a headset), six otherwise. */
+export const WORKERS = MODEST ? 4 : 6;
 const pool = { idle: [], waiting: [], count: 0, broken: false, seq: 0, crashes: 0 };
 /** A worker that crashes is replaced; after this many crashes the drawing thread reads instead. */
 const MAX_CRASHES = 3;
@@ -46,11 +49,14 @@ function give(w) {
   else pool.idle.push(w);
 }
 
-/** One visit's stamp on `grid`, or null when the frame misses the field. */
-export async function readStamp(url, grid, { signal } = {}) {
+/**
+ * One visit's stamp on `grid`, or null when the frame misses the field.
+ * `onHeader` is called once the frame's header is in, before its rows.
+ */
+export async function readStamp(url, grid, { signal, onHeader } = {}) {
   const worker = await take();
   if (signal?.aborted) { if (worker) give(worker); throw new DOMException('cancelled', 'AbortError'); }
-  if (!worker) return loadStamp(url, grid, { signal });
+  if (!worker) return loadStamp(url, grid, { signal, onHeader });
   const id = ++pool.seq;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -68,6 +74,7 @@ export async function readStamp(url, grid, { signal } = {}) {
     };
     const onMessage = ({ data }) => {
       if (data.id !== id) return;
+      if (data.header) { onHeader?.(); return; }
       settle();
       give(worker);
       if (data.error) {
@@ -87,14 +94,14 @@ export async function readStamp(url, grid, { signal } = {}) {
       pool.crashes += 1;
       if (pool.crashes >= MAX_CRASHES) pool.broken = true;
       refill();
-      readStamp(url, grid, { signal }).then(resolve, reject);
+      readStamp(url, grid, { signal, onHeader }).then(resolve, reject);
     };
     const onAbort = () => worker.postMessage({ type: 'abort', id });
     worker.addEventListener('message', onMessage);
     worker.addEventListener('error', onError);
     signal?.addEventListener('abort', onAbort, { once: true });
     worker.postMessage({
-      id, url,
+      id, url, header: Boolean(onHeader),
       grid: { ra: grid.ra, dec: grid.dec, fovDeg: grid.fovDeg, width: grid.width, height: grid.height },
     });
   });
