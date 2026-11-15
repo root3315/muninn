@@ -171,6 +171,13 @@ function withTimeout(url, ms) {
 const memory = new Map();
 /** Answers kept in memory; the disk keeps the rest. Oldest out first. */
 const MEMORY_MAX = 256;
+/**
+ * And no more than this many bytes of them (as JSON text): a deep field's
+ * frame list is near half a megabyte, and 256 of those would be most of a
+ * small box's memory.
+ */
+const MEMORY_MAX_BYTES = envMs('MUNINN_MEMORY_MAX_BYTES', 48 * 1024 * 1024);
+let memoryBytes = 0;
 
 const safeKey = (text) => text.replace(/[^\w.-]/g, '_');
 /** One collection's frame list at one position. */
@@ -188,7 +195,8 @@ async function readEntry(key, keepMs) {
     const file = join(CACHE, `${key}.json`);
     const info = await stat(file);
     if (Date.now() - info.mtimeMs > keepMs) return null;
-    const entry = { at: info.mtimeMs, value: JSON.parse(await readFile(file, 'utf8')) };
+    const text = await readFile(file, 'utf8');
+    const entry = { at: info.mtimeMs, value: JSON.parse(text), bytes: text.length };
     remember(key, entry);
     return entry;
   } catch {
@@ -200,17 +208,26 @@ async function readCache(key) {
   return (await readEntry(key, CACHE_TTL_MS))?.value ?? null;
 }
 
-function remember(key, entry) {
+function forget(key) {
+  const gone = memory.get(key);
+  if (!gone) return;
+  memoryBytes -= gone.bytes ?? 0;
   memory.delete(key);
+}
+
+function remember(key, entry) {
+  forget(key);
   memory.set(key, entry);
-  while (memory.size > MEMORY_MAX) memory.delete(memory.keys().next().value);
+  memoryBytes += entry.bytes ?? 0;
+  while (memory.size > MEMORY_MAX || (memoryBytes > MEMORY_MAX_BYTES && memory.size > 1)) forget(memory.keys().next().value);
 }
 
 async function writeCache(key, value) {
-  remember(key, { at: Date.now(), value });
+  const text = JSON.stringify(value);
+  remember(key, { at: Date.now(), value, bytes: text.length });
   try {
     await mkdir(CACHE, { recursive: true });
-    await writeFile(join(CACHE, `${key}.json`), JSON.stringify(value), 'utf8');
+    await writeFile(join(CACHE, `${key}.json`), text, 'utf8');
   } catch {
     /* a cold cache is slower, not broken */
   }
@@ -259,7 +276,12 @@ async function queryCollectionOnce(collection, ra, dec, radius, ms) {
   const pos = encodeURIComponent(`circle ${ra} ${dec} ${radius}`);
   const res = await withTimeout(`${FRAME_SIA}?COLLECTION=${collection}&POS=${pos}&MAXREC=${MAXREC}`, ms);
   if (!res.ok) throw Object.assign(new Error(`IRSA ${collection}: HTTP ${res.status}`), { status: res.status });
-  const { status, message, rows } = parseVOTable(await res.text());
+  const text = await res.text();
+  // A maintenance page sent as 200, or a table cut off part-way, reads as a
+  // table with no rows: kept, that would be "no frames here" for days. It is
+  // a failed question instead, asked again like a dropped connection.
+  if (!/<\/(?:\w+:)?VOTABLE>\s*$/i.test(text)) throw new Error(`IRSA ${collection}: not a whole VOTable`);
+  const { status, message, rows } = parseVOTable(text);
   if (status === 'ERROR') throw Object.assign(new Error(`IRSA ${collection}: ${message}`), { status: 200 });
   return { rows, truncated: status === 'OVERFLOW' };
 }
@@ -1288,6 +1310,30 @@ async function sweepCache() {
 }
 sweepCache();
 setInterval(sweepCache, 10 * 60 * 1000).unref();
+
+/**
+ * The last line of defence. Every relay catches what an archive can send it,
+ * but a fault nobody foresaw, in a timer or a stream callback, would otherwise
+ * stop the process and every visitor's page with it. It is written down and
+ * the server goes on answering. A port that cannot be had is the exception:
+ * that is a server that never started, and it says so and stops.
+ */
+process.on('uncaughtException', (err) => {
+  console.error(`uncaught: ${err?.stack ?? err}`);
+});
+process.on('unhandledRejection', (err) => {
+  console.error(`unhandled rejection: ${err?.stack ?? err}`);
+});
+server.on('error', (err) => {
+  if (server.listening) { console.error(`server: ${err.message}`); return; }
+  console.error(`  could not listen on ${HOST}:${PORT}: ${err.message}`);
+  process.exit(1);
+});
+// A connection that sends nonsense, or drops mid-request, is closed alone.
+server.on('clientError', (err, socket) => {
+  if (socket.writable && !socket.destroyed) socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+  else socket.destroy();
+});
 
 server.listen(PORT, HOST, () => {
   console.log(`\n  Muninn — SPHEREx time-domain viewer`);

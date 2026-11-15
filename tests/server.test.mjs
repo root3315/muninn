@@ -291,7 +291,12 @@ describe('frame search against a fake IRSA', () => {
         if (res.destroyed) return;
         if (step.status !== 200) { res.writeHead(step.status); res.end('Bad gateway'); return; }
         res.writeHead(200, { 'content-type': 'text/xml' });
-        res.end(votable(collection, Number(ra), Number(dec), step.rows ?? 3));
+        // A page that is not a table at all, sent as 200.
+        if (step.body !== undefined) { res.end(step.body); return; }
+        const table = votable(collection, Number(ra), Number(dec), step.rows ?? 3);
+        // Half a table, then the connection dropped.
+        if (step.cut) { res.write(table.slice(0, table.length >> 1)); res.socket.destroy(); return; }
+        res.end(table);
       }, step.delay ?? 0);
     });
     await new Promise((resolve) => { fake.listen(0, '127.0.0.1', resolve); });
@@ -472,5 +477,72 @@ describe('frame search against a fake IRSA', () => {
     assert.equal(second.body.stale, false);
     assert.equal(second.body.staleAgeS, 0);
     assert.equal(second.body.frames.length, 12);
+  });
+
+  test('search: a maintenance page sent as 200 is a failure, never kept as "no frames here"', async () => {
+    plan.set('spherex_dr1 110.5', [{ status: 200, body: '<html><body>IRSA is down for maintenance</body></html>' }]);
+    const { body } = await search(110.5, 10);
+    assert.equal(body.ok, true);
+    assert.deepEqual(body.missing, ['spherex_dr1']);
+    assert.match(body.warnings[0], /not a whole VOTable/);
+    assert.equal(hits.get('spherex_dr1 110.5'), 3, 'asked again like a dropped connection');
+    // Back up: the next answer is whole, so nothing empty was kept meanwhile.
+    plan.set('spherex_dr1 110.5', [{ status: 200 }]);
+    await waitFor(() => hits.get('spherex_dr1 110.5') >= 4);
+    await pause(50);
+    const again = await search(110.5, 10);
+    assert.equal(again.body.partial, false);
+    assert.equal(again.body.frames.length, 12);
+  });
+
+  test('search: a table cut off mid-answer is asked again, and the relay keeps serving', async () => {
+    plan.set('spherex_qr3 111.5', [{ status: 200, cut: true }, { status: 200 }]);
+    const { body } = await search(111.5, 10);
+    assert.equal(body.ok, true);
+    assert.equal(body.partial, false);
+    assert.equal(body.frames.length, 12);
+    assert.equal(hits.get('spherex_qr3 111.5'), 2);
+    assert.equal(relayed.exitCode, null, 'the process is still up');
+    assert.equal((await fetch(`${SEARCH_BASE}/api/search?ra=13.4194&dec=3.8459`)).status, 200);
+  });
+
+  test('search: every collection cut off is said as JSON, and the process stays up', async () => {
+    plan.set('* 112.5', [{ status: 200, cut: true }]);
+    const { res, body } = await search(112.5, 10);
+    assert.equal(res.status, 200);
+    assert.equal(body.ok, false);
+    assert.deepEqual(body.missing, COLLECTIONS);
+    assert.equal(relayed.exitCode, null);
+  });
+});
+
+/* ------------------------------------------------- the memory the cache keeps */
+
+describe('the in-memory cache under a byte ceiling', () => {
+  test('a tiny ceiling still answers every question, from disk', async () => {
+    const port = PORT + 2;
+    const cacheDir = join(tmpdir(), `muninn-mem-test-${process.pid}`);
+    await mkdir(cacheDir, { recursive: true });
+    const proc = spawn(process.execPath, ['server.js'], {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', MUNINN_CACHE_DIR: cacheDir, MUNINN_MEMORY_MAX_BYTES: '10' },
+      stdio: ['ignore', 'pipe', 'inherit'],
+    });
+    try {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('server did not start')), 10000);
+        proc.stdout.on('data', (chunk) => { if (String(chunk).includes(`:${port}`)) { clearTimeout(timer); resolve(); } });
+      });
+      const key = `frames_spherex_dr1_120.5000_10.0000_${(0.006).toFixed(4)}`;
+      await writeFile(join(cacheDir, `${key}.json`), JSON.stringify({ frames: [{ obsId: 'a', mjd: 1, url: 'u1' }], truncated: false }));
+      for (let i = 0; i < 3; i += 1) {
+        const body = await (await fetch(`http://127.0.0.1:${port}/api/search?ra=120.5&dec=10&collections=spherex_dr1`)).json();
+        assert.equal(body.ok, true);
+        assert.equal(body.frames.length, 1);
+      }
+    } finally {
+      proc.kill();
+      await rm(cacheDir, { recursive: true, force: true });
+    }
   });
 });

@@ -296,10 +296,14 @@ async function askFrames({ ra, dec, radius }, signal) {
   const cos = Math.cos((dec * Math.PI) / 180);
   const hit = index.find((f) => Math.hypot(deltaRA(f.ra, ra) * cos, f.dec - dec) < 0.01);
   if (hit) {
-    const res = await fetch(`data/fields/${hit.key}.json`, { signal: deadline(signal, CATALOG_DEADLINE_MS) });
-    if (res.ok) {
-      const field = await res.json();
-      return { frames: field.frames, truncated: Boolean(field.truncated), source: 'bundled' };
+    // A bundled list that did not arrive (or arrived broken) is asked of the
+    // relay, which keeps the same lists.
+    try {
+      const res = await fetch(`data/fields/${hit.key}.json`, { signal: deadline(signal, CATALOG_DEADLINE_MS) });
+      const field = res.ok ? await res.json() : null;
+      if (Array.isArray(field?.frames)) return { frames: field.frames, truncated: Boolean(field.truncated), source: 'bundled' };
+    } catch (err) {
+      if (signal?.aborted) throw err;
     }
   }
 

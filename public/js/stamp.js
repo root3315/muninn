@@ -17,7 +17,8 @@
 import { scanHDUs, decodePixels, readHeader, dataLength, padded } from './fits.js';
 import { WCS } from './wcs.js';
 import { skySigma } from './depth.js';
-import { deadline, FRAME_DEADLINE_MS } from './net.js';
+import { deadline, withRetry, FRAME_DEADLINE_MS } from './net.js';
+import { onHost, rangeProblem } from './ranges.js';
 import { parseWaveTable, wavelengthAt } from './spectrum.js';
 import { riceDecode } from './rice.js';
 
@@ -29,19 +30,46 @@ import { riceDecode } from './rice.js';
 const HEADER_PROBE = 36864;
 const MAX_HEADER = 1 << 20;
 
-async function fetchRange(url, start, end, signal, { cache = 'default' } = {}) {
+/**
+ * Asks per range: a dropped connection, a gateway error or a short answer is
+ * asked again after a growing wait, every second time at the bucket's other
+ * name (see ranges.js). What was read before stays read.
+ */
+const RANGE_TRIES = 4;
+
+const fault = (message, extra) => Object.assign(new Error(message), extra);
+
+function fetchRange(url, start, end, signal, { cache = 'default' } = {}) {
+  return withRetry((attempt) => fetchRangeOnce(onHost(url, attempt), start, end, signal, cache), { signal, tries: RANGE_TRIES });
+}
+
+async function fetchRangeOnce(url, start, end, signal, cache) {
   const res = await fetch(url, {
     headers: { Range: `bytes=${start}-${end}` },
     signal: deadline(signal, FRAME_DEADLINE_MS),
     cache,
   });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText} on ${url}`);
-  if (res.status === 206) return res.arrayBuffer();
+  if (!res.ok) throw fault(`${res.status} ${res.statusText} on ${url}`, { status: res.status });
+  if (res.status === 206) return checked(res, await res.arrayBuffer(), start, end, url);
   // A server that ignores Range answers 200 with the whole file. From byte 0
   // those are still the right bytes, only more of them; from anywhere else
   // they would be decoded as the wrong detector rows, without an error.
-  if (start === 0) return (await res.arrayBuffer()).slice(0, end + 1);
-  throw new Error(`Range not honoured (HTTP ${res.status}) on ${url}`);
+  if (start === 0) {
+    const whole = await res.arrayBuffer();
+    if (whole.byteLength < end + 1) throw fault(`cut short: ${whole.byteLength} bytes on ${url}`, { retry: true });
+    return whole.slice(0, end + 1);
+  }
+  throw fault(`Range not honoured (HTTP ${res.status}) on ${url}`, { retry: false });
+}
+
+/** The bytes, or a failure worth asking again for when they are not the bytes asked for. */
+function checked(res, body, start, end, url) {
+  const problem = rangeProblem({
+    start, end, length: body.byteLength,
+    contentLength: res.headers.get('content-length'), contentRange: res.headers.get('content-range'),
+  });
+  if (problem) throw fault(`${problem} on ${url}`, { retry: true });
+  return body;
 }
 
 /**
@@ -67,12 +95,26 @@ const waveTables = new Map();
 /** The IMAGE extension's header, read once per file. */
 const readImageHDU = (url, signal) => remembered(headers, url, () => scanImageHDU(url, signal));
 
+function fitsOrFault(buf) {
+  const head = new TextDecoder('latin1').decode(new Uint8Array(buf, 0, Math.min(6, buf.byteLength)));
+  if (head !== 'SIMPLE') throw fault('not a FITS file', { retry: true });
+  return buf;
+}
+
 /** Read enough of the file to describe HDU 0 and the IMAGE extension. */
 async function scanImageHDU(url, signal) {
   let want = HEADER_PROBE;
   for (;;) {
-    const buf = await fetchRange(url, 0, want - 1, signal);
-    const hdus = scanHDUs(buf, { limit: 3 });
+    const size = want;
+    // Bytes of the right length that are not a FITS file (a proxy's error
+    // page with a 206 on it) are a bad answer, asked for once more.
+    const buf = await withRetry(() => fetchRange(url, 0, size - 1, signal).then(fitsOrFault), { signal, tries: 2 });
+    let hdus;
+    try {
+      hdus = scanHDUs(buf, { limit: 3 });
+    } catch (err) {
+      throw fault(`unreadable header (${err.message}) on ${url}`, { retry: false });
+    }
     const img = hdus.find((h) => h.name === 'IMAGE' && h.cards.get('NAXIS') === 2);
     if (img) return img;
     if (want >= MAX_HEADER) throw new Error('No IMAGE extension in the first megabyte');
@@ -297,6 +339,10 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = 
   const ny = cards.get('NAXIS2');
   const bitpix = cards.get('BITPIX');
   const bytesPerPixel = Math.abs(bitpix) / 8;
+  // A header that does not describe a plane of pixels is not read on from.
+  if (!(nx > 0 && ny > 0 && Number.isInteger(nx) && Number.isInteger(ny)) || ![8, 16, 32, -32, -64].includes(bitpix)) {
+    throw fault(`no image plane described on ${url}`, { retry: false });
+  }
 
   const box = sourceBounds(wcs, grid);
   if (!box) return null;
@@ -436,14 +482,18 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = 
  */
 const WAVE_TAIL_BYTES = 2 * 2880;
 
-async function fetchTail(url, bytes, signal) {
-  const res = await fetch(url, {
-    headers: { Range: `bytes=-${bytes}` },
-    signal: deadline(signal, FRAME_DEADLINE_MS),
-  });
-  // Anything but a partial answer would be the whole 70 MB file.
-  if (res.status !== 206) throw new Error(`Range not honoured (HTTP ${res.status}) on ${url}`);
-  return res.arrayBuffer();
+function fetchTail(url, bytes, signal) {
+  return withRetry(async (attempt) => {
+    const at = onHost(url, attempt);
+    const res = await fetch(at, {
+      headers: { Range: `bytes=-${bytes}` },
+      signal: deadline(signal, FRAME_DEADLINE_MS),
+    });
+    if (!res.ok) throw fault(`${res.status} ${res.statusText} on ${at}`, { status: res.status });
+    // Anything but a partial answer would be the whole 70 MB file.
+    if (res.status !== 206) throw fault(`Range not honoured (HTTP ${res.status}) on ${at}`, { retry: false });
+    return checked(res, await res.arrayBuffer(), null, bytes, at);
+  }, { signal, tries: RANGE_TRIES });
 }
 
 /**

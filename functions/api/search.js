@@ -64,7 +64,11 @@ async function queryCollectionOnce(collection, ra, dec, radius) {
     UPSTREAM_TIMEOUT_MS,
   );
   if (!res.ok) throw Object.assign(new Error(`IRSA ${collection}: HTTP ${res.status}`), { answered: true });
-  const { status, message, rows } = parseVOTable(await res.text());
+  const text = await res.text();
+  // A maintenance page sent as 200, or a table cut off part-way, is not "no
+  // frames here": it fails like a dropped connection, and is never kept.
+  if (!/<\/(?:\w+:)?VOTABLE>\s*$/i.test(text)) throw new Error(`IRSA ${collection}: not a whole VOTable`);
+  const { status, message, rows } = parseVOTable(text);
   if (status === 'ERROR') throw Object.assign(new Error(`IRSA ${collection}: ${message}`), { answered: true });
   return { rows, truncated: status === 'OVERFLOW' };
 }
