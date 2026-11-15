@@ -8,7 +8,8 @@
  * For each field, the same visits the headset reads (the site's first batch,
  * from the baked frame index), and for them:
  *
- *   gaia      Gaia DR3 in the field, through a running local server's relay
+ *   gaia      Gaia DR3 in the field: a running local server's relay to IRSA,
+ *             raced against the CDS and CfA VizieR mirrors
  *             (BASE, default http://127.0.0.1:5173), as the page parses it
  *   bj        Bailer-Jones geometric distances (VizieR I/352) at the CfA mirror
  *   galaxies  SIMBAD's galaxies with a spectroscopic redshift, at the CfA mirror
@@ -26,7 +27,7 @@ import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { join } from 'node:path';
 
-import { groupVisits, skybotCone, simbadFamily } from '../public/js/catalog.js';
+import { groupVisits, skybotCone, simbadFamily, catalogueRows } from '../public/js/catalog.js';
 import { spread, VISITS_PER_BATCH } from '../public/js/visits.js';
 import { parseGaiaRow, cutToCap, magLimit, searchRadius, ROW_CAP } from '../public/js/overlay.js';
 import { parseVOTable } from '../public/js/votable.js';
@@ -117,7 +118,11 @@ async function bake(key) {
 
   try {
     const limit = magLimit(g.heightDeg);
-    const body = await patiently('Gaia', () => json(`${BASE}/api/tap?cat=gaia&ra=${ra.toFixed(6)}&dec=${dec.toFixed(6)}&r=${radiusDeg.toFixed(6)}&top=${ROW_CAP + 1}&mag=${limit.toFixed(2)}`));
+    // IRSA through the relay, raced against the VizieR mirrors the page also asks (CDS and CfA).
+    const body = await patiently('Gaia', () => firstOf([
+      json(`${BASE}/api/tap?cat=gaia&ra=${ra.toFixed(6)}&dec=${dec.toFixed(6)}&r=${radiusDeg.toFixed(6)}&top=${ROW_CAP + 1}&mag=${limit.toFixed(2)}`),
+      catalogueRows('gaia', { ra, dec, radiusDeg, limit, top: ROW_CAP + 1 }),
+    ]));
     out.gaia = { ...cutToCap(body.rows.map(parseGaiaRow).filter(Boolean), limit), via: body.via ?? 'IRSA' };
   } catch (err) { console.warn(`  ${key}: Gaia: ${err.message}`); if (before.gaia) out.gaia = before.gaia; }
 
