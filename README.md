@@ -111,10 +111,10 @@ brightness or position. Around a star brighter than V 3 (Arcturus, Vega) the pip
 arcminutes of sky; that patch is drawn flat at the sky's level, outlined and labelled as masked,
 and a mark that comes and goes near such a star says that stray light does exactly that.
 
-**Learning it.** *How to read this* is sixteen short cards, each with a small demo to play with
-(drag the wipe, tap a star for its mark, slide a magnitude against the depth bar). The first
-field opened on a page load starts a guided tour of the screen; *Not clear* on any step opens
-that step's demo. Neither starts on a shared link.
+**Learning it.** *How to read this* is sixteen short cards, fourteen of them with a small demo
+to play with (drag the wipe, tap a star for its mark, slide a magnitude against the depth bar).
+The first field opened on a page load starts a guided tour of the screen; *Not clear* on any
+step opens that step's demo. Neither starts on a shared link.
 
 **The interface.** The plate is grey, so the picture never changes brightness with the hue; the
 chrome takes the hue of the band in view, from violet at D1 to red at D6. Each colour ramp rises
@@ -201,17 +201,19 @@ can drive one; on a flat screen `/vr.html` is the same scene with mouse or touch
   proper motion, an asteroid's track through the season, a galaxy's recession); filters with
   honest counts; a clock that runs the stars ±10 000 years by Gaia proper motion, both ways, with
   *Today* and *Epoch of the frame*; *Back to Earth*.
-- **Comfort:** no camera roll, eased moves with a vignette, foveation, 72–90 fps on Quest 3 (about
-  55 draw calls; 7 ms a frame on a desktop GPU). A five-step guide opens with the first field;
+- **Comfort:** no camera roll, eased moves with a vignette, foveation. On a headset it asks for
+  90 Hz when a frame's own work takes 9 ms or less, otherwise 72 Hz; in a Quest 3 emulator on a
+  desktop GPU the median frame took about 7 ms and 54 draw calls. A five-step guide opens with the first field;
   *Open on the site* leaves VR for the same view on the page.
 - **Sound, synthesised in the browser** (Web Audio, no audio files): air that follows the speed of
   a flight or a walk, in stereo and capped in pitch, with its own switch; soft clicks, ticks and
   glass tones for the interface and for a mark's verdict; a wooden tick for the clock; a faint room
-  tone that rests after a minute idle. A chosen star sounds from its place on the sky (HRTF), its
+  tone that rests after fifty seconds idle. A chosen star sounds from its place on the sky (HRTF), its
   pitch a sonification of its B−V colour (temperature after Ballesteros 2012, 3 000–30 000 K on
   three octaves) and its loudness of its brightness; a star with no colour gives a rustle, not a
-  tone. Sound on/off, flight sound and volume are in every card and kept between visits; on a
-  computer it starts at the first click.
+  tone. Sound on/off is in a star's card, the field's card and the depth view; flight sound and
+  volume are in the field's card and, on a computer, beside the scene; all are kept between
+  visits. On a computer sound starts at the first click or key.
 
 What the data cannot give is said in the scene: Gaia rows here carry no radial velocities, so the
 clock moves stars across the sky but not toward or away; the sky's star list has no proper
@@ -545,7 +547,7 @@ Open (152) Atala, click the centre of the image and read the verdict: one visit,
 
 ```bash
 node server.js            # serves public/ and the relays on http://127.0.0.1:5173 (PORT, HOST to change)
-npm test                  # all offline tests (node --test, about 240); TEST_PORT sets the server tests' port
+npm test                  # all offline tests (node --test, 245); TEST_PORT sets the server tests' port
 npm run bake              # refresh the frame indexes of the ten ready fields
 npm run probe             # check the WCS round trip against a live SPHEREx header
 node tools/sensitivity.mjs                        # the depth table above
@@ -555,19 +557,26 @@ node tools/planet-hosts.mjs                       # refresh the planet-host list
 node tools/bake-visits.mjs                        # refresh the ready fields' visit lists, all collections
 node tools/bake-vr.mjs                            # the VR depth data of the demo fields
 node tools/talk-pdf.mjs                           # the talk's PDFs, with static fonts from tools/print-fonts
+node tools/brightstars.mjs                        # the sky map's stars (Bright Star Catalogue, Hipparcos)
+node tools/deepsky.mjs                            # the Messier objects on the sky map, from SIMBAD
+node tools/bake-thumbs.mjs                        # a real SPHEREx frame for each ready field's card
+node tools/bake-sky-thumbs.mjs                    # the same for the sky map's objects and named stars
+node tools/pipeline-test.mjs                      # one live field end to end, to a PNG in .probe/
 ```
 
 The server serves the page and relays what the browser may not call itself, because those
 services send no CORS headers: `/api/search` (IRSA's frame index), `/api/tap` (IRSA TAP, and
 MAST for one Gaia star), `/api/sbident` and `/api/smallbody` (JPL), `/api/wise` (the AllWISE cutout) and
-`/api/archives` (CADC). Each relay writes its query from a fixed template and checked numbers.
+`/api/archives` (CADC); `/api/targets` answers `public/data/targets.json` for a page that could
+not read it as a file. Each relay writes its query from a fixed template and checked numbers.
 Image data never passes through it. The live site runs `server.js`.
 
 `public/` is also a complete static site: the ten ready fields' frame indexes ship inside it and
 the pixels come from the mirror, so they open on any static host with no server. A lighter
 fallback deploys to Cloudflare Pages with `npm run deploy` (`functions/api/search.js`, the frame
-search only, with a 20 s wait and 400 rows per collection); there the catalogues come from
-VizieR alone and known asteroids from SkyBoT alone.
+search only, with a 20 s wait and 400 rows per collection; `npm run preview` runs it locally), or
+as a Cloudflare Worker with the same relay (`worker.js`, `wrangler.worker.toml`); there the
+catalogues come from VizieR alone and known asteroids from SkyBoT alone.
 
 `public/_headers` holds the content-security policy, naming every origin the page may reach: the
 S3 mirror, IRSA, CDS and its CfA mirrors (Sesame, SIMBAD, VizieR), IMCCE (SkyBoT) and CADC's NEOSSat
@@ -583,7 +592,9 @@ preview images. The typefaces are served by the site itself. `server.js` reads t
 
 ```
 server.js        static host (compressed, security headers) + the relays + disk cache
-public/          the site: index.html, talk.html, _headers, css/ (redesign.css is the current look)
+worker.js        the site as one Cloudflare Worker: public/ and the frame search (wrangler.worker.toml)
+public/          the site: index.html, talk.html and its PDFs, _headers, css/ (redesign.css is the
+                 current look), fonts/, img/
   js/            reading:   fits.js, rice.js, wcs.js, stamp.js (+ stamp-worker.js), visits.js, release.js, net.js
                  picture:   render.js, sky.js, strip.js, stack.js, gaiasky.js, wise.js, gate.js, twilight.js
                  science:   depth.js, sectors.js, huntcore.js, hunt.js, seasons.js, sharpness.js,
@@ -592,12 +603,13 @@ public/          the site: index.html, talk.html, _headers, css/ (redesign.css i
                             lookup.js, names.js, smallbody.js, hosts.js, exovision.js, brightstars.js
                  marks:     marks.js (shared with VR), markfacts.js
                  page:      app.js (state and wiring), i18n.js, hash.js, export.js, suggest*.js, ephemeris.js,
-                            read.js (How to read), tour.js, device.js, talk.js
+                            read.js (How to read), tour.js, device.js, theme-boot.js, talk.js
+    vendor/      three.js, for the VR mode
     vr/          the VR mode: main.js, sky3d.js, field.js, markspanel.js, depthview.js, depth3d.js,
-                 windows.js, input.js, nav.js and the rest; vendor/ holds three.js
+                 windows.js, input.js, nav.js, sound.js and the rest
   vr.html        the VR page
-  data/          targets.json and fields/ (the ten ready fields), planet-hosts.json, sky/ (the sky map),
-                 vr/ (the demo fields' depth data)
+  data/          targets.json and fields/ (the ten ready fields), thumbs.json, planet-hosts.json,
+                 sky/ (the sky map), vr/ (the demo fields' depth data)
 functions/       the frame search for Cloudflare Pages
 tools/           measurement, bake and benchmark scripts
 tests/           npm test, offline
@@ -638,7 +650,8 @@ AWS по диапазонам байтов: заголовок, только н�
 Галактики. Там можно ходить, лететь к объекту, мерить расстояние между двумя, показать путь
 объекта и прокрутить движение звёзд на ±10 000 лет. Звук синтезируется прямо в браузере: воздух в
 полёте, щелчки и тоны интерфейса, а выбранная звезда звучит со своего места тоном её цвета
-(это озвучивание данных, не «звук звезды»); выключается в любой карточке.
+(это озвучивание данных, не «звук звезды»); выключается в карточке звезды, в карточке поля и в
+виде глубины.
 
 Подробное руководство: [docs/study-guide.ru.pdf](docs/study-guide.ru.pdf).
 Запуск: `node server.js`, затем <http://127.0.0.1:5173>. Зависимостей нет.
