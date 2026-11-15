@@ -738,7 +738,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
     if (h.id === 'filter') { shown[h.data] = !shown[h.data]; applyFilters(); drawControls(); return; }
     if (h.id === 'morph') { api.toggleMorph(); return; }
     if (h.id === 'play' || h.id === 'playBack') { playToward(h.id === 'play' ? 1 : -1); return; }
-    if (h.id === 'step') { easeYears(Math.round(clock.years + Number(h.data) * stepYears())); return; }
+    if (h.id === 'step') { onAction?.('sound', { kind: 'step', dir: Number(h.data) }); easeYears(Math.round(clock.years + Number(h.data) * stepYears())); return; }
     if (h.id === 'epoch') { clock.epochAt = clock.epochMjd; easeYears(epochYears()); return; }
     if (h.id === 'home') { clearFocus(); onAction?.('home'); return; }
     if (h.id === 'speed') { clock.fast = !clock.fast; drawControls(); return; }
@@ -1025,7 +1025,14 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
     actions.push({ id: 'fly', label: tv('vr.flyTo'), run: () => { focusOn(it); onAction?.('fly', world); } });
     if (it.path) {
       const shownPath = paths.has(it.key);
-      actions.push({ id: 'path', label: tv(shownPath ? 'vr.pathHide' : 'vr.pathShow'), run: () => { togglePath(it.key, it.path); } });
+      actions.push({
+        id: 'path', label: tv(shownPath ? 'vr.pathHide' : 'vr.pathShow'),
+        run: () => {
+          const on = togglePath(it.key, it.path);
+          // A known body ticks softly from where it is as its path appears.
+          if (on && it.key?.startsWith('body:')) onAction?.('sound', { kind: 'body', world });
+        },
+      });
     }
     if (it.pathNote) lines.push({ text: it.pathNote, tone: 'neutral' });
     if (it.real?.au) {
@@ -1138,6 +1145,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
     clockTo(years, play = false, dir = 1) { clock.playing = play; clock.dir = dir; clock.dirU.value = dir; clock.last = performance.now(); setYears(years); },
     /** For the checks: press a control by its id. */
     press(id, data = null) { controls.mesh.userData.pickAs?.(id, data); },
+    /** The clock as it runs, for its sound. */
+    get clockState() { return clock; },
     /** The controls panel, for the stick to scrub the clock while a ray is on it. */
     get clockPanel() { return clock.uniform && state.gaia?.known ? controls.mesh : null; },
     /** The stick aside scrubs the clock: `x` −1…1 over `dt` seconds; any push stops it playing. */

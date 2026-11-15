@@ -116,6 +116,8 @@ body[data-field="open"] .vr__title { display: none; }
   cursor: pointer;
 }
 .vr__diag-toggle[aria-pressed="true"] { color: var(--color-ink); border-color: var(--color-accent); }
+.vr__sound { display: inline-flex; align-items: center; gap: var(--space-sm, 0.5rem); }
+.vr__volume { width: 7rem; accent-color: var(--color-accent); }
 .vr__diag {
   position: fixed;
   right: var(--page-gutter);

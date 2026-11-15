@@ -34,6 +34,10 @@
 
 <footer class="vr__foot">
   <p class="vr__model" data-vr="vr.model"></p>
+  <span class="vr__sound">
+    <button id="vr-sound" class="vr__diag-toggle" type="button" aria-pressed="true" data-vr="vr.soundOn">Sound: on</button>
+    <input id="vr-volume" class="vr__volume" type="range" min="0" max="100" step="5" value="35" aria-label="Volume" data-vr-label="vr.volumeLabel">
+  </span>
   <button id="vr-diag" class="vr__diag-toggle" type="button" aria-pressed="false" aria-controls="vr-diag-out" data-vr="vr.diagnostics">Diagnostics</button>
 </footer>
 <pre id="vr-diag-out" class="vr__diag" hidden></pre>
