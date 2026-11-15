@@ -538,7 +538,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     sky.group.add(skyPatch);
     firstSign.mesh.visible = false;
     view = navigate(view, 'open');
-    ui.field(field.label);
+    ui.field(field.label || tv('vr.skyPoint'));
   }
 
   function closeField(animate = true) {
@@ -570,7 +570,9 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     // B unwinds one level: an open card first, then the depth view's own modes, then the view.
     if (card.visible) { card.hide(); cardBefore = false; field?.depthCard(false); return; }
     if (!field) return;
-    if (view === 'depth' && field.depthBack()) return;
+    // The depth view's own modes unwind first, even when it is reached by turning round rather than flipped.
+    const m = field.depthMode;
+    if ((view === 'depth' || m?.tape || m?.playing) && field.depthBack()) return;
     if (navigate(view, 'back') === 'field') returnToScreens();
     else closeField(true);
   }
@@ -1065,6 +1067,8 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       showCard(hit.card, hit.at);
       return hit.card.title;
     },
+    /** For the checks: whether the card is up. */
+    get cardVisible() { return card.visible; },
     /** For the checks: run a button of the card on show. */
     cardAct: (id) => card.press(id),
     /** For the checks: where a target's ring, or a point `deg` beside it, is on a flat screen, in CSS pixels. */
@@ -1343,6 +1347,7 @@ function bootPage() {
   const lang = pageLanguage();
   const $ = (id) => document.getElementById(id);
   const say = (el, text) => { if (el) { el.textContent = text; el.hidden = !text; } };
+  let hintGone = false;
   const apply = () => {
     for (const el of document.querySelectorAll('[data-vr]')) el.textContent = tv(el.dataset.vr);
   };
@@ -1375,7 +1380,19 @@ function bootPage() {
     },
     xr: (supported, enter) => {
       const b = $('vr-enter');
-      say($('vr-hint'), supported ? tv('vr.pick') : (window.isSecureContext ? tv('vr.noXR') : `${tv('vr.noXR')} ${tv('vr.insecure')}`));
+      // One line, put away by its ✕ or by the first press on the scene.
+      const hint = $('vr-hint');
+      const text = supported ? tv('vr.pick') : (window.isSecureContext ? tv('vr.noXR') : `${tv('vr.noXR')} ${tv('vr.insecure')}`);
+      if (hint) {
+        const words = $('vr-hint-text');
+        if (words) words.textContent = text; else hint.textContent = text;
+        hint.title = text;
+        hint.hidden = !text || hintGone;
+        const away = () => { hintGone = true; hint.hidden = true; };
+        $('vr-hint-x')?.addEventListener('click', away, { once: true });
+        $('vr-hint-x')?.setAttribute('aria-label', tv('vr.close'));
+        $('vr-canvas')?.addEventListener('pointerdown', away, { once: true });
+      }
       if (!b) return;
       b.hidden = !supported;
       b.onclick = enter;
