@@ -4,16 +4,19 @@
  * In the headset a frame that takes too long is not a stutter but a lurch, so
  * the resampling the site does in workers (stamp-worker.js, the same file) is
  * never done here on the drawing thread unless workers cannot start at all.
- * As many workers as the site reads with at once (app.js): each worker also
- * waits on the network for its frame, and two of them left the line idle
- * while each fetched its header, then its rows, one after the other.
+ * A few workers: each also waits on the network for its frame. The headset's
+ * frames are cut five times wider than the site's opening view, so six at
+ * once split the line six ways and the first picture waited on all of them;
+ * four keep it busy without starving the first.
  */
 
 import { loadStamp } from '../stamp.js';
 
 const MODEST = (globalThis.navigator?.hardwareConcurrency || 4) <= 4 || (globalThis.navigator?.deviceMemory ?? 8) <= 4;
-/** The site's own concurrency: four on a modest device (a headset), six otherwise. */
-export const WORKERS = MODEST ? 4 : 6;
+/** Frames read at once: three on a modest device (a headset), four otherwise. */
+export const WORKERS = MODEST ? 3 : 4;
+/** How long the first visit has the line to itself before the rest start beside it. */
+export const LEAD_ALONE_MS = 6000;
 const pool = { idle: [], waiting: [], count: 0, broken: false, seq: 0, crashes: 0 };
 /** A worker that crashes is replaced; after this many crashes the drawing thread reads instead. */
 const MAX_CRASHES = 3;
@@ -49,14 +52,11 @@ function give(w) {
   else pool.idle.push(w);
 }
 
-/**
- * One visit's stamp on `grid`, or null when the frame misses the field.
- * `onHeader` is called once the frame's header is in, before its rows.
- */
-export async function readStamp(url, grid, { signal, onHeader } = {}) {
+/** One visit's stamp on `grid`, or null when the frame misses the field. */
+export async function readStamp(url, grid, { signal } = {}) {
   const worker = await take();
   if (signal?.aborted) { if (worker) give(worker); throw new DOMException('cancelled', 'AbortError'); }
-  if (!worker) return loadStamp(url, grid, { signal, onHeader });
+  if (!worker) return loadStamp(url, grid, { signal });
   const id = ++pool.seq;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -74,7 +74,6 @@ export async function readStamp(url, grid, { signal, onHeader } = {}) {
     };
     const onMessage = ({ data }) => {
       if (data.id !== id) return;
-      if (data.header) { onHeader?.(); return; }
       settle();
       give(worker);
       if (data.error) {
@@ -94,17 +93,34 @@ export async function readStamp(url, grid, { signal, onHeader } = {}) {
       pool.crashes += 1;
       if (pool.crashes >= MAX_CRASHES) pool.broken = true;
       refill();
-      readStamp(url, grid, { signal, onHeader }).then(resolve, reject);
+      readStamp(url, grid, { signal }).then(resolve, reject);
     };
     const onAbort = () => worker.postMessage({ type: 'abort', id });
     worker.addEventListener('message', onMessage);
     worker.addEventListener('error', onError);
     signal?.addEventListener('abort', onAbort, { once: true });
     worker.postMessage({
-      id, url, header: Boolean(onHeader),
+      id, url,
       grid: { ra: grid.ra, dec: grid.dec, fovDeg: grid.fovDeg, width: grid.width, height: grid.height },
     });
   });
+}
+
+/**
+ * Read `list` with `readOne(entry)`: `lead` first and alone, so the first
+ * picture is not one of several sharing the line, until it is in, has failed
+ * or has had `aloneMs`; then the rest, `readers` at a time with it.
+ */
+export async function readInOrder(list, lead, readOne, { readers = WORKERS, aloneMs = LEAD_ALONE_MS } = {}) {
+  if (!lead || !list.includes(lead)) {
+    await inPool(list, readers, (entry) => readOne(entry));
+    return;
+  }
+  const first = Promise.resolve().then(() => readOne(lead));
+  let timer = 0;
+  await Promise.race([first.catch(() => {}), new Promise((r) => { timer = setTimeout(r, aloneMs); })]);
+  clearTimeout(timer);
+  await Promise.all([first, inPool(list.filter((e) => e !== lead), Math.max(1, readers - 1), (entry) => readOne(entry))]);
 }
 
 /** `worker(item, i)` over `items`, at most `limit` at once. */

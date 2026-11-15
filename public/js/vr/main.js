@@ -1437,6 +1437,13 @@ function bootPage() {
   const diagStored = () => {
     try { return new URLSearchParams(location.search).has('diag') || localStorage.getItem('muninn.vrDiag') === '1'; } catch { return false; }
   };
+  // The canvas stops at the footer (vr.css): its height, kept as the footer wraps or the window turns.
+  const foot = document.querySelector('.vr__foot');
+  if (foot) {
+    const keep = () => document.documentElement.style.setProperty('--vr-foot-h', `${foot.offsetHeight}px`);
+    keep();
+    new ResizeObserver(() => { keep(); window.dispatchEvent(new Event('resize')); }).observe(foot);
+  }
   const ui = {
     /** Something went wrong, said plainly, with the one thing to do about it; null clears it. */
     problem: (text, label = null, action = null) => {

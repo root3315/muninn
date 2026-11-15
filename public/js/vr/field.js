@@ -33,7 +33,7 @@ import { rankCandidates } from '../hunt.js';
 import { stackDepth } from '../depth.js';
 import { magLimit, searchRadius, epochOfMjd, properMotion } from '../overlay.js';
 import { loadWise } from '../wise.js';
-import { readStamp, inPool, WORKERS } from './stamps.js';
+import { readStamp, readInOrder, inPool } from './stamps.js';
 import { createPanel, placePanel, readLook, FONTS, wrapText, button, roundRect, chipWidth } from './panel.js';
 import { LAYOUT, SCREENS, screenPose, typeFor, minTextPx } from './layout.js';
 import { eclipticLatitude, PLANET_X_V, PLANET_X_MAX_BETA } from './depth3d.js';
@@ -59,8 +59,6 @@ const MAIN_CSS_W = 320;
 const ASPECT = SCREENS.main.w / SCREENS.main.h;
 /** Visits read for the headset: the site's first batch. */
 const VISITS = VISITS_PER_BATCH;
-/** Visits read at once: as many as the workers that read them. */
-const READERS = WORKERS;
 const SKYBOT_AT_ONCE = 2;
 /** SkyBoT's position and SPHEREx's agree within two detector pixels for the same body. */
 const SAME_BODY_ARCSEC = 12.3;
@@ -79,6 +77,8 @@ const LIST_RETRY_S = [5, 15, 45];
 const DEPTH_RETRY_S = [5, 15, 45];
 /** When frames that failed to read are read again, seconds after the field's reading ends. */
 const FRAME_RETRY_S = [20, 60];
+/** How long the reading waits to learn which visit a preset's card shows, before starting without it. */
+const LEAD_WAIT_MS = 800;
 /** The site's "How to read this" cards that hold in the headset, in its order. */
 const READ = ['sky', 'blink', 'modes', 'north', 'mark', 'verdicts', 'ring', 'spec', 'wise', 'depth', 'hunt', 'seasons'];
 
@@ -1131,19 +1131,23 @@ export function openFieldVR(target, env) {
   drawAll();
   /* ---- reading the field -------------------------------------------- */
   async function load() {
-    // A field is centred where its target is best seen: the target's own position is the one to look up, as on the site.
-    planetHostNear(target.target?.ra ?? ra, target.target?.dec ?? dec).then((h) => { if (!st.closed && h) { st.host = h; drawCard(); } });
-    bakedAsk = bakedAnswers(target.key, signal);
+    // The list of frames is asked first: through the site's tunnel each file
+    // from the box is a second or more, and they queue. A ready field's own
+    // list is asked by its name, not found through the index first.
+    const listAsk = bundledList() ?? searchFrames({ ra, dec }, { signal });
     leadAsk = presetLead();
+    bakedAsk = bakedAnswers(target.key, signal);
     // The depth view's catalogues are asked now, beside the list of frames:
     // ready by the time the viewer turns round, not asked only then.
     startDepth();
     let answer = null;
     try {
-      answer = await searchFrames({ ra, dec }, { signal });
+      answer = await listAsk;
     } catch {
       if (signal.aborted) return;
     }
+    // A field is centred where its target is best seen: the target's own position is the one to look up, as on the site.
+    planetHostNear(target.target?.ra ?? ra, target.target?.dec ?? dec).then((h) => { if (!st.closed && h) { st.host = h; drawCard(); } });
     if (signal.aborted) return;
     if (!answer?.frames) {
       // Nothing came: said plainly, with a way to ask again, and asked again on its own.
@@ -1155,6 +1159,15 @@ export function openFieldVR(target, env) {
     noteList(answer);
     st.times.list ??= performance.now();
     await begin(answer.frames);
+  }
+
+  /** A ready field's frame list by its name, as catalog.js would find it through the index; null for any other field. */
+  function bundledList() {
+    if (!target.key) return null;
+    return fetch(`data/fields/${encodeURIComponent(target.key)}.json`, { signal })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((f) => (f?.frames ? { frames: f.frames, truncated: Boolean(f.truncated), source: 'bundled' } : searchFrames({ ra, dec }, { signal })))
+      .catch((err) => { if (signal.aborted) throw err; return searchFrames({ ra, dec }, { signal }); });
   }
 
   /** The baked answers' question, asked once. */
@@ -1253,16 +1266,15 @@ export function openFieldVR(target, env) {
   }
 
   /**
-   * Read a list of visits, a few at a time. `lead`, if given, starts alone and
-   * the rest once its header is in (or it failed): its rows are well on the way
-   * before theirs, so the first picture is not one of six sharing the line.
+   * Read a list of visits, a few at a time; `lead`, if given, first and
+   * alone for a moment (stamps.js readInOrder).
    */
   async function readEntries(list, lead = null) {
-    const readOne = async (entry, onHeader) => {
+    const readOne = async (entry) => {
       if (signal.aborted) return;
       entry.status = 'reading';
       try {
-        const stamp = await readStamp(toS3(entry.frame.url), grid, { signal, onHeader });
+        const stamp = await readStamp(toS3(entry.frame.url), grid, { signal });
         if (signal.aborted) return;
         if (!stamp) { entry.status = 'dropped'; return; }
         entry.status = 'ready';
@@ -1278,15 +1290,7 @@ export function openFieldVR(target, env) {
         if (!signal.aborted) { refreshTimeline(); drawNotice(); afterVisitChange(); }
       }
     };
-    if (!lead || !list.includes(lead)) {
-      await inPool(list, READERS, (entry) => readOne(entry));
-      return;
-    }
-    let headerIn;
-    const started = new Promise((resolve) => { headerIn = resolve; });
-    const first = readOne(lead, headerIn).finally(headerIn);
-    await started;
-    await Promise.all([first, inPool(list.filter((e) => e !== lead), READERS - 1, (entry) => readOne(entry))]);
+    await readInOrder(list, lead, readOne);
   }
 
   /** Start the field from a list of frames. */
@@ -1294,8 +1298,9 @@ export function openFieldVR(target, env) {
     st.frames = frames;
     st.all = groupVisits(frames, { ra, dec, band });
     const chosen = spread(st.all, VISITS);
-    // The visit a preset's card shows is read with the rest, and first.
-    const held = await leadAsk;
+    // The visit a preset's card shows is read with the rest, and first; the
+    // reading does not wait more than a moment to learn which it is.
+    const held = await Promise.race([leadAsk, new Promise((r) => { setTimeout(() => r(null), LEAD_WAIT_MS); })]);
     const leadFrame = st.all[findHeldVisit(st.all, held)] ?? null;
     if (leadFrame && !chosen.includes(leadFrame)) chosen.push(leadFrame);
     chosen.sort((p, q) => p.mjd - q.mjd);
@@ -1304,12 +1309,14 @@ export function openFieldVR(target, env) {
     st.status = 'reading';
     ensureTimeline();
     drawAll();
+    const lead = st.entries.find((e) => e.frame === leadFrame) ?? st.entries[0];
+    // The frames are read at once; what was baked for the field joins when it comes.
+    const reading = readEntries(st.entries, lead);
     baked = await bakedAsk;
     if (baked?.depth && !st.depth) { depthView.setDepth(baked.depth.single); drawSide(); }
     askBodies(chosen);
     depthEpoch(chosen);
-    const lead = st.entries.find((e) => e.frame === leadFrame) ?? st.entries[0];
-    await readEntries(st.entries, lead);
+    await reading;
     if (signal.aborted) return;
     st.times.allFrames = performance.now();
     st.status = sky.visits.length ? 'ready' : 'none';

@@ -28,7 +28,7 @@ import { deltaRA, separation } from '../wcs.js';
 import { propagate, GAIA_EPOCH } from '../overlay.js';
 import {
   placeByDistance, depthMetres, unknownShell, parallaxDistancePc, redshiftDistanceMpc, MIN_REDSHIFT, matchTarget,
-  AU_PER_PC, DEPTH_TICKS, PLANET_X_AU, lookbackGyr, PLANET_X_V, PLANET_X_MAX_BETA, eclipticLatitude, decadeRings, viewFrame, fieldDirection,
+  AU_PER_PC, DEPTH_TICKS, PLANET_X_AU, lookbackGyr, PLANET_X_V, PLANET_X_MAX_BETA, eclipticLatitude, decadeRings, viewFrame, fieldDirection, motionPath,
 } from './depth3d.js';
 import { createPanel, FONTS, wrapText, fitText, wrapLines, button, chipWidth, roundRect } from './panel.js';
 import { LAYOUT, minTextPx } from './layout.js';
@@ -1013,7 +1013,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     const rib = createRibbon(pts, { color: css });
     group.add(rib.mesh);
     pulsing.add(rib);
-    const out = [rib.mesh, arrowAt(pts, css)];
+    const out = [rib.mesh, ...arrowAt(pts, css)];
     if (ticks?.length) {
       const geo = new THREE.BufferGeometry();
       geo.setAttribute('position', new THREE.Float32BufferAttribute(ticks.flat(), 3));
@@ -1033,14 +1033,16 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     const back = a.clone().sub(b);
     const len = Math.max(0.03, Math.min(0.15, b.length() * 0.03));
     back.setLength(len);
-    const side = back.clone().cross(new THREE.Vector3(0, 1, 0));
-    if (side.lengthSq() < 1e-8) side.set(1, 0, 0);
+    // Its barbs across the path as the viewer sees it: square to the path and to the line of sight.
+    const side = back.clone().cross(b);
+    if (side.lengthSq() < 1e-10) side.set(1, 0, 0);
     side.setLength(len * 0.5);
-    const l = b.clone().add(back).add(side);
-    const rr = b.clone().add(back).sub(side);
-    const head = createRibbon([l.toArray(), b.toArray(), rr.toArray()], { color: css, pulse: 0, near: 1, far: 1, k: 1.3 });
-    group.add(head.mesh);
-    return head.mesh;
+    // Each barb its own straight strip: a strip bent through the tip would pinch there.
+    return [side, side.clone().negate()].map((s) => {
+      const barb = createRibbon([b.clone().add(back).add(s).toArray(), b.toArray()], { color: css, pulse: 0, near: 1, far: 1, k: 1.3 });
+      group.add(barb.mesh);
+      return barb.mesh;
+    });
   }
 
 
@@ -1427,30 +1429,24 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
           // Where it stands across the clock's span, by its proper motion alone:
           // the distance is held, since these rows carry no radial velocity.
           moves: Number.isFinite(r.pmRA) && Number.isFinite(r.pmDE),
-          span: [-2, -1, 1, 2].map((k) => propagate(r, epoch + (k * STAR_YEARS) / 2, GAIA_EPOCH)),
+          row: r,
         };
       });
       const placed = placeByDistance(objs);
       const known = placed.filter((p) => p.known).length;
       state.gaia = { known, unknown: placed.length - known };
       const segments = objs.filter((o) => o.pc && o.lo && o.hi).map((o) => [placeAlong(o.dir, o.lo * AU_PER_PC), placeAlong(o.dir, o.hi * AU_PER_PC)]);
-      // Directions are spread to tell the field's objects apart; a star whose
-      // motion would carry it far out of the cone is drawn shortened, along
-      // its true heading, and its card says so.
-      const capRad = 2 * D.coneDeg * D2R;
+      // Each star's path by its proper motion: every sample moved on the sky
+      // and mapped as the star itself is (motionPath), on its own shell; one
+      // that would leave the corridor stops at its edge, and its card says so.
       const pathOf = (o, p) => {
         if (!o.moves) return null;
-        const now = v3(o.dir).normalize();
-        return o.span.map((q) => {
-          const to = v3(dirOf(q.ra, q.dec)).normalize();
-          const a = now.angleTo(to);
-          if (a > capRad) {
-            o.shortened = true;
-            const axis = now.clone().cross(to).normalize();
-            to.copy(now).applyAxisAngle(axis, capRad * (a / (a + capRad)) * 2);
-          }
-          return placeAlong(to.toArray(), p.known ? o.au : null);
-        });
+        const m = motionPath((f) => propagate(o.row, epoch + f * STAR_YEARS, GAIA_EPOCH), { dirOf, axis: frame.f, coneRad: D.coneDeg * D2R });
+        o.shortened = m.shortened;
+        const at = (d) => placeAlong(d, p.known ? o.au : null);
+        const keys = m.keys.map(at);
+        // The four places the clock moves it between, and every sample for the drawn path.
+        return Object.assign([keys[0], keys[1], keys[3], keys[4]], { samples: m.dirs.map(at) });
       };
       const items = placed.map((p, i) => ({
         pos: p.pos, known: p.known, path: pathOf(objs[i], p),
@@ -1526,10 +1522,9 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
         const pick = {
           pos: it.pos, card: starCard(o, it.solid), real: { ra: o.ra, dec: o.dec, au: o.au }, name: `Gaia DR3 ${o.id}`, key: `gaia:${o.id}`,
           pathNote: o.moves ? `${tv('vr.pathStarNote', { n: fmt(STAR_YEARS, 0) })}${o.shortened ? ` ${tv('vr.pathShortened')}` : ''}` : tv('vr.pathNone'),
-          path: it.path ? (layerOut) => {
-            const pts = [];
-            for (let k = 0; k <= 16; k++) pts.push(placeAt(five(it), ((k / 8) - 1) * STAR_YEARS));
-            layerOut.objects.push(...pathRibbon(pts, look.accent, { ticks: [pts[0], pts[8], pts[16]] }));
+          path: it.path?.samples?.length > 1 ? (layerOut) => {
+            const pts = it.path.samples;
+            layerOut.objects.push(...pathRibbon(pts, look.accent, { ticks: [pts[0], it.pos, pts.at(-1)] }));
           } : null,
         };
         if (it.path) followers.push({ path: five(it), pick });
