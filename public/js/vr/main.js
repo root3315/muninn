@@ -36,7 +36,7 @@ import { tv } from './strings.js';
 import { planetHostNear, systemUrl } from '../exovision.js';
 import { clearOf } from './windows.js';
 import { brightStars } from '../brightstars.js';
-import { createSound } from './sound.js';
+import { pageSound } from './sound.js';
 
 const D2R = Math.PI / 180;
 const EYE_HEIGHT = 1.6;
@@ -103,7 +103,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
 
   /* ---- the sky ----------------------------------------------------- */
   /** Every sound, made on the device (sound.js); started by the first gesture. */
-  const sound = createSound();
+  const sound = pageSound();
   ui.sound?.(sound);
   ui.status(tv('vr.loadingSky'));
   const [stars, targets] = await Promise.all([
@@ -515,6 +515,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       onFlipped: (flipped) => { view = flipped ? 'depth' : 'field'; },
       onReopen: (next) => openTarget({ ...marker, target: next }),
       onFly: flyTo,
+      onCloseCard: () => card.hide(),
       sound,
       onHome: flyHome,
       onLeave: leaveTo,
@@ -566,7 +567,10 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
 
   /** B: from the depth view back to the screens; from the screens back to the sky. */
   function goBack() {
+    // B unwinds one level: an open card first, then the depth view's own modes, then the view.
+    if (card.visible) { card.hide(); cardBefore = false; field?.depthCard(false); return; }
     if (!field) return;
+    if (view === 'depth' && field.depthBack()) return;
     if (navigate(view, 'back') === 'field') returnToScreens();
     else closeField(true);
   }
@@ -977,8 +981,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
 
   function onSessionEnd() {
     session = null;
-    sound.motion(0);
-    sound.suspend();
+    sound.quiet();
     ui.ended?.();
     renderer.xr.setReferenceSpaceType('local-floor');
     ui.inXR(false);
@@ -991,8 +994,13 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     if (document.hidden) sound.suspend();
     else if (sound.started && sound.enabled) sound.resume();
   });
-  // On a flat screen the first press is the gesture that may start sound.
-  canvas.addEventListener('pointerdown', () => sound.start(), { once: true });
+  // Any first gesture on the page (a press, a key, a drag) may start sound, as browsers ask.
+  const wake = () => { if (sound.enabled) sound.start(); };
+  for (const type of ['pointerdown', 'keydown']) window.addEventListener(type, wake, { once: true, capture: true });
+  // Shift+S on a flat screen plays every sound in turn, to listen to them.
+  window.addEventListener('keydown', (ev) => {
+    if (ev.shiftKey && ev.key.toLowerCase() === 's' && !renderer.xr.isPresenting && !ev.target?.closest?.('input')) sound.audition();
+  });
 
   /* ---- diagnostics, in the headset too ------------------------------ */
   let diagOn = ui.diagOn();
@@ -1160,7 +1168,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     // A window that comes or goes, a soft tone up or down; the chosen thing's tone ends with its card.
     const shown = (card.visible ? 1 : 0) + (field?.shownCount ?? 0);
     if (shown !== shownBefore) { if (shown > shownBefore) sound.open(); else sound.close(); shownBefore = shown; }
-    if (card.visible !== cardBefore) { cardBefore = card.visible; if (!card.visible && !flight) sound.toneOff(); }
+    if (card.visible !== cardBefore) { cardBefore = card.visible; if (!card.visible && !flight) sound.toneOff(); field?.depthCard(card.visible); }
     const c = field?.clockState;
     sound.clock(Boolean(c?.playing), Boolean(c?.fast), c?.dir ?? 1);
 
@@ -1210,6 +1218,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     const onClock = Boolean(clockPanel) && [...hovered.values()].some((x) => x?.object === clockPanel);
     pointers.takeSticks(onClock);
     if (onClock) field.scrub(pointers.scrub(), dt);
+    else if (field?.depthMode?.scrubbing) field.scrub(0, dt);
     markers.setHover(markerHover);
     if (starHover !== starHeld) {
       if (starHover >= 0 && rays.length && rays[0].id !== 'mouse') pointers.pulse(rays[0].id, ...HAPTIC.hover);
@@ -1252,6 +1261,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     renderer, scene, camera, sky, markers,
     /** End the session if there is one, and free the scene. */
     stop() {
+      sound.quiet();
       renderer.setAnimationLoop(null);
       session?.end().catch(() => {});
       closeField(false);

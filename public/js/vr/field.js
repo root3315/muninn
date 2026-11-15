@@ -324,6 +324,7 @@ export function openFieldVR(target, env) {
     onAction: (id, data) => {
       if (id === 'back') env.onBack?.();
       else if (id === 'fly') env.onFly?.(data);
+      else if (id === 'closeCard') env.onCloseCard?.();
       else if (id === 'sound') {
         if (data.kind === 'step') env.sound?.step(data.dir);
         else if (data.kind === 'body' && data.world) env.sound?.tick3d(data.world);
@@ -1234,7 +1235,7 @@ export function openFieldVR(target, env) {
       if (st.flipAnim) {
         const k = Math.min(1, (now - st.flipAnim.t0) / 200);
         st.veil = k < 0.5 ? k * 2 : 2 - k * 2;
-        if (k >= 0.5 && !st.flipAnim.swapped) { st.flipAnim.swapped = true; st.flipped = !st.flipped; stand(); drawBar(); env.onFlipped?.(st.flipped); }
+        if (k >= 0.5 && !st.flipAnim.swapped) { st.flipAnim.swapped = true; st.flipped = !st.flipped; stand(); drawBar(); if (!st.flipped) depthView.leave(); env.onFlipped?.(st.flipped); }
         if (k >= 1) { st.flipAnim = null; st.veil = 0; }
       }
       if (st.playing && !st.paused) {
@@ -1275,6 +1276,7 @@ export function openFieldVR(target, env) {
     },
     /** The screens in front again: the depth view turned back behind, at its own size. */
     resetView() {
+      depthView.leave();
       st.flipped = false;
       st.flipAnim = null;
       st.veil = 0;
@@ -1320,6 +1322,10 @@ export function openFieldVR(target, env) {
     clockTo: (years, play, dir) => depthView.clockTo(years, play, dir),
     get clockPanel() { return depthView.clockPanel; },
     scrub: (x, dt) => depthView.scrub(x, dt),
+    /** B in the depth view: true if it unwound something there. */
+    depthBack: () => depthView.back(),
+    depthCard: (on) => depthView.cardShown(on),
+    get depthMode() { return depthView.mode; },
     setMoved: (on) => depthView.setMoved(on),
     clearFocus: () => depthView.clearFocus(),
     get focusPhase() { return depthView.focusPhase; },
