@@ -17,7 +17,7 @@ import { gunzipSync } from 'node:zlib';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { searchIndex } from '../public/js/frameindex.js';
+import { searchIndex, ROW } from '../public/js/frameindex.js';
 import { parseCsv } from '../public/js/csv.js';
 import { COLLECTIONS } from '../public/js/release.js';
 
@@ -59,19 +59,56 @@ const POSITIONS = [
   ['Atala', 13.4194, 3.8459, 0.006],
   ["Barnard's star", 269.452, 4.6933, 0.006],
   ['north celestial pole', 45, 89.99, 0.006],
-  ['south ecliptic pole', 90, -66.5607, 0.006],
+  ['north ecliptic pole (deep field)', 270, 66.5607, 0.006],
+  ['south ecliptic pole (deep field)', 90, -66.5607, 0.006],
   ['RA 0', 0.0004, -20.5, 0.006],
   ['RA 360', 359.9996, -20.5, 0.006],
   ['high Dec, a wide cone', 150, 78.3, 0.03],
+  ['crowded: the Galactic centre', 266.4168, -29.0078, 0.006],
+  ['empty: high Galactic latitude', 192.86, 27.13, 0.006],
+  ['a field on a cell corner', 6, 2, 0.006],
+  ...(meta ? await edgeSpots(Number(process.env.MUNINN_COMPARE_EDGES ?? 6)) : []),
 ];
 
-for (const [name, ra, dec, radius] of POSITIONS) {
+/**
+ * Positions where the footprint rule is put to the test: from frames the
+ * index holds, a point just inside a corner, and a point just outside the
+ * middle of an edge but within the cone's radius of it (so IRSA lists the
+ * frame only if it meets the circle, not only if it holds the centre).
+ */
+async function edgeSpots(count) {
+  const { readdir } = await import('node:fs/promises');
+  const spots = [];
+  const bands = (await readdir(join(DIR, 'tiles'))).sort();
+  for (let i = 0; i < count && bands.length; i += 1) {
+    const band = bands[(i * 7919) % bands.length];
+    const files = (await readdir(join(DIR, 'tiles', band))).sort();
+    const rows = await readCell(files[(i * 104729) % files.length].replace('.json.gz', ''));
+    const row = rows[(i * 31) % rows.length];
+    const [ra, dec, c] = [row[ROW.ra], row[ROW.dec], row[ROW.corners]];
+    if (i % 2 === 0) {
+      spots.push([`just inside a corner of ${row[ROW.obsId]}`, c[0] + (ra - c[0]) * 0.004, c[1] + (dec - c[1]) * 0.004, 0.006]);
+    } else {
+      const mra = (c[0] + c[2]) / 2;
+      const mdec = (c[1] + c[3]) / 2;
+      // 0.004° beyond the edge, away from the centre: outside the frame, inside a 0.006° cone.
+      const away = Math.hypot((mra - ra) * Math.cos((dec * Math.PI) / 180), mdec - dec);
+      spots.push([`just outside an edge of ${row[ROW.obsId]}`, mra + ((mra - ra) * 0.004) / away, mdec + ((mdec - dec) * 0.004) / away, 0.006]);
+    }
+  }
+  return spots;
+}
+
+for (const [name, rawRa, rawDec, radius] of POSITIONS) {
+  const ra = Number((((rawRa % 360) + 360) % 360).toFixed(6));
+  const dec = Number(rawDec.toFixed(6));
   test(`own index lists what IRSA lists: ${name}`, { skip, timeout: 15 * 60_000 }, async (t) => {
-    const lastMjd = Date.parse(meta.lastExposure) / 86400000 + 40587;
+    // Only what the index was fetched through: IRSA's later frames are not in it yet.
+    const lastMjd = meta.fetchedThroughMjd ?? Date.parse(meta.lastExposure) / 86400000 + 40587;
     for (const collection of COLLECTIONS) {
       const irsa = await irsaFiles(collection, ra, dec, radius);
       if (!irsa) { t.diagnostic(`${collection}: IRSA did not answer`); continue; }
-      const theirs = irsa.filter((f) => f.mjd <= lastMjd).map((f) => f.url).sort();
+      const theirs = irsa.filter((f) => f.mjd < lastMjd).map((f) => f.url).sort();
       const ours = (await searchIndex(readCell, meta, collection, ra, dec, radius)).map((f) => f.url).sort();
       t.diagnostic(`${collection}: IRSA ${theirs.length}, index ${ours.length}`);
       assert.deepEqual(ours, theirs, `${name}, ${collection}`);
