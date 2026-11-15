@@ -577,6 +577,9 @@
 }
 .tour .tour__all { justify-self: start; margin-block-start: calc(-1 * var(--space-2xs)); margin-inline-start: calc(-1 * var(--space-xs)); padding-inline: var(--space-xs); min-block-size: 28px; font-size: var(--text-xs); color: var(--color-accent); }
 .tour__all[hidden] { display: none; }
+/* A part still being made: a quiet line, not a spinner. */
+.tour__wait { margin: 0; font-size: var(--text-xs); color: var(--color-neutral); letter-spacing: 0.02em; }
+.tour__wait[hidden] { display: none; }
 .tour__title { font-family: var(--font-display); font-weight: 600; font-size: 1.125rem; line-height: 1.25; }
 .tour__say { white-space: pre-line; color: var(--color-muted); line-height: 1.55; font-size: var(--text-sm); }
 .tour__more { display: grid; gap: var(--space-xs); color: var(--color-muted); line-height: 1.55; font-size: var(--text-sm); }

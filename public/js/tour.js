@@ -44,17 +44,18 @@ const STEPS = [
   { key: 'bands', find: () => document.querySelector('.bands'), read: 'read-spectrum', demo: 'read-sky' },
   // The five modes are one bar on screen, so they are one step: a line each.
   { key: 'modes', find: modes, read: 'read-modes', mode: 'wipe' },
-  { key: 'run', find: () => $('run-scroll'), read: 'read-run' },
+  // Parts that fill in as the field loads are waited for in the tour itself.
+  { key: 'run', find: () => $('run-scroll'), read: 'read-run', waits: true },
   { key: 'marks', find: () => $('marks')?.closest('.part'), read: 'read-mark' },
   { key: 'spectrum', find: () => document.querySelector('#marks .spectrum'), read: 'read-spectrum' },
   // Offered only on a mark that is not a known body; with marks but none of
   // those, the step says so over the marks instead of quietly dropping out.
   {
-    key: 'seasons', find: () => linkButton() ?? (document.querySelector('#marks li') ? $('marks').closest('.part') : null),
+    key: 'seasons', find: () => linkButton() ?? (document.querySelector('#marks li.mark') ? $('marks').closest('.part') : null),
     read: 'read-seasons', words: (el) => (el?.matches('button') ? 'seasons' : 'seasonsGhost'),
   },
-  { key: 'depth', find: () => $('depth'), read: 'read-depth' },
-  { key: 'hunt', find: () => $('hunt'), read: 'read-hunt' },
+  { key: 'depth', find: () => $('depth'), read: 'read-depth', waits: true },
+  { key: 'hunt', find: () => $('hunt'), read: 'read-hunt', waits: true },
   { key: 'view', find: () => $('tools-toggle'), read: 'read-overlay' },
   // On a phone the link is folded under "⋯"; the tour points at the fold and says so.
   {
@@ -78,6 +79,14 @@ const TOUCH = window.matchMedia('(hover: none) and (pointer: coarse)');
 const SHARED_VIEW = /(?:^#|&)(?:v|marks)=/.test(window.location.hash);
 
 let ran = false;
+/** Whether the field is still being read: a part that fills in later is waited for while it is. */
+let loading = () => false;
+/** The poll that watches for a waited-for part. */
+let waitTimer = 0;
+/** How often a waited-for part is looked for. */
+const WAIT_POLL_MS = 400;
+/** The first frame on screen, then this long for the page to settle before the tour starts. */
+const SETTLE_MS = 600;
 let ui = null;
 let steps = [];
 let at = 0;
@@ -113,6 +122,7 @@ function build() {
       <div class="tour__body" aria-live="polite">
         <h2 class="tour__title" id="tour-title"></h2>
         <p class="tour__say"></p>
+        <p class="tour__wait num" hidden></p>
         <button type="button" class="link tour__all" aria-expanded="false" hidden></button>
         <div class="tour__more" id="tour-more" tabindex="-1" hidden>
           <div class="tour__more-head">
@@ -134,6 +144,7 @@ function build() {
   ui = {
     root, hole: q('.tour__hole'), card: q('.tour__card'), count: q('.tour__count'), pips: q('.tour__pips'),
     skip: q('.tour__skip'), title: q('.tour__title'), say: q('.tour__say'), more: q('.tour__more'), all: q('.tour__all'),
+    wait: q('.tour__wait'),
     moreText: q('.tour__more-text'), clip: q('.tour__clip'), read: q('.tour__read'),
     demo: q('.tour__demo'), moreX: q('.tour__more-x'),
     next: q('.tour__next'), toggle: q('.tour__toggle'),
@@ -416,13 +427,42 @@ function schedule() {
   if (!frame) frame = requestAnimationFrame(place);
 }
 
+/**
+ * A part that is still being made (Hunter X, the depth, while the visits are
+ * read): the step says so quietly and waits, and goes on to the part the
+ * moment it is there. If the field finishes without it, the step is dropped.
+ */
+function waitFor(step) {
+  step.el = null;
+  if (expanded) setExpanded(false);
+  render();
+  ui.wait.hidden = false;
+  ui.wait.textContent = t('tour.waiting');
+  ui.hole.style.inlineSize = '0px';
+  ui.hole.style.blockSize = '0px';
+  ui.next.focus({ preventScroll: true });
+  clearInterval(waitTimer);
+  waitTimer = setInterval(() => {
+    if (steps[at] !== step || ui.root.hidden) { clearInterval(waitTimer); return; }
+    if (shown(step.find()) || !loading()) { clearInterval(waitTimer); go(at); }
+  }, WAIT_POLL_MS);
+}
+
 function go(i) {
+  clearInterval(waitTimer);
+  if (ui) ui.wait.hidden = true;
   if (i >= steps.length) { end(); return; }
   at = i;
   const step = steps[at];
   // The part may have been folded away since the tour began.
   step.el = step.find();
-  if (!shown(step.el)) { steps.splice(at, 1); if (at >= steps.length) { end(); return; } go(at); return; }
+  if (!shown(step.el)) {
+    if (step.waits && loading()) { waitFor(step); return; }
+    steps.splice(at, 1);
+    if (at >= steps.length) { end(); return; }
+    go(at);
+    return;
+  }
   if (expanded) setExpanded(false);
   render();
   nudged = false;
@@ -447,7 +487,8 @@ function go(i) {
 /** Begin the tour now, whatever has happened before. */
 export function startTour() {
   if (!ui) build();
-  steps = STEPS.map((s) => ({ ...s, el: s.find() })).filter((s) => shown(s.el));
+  // Every part on screen now, and those still being made while the field loads.
+  steps = STEPS.map((s) => ({ ...s, el: s.find() })).filter((s) => shown(s.el) || (s.waits && loading()));
   if (!steps.length) return;
   ran = true;
   returnTo = document.activeElement;
@@ -467,6 +508,7 @@ export function startTour() {
 function end() {
   if (!ui || ui.root.hidden || ui.root.classList.contains('is-leaving')) return;
   ui.clip.pause();
+  clearInterval(waitTimer);
   afterLeaving(ui.root, 'is-leaving', () => { ui.root.hidden = true; });
   shifts?.disconnect();
   window.removeEventListener('keydown', onKey, true);
@@ -481,14 +523,24 @@ export function relabelTour() {
   if (ui && !ui.root.hidden) { render(); schedule(); }
 }
 
-/** Called when a field has finished opening: the first time in this page load, the tour starts. */
+/** How the tour asks whether the field is still being read. */
+export function tourKnowsLoading(isLoading) {
+  loading = isLoading;
+}
+
+/** Not over the sky, the explanation, or a plate that is still loading or has failed. */
+const blocked = () => !$('gate')?.hidden || $('about')?.open || !$('plate-state')?.hidden;
+
+/**
+ * Called once the first frame of a field is on screen: the first time in
+ * this page load, the tour starts, after a moment for the page to settle.
+ * Parts that come later (Hunter X, the depth) are waited for in the tour.
+ */
 export function maybeStartTour() {
-  if (ran || SHARED_VIEW) return;
-  if (!$('gate')?.hidden || $('about')?.open) return;
+  if (ran || SHARED_VIEW || blocked()) return;
   ran = true;
-  // After the frame that shows the field, so every part has its size.
   setTimeout(() => {
-    if (!$('gate')?.hidden || $('about')?.open) { ran = false; return; }
+    if (blocked()) { ran = false; return; }
     startTour();
-  }, 700);
+  }, SETTLE_MS);
 }

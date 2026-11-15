@@ -57,7 +57,7 @@ import { encodeHash, decodeHash, FOV_CHOICES } from './hash.js';
 import { buildIndex, suggest } from './suggest.js';
 import { attachSuggest } from './suggest-box.js';
 import { initRead, relabelCue } from './read.js';
-import { startTour, maybeStartTour, relabelTour } from './tour.js';
+import { startTour, maybeStartTour, relabelTour, tourKnowsLoading } from './tour.js';
 
 /* The catalogue's stars bright enough to saturate (brightstars.js): read once, after the page is up. */
 let brightList = [];
@@ -3292,10 +3292,10 @@ async function readOne(entry, grid, signal, { onHeader } = {}) {
     if (!waiting && (sky.visits.length === 1 || state.wantVisit == null || sky.current?.frame === entry.frame)) {
       setPlateState('', { hidden: true });
     }
-    // The tour, once two visits are on screen to blink: waiting for the whole
-    // first batch held it back half a minute on a slow line, and people had
-    // moved on before it came.
-    if (sky.visits.length >= 2 && $('plate-state').hidden) maybeStartTour();
+    // The tour, as soon as the first frame is on screen: waiting for a second
+    // one held it back half a minute on a slow archive. What fills in later
+    // is waited for inside it.
+    if ($('plate-state').hidden) maybeStartTour();
     if (!state.filling) autoBlink();
     syncScrub();
     if (state.filling) {
@@ -5683,6 +5683,7 @@ function wire() {
   // Under the open sheet nothing else should draw: the opening sky's sweep
   // and the field's playback both redrew every frame behind it.
   let pausedUnderSheet = { sky: false, run: false };
+  tourKnowsLoading(() => state.loading);
   initRead({
     onTour: startTour,
     onOpen: () => {
