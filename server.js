@@ -399,7 +399,7 @@ const indexCells = new Map();
  * is: a deep-field cell holds tens of thousands of frames, and the relay
  * runs on a small box.
  */
-const INDEX_CELLS_MAX_BYTES = envMs('MUNINN_INDEX_CACHE_BYTES', 32 * 1024 * 1024);
+const INDEX_CELLS_MAX_BYTES = envMs('MUNINN_INDEX_CACHE_BYTES', 64 * 1024 * 1024);
 let indexCellBytes = 0;
 const gunzipCell = promisify(gunzip);
 
@@ -456,7 +456,19 @@ async function loadOwnIndex() {
  * short, not gzip, not JSON) fails the own-index route for this question,
  * logged, and is not kept: the search goes on to IRSA's TAP.
  */
-async function readCell(id) {
+const cellsReading = new Map();
+
+/** A cell asked for by four collections at once is read once. */
+function readCell(id) {
+  let pending = cellsReading.get(id);
+  if (!pending) {
+    pending = readCellOnce(id).finally(() => cellsReading.delete(id));
+    cellsReading.set(id, pending);
+  }
+  return pending;
+}
+
+async function readCellOnce(id) {
   let cell = indexCells.get(id);
   if (cell) {
     indexCells.delete(id);

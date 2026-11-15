@@ -163,10 +163,14 @@ export function frameKey(collection, obsId, det, version) {
 export async function searchIndex(readCell, meta, collection, ra, dec, radius) {
   const which = meta.collections.indexOf(collection);
   const reach = meta.reachDeg + radius;
+  // A cheap first cut on the centre: within reach in Dec, and in RA where the cap does not cover a pole.
+  const overPole = Math.abs(dec) + reach >= 90;
+  const halfWidth = overPole ? 180 : Math.asin(Math.sin(reach * RAD) / Math.cos(dec * RAD)) / RAD;
   const frames = [];
   for (const id of tilesNear(ra, dec, reach)) {
     for (const row of await readCell(id)) {
       if (row[ROW.coll] !== which || Math.abs(row[ROW.dec] - dec) > reach) continue;
+      if (!overPole && Math.abs(((row[ROW.ra] - ra + 540) % 360) - 180) > halfWidth) continue;
       if (footprintMeetsCone(row[ROW.corners], ra, dec, radius)) frames.push(frameFromIndexRow(row, meta));
     }
   }
