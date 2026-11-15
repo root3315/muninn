@@ -794,6 +794,17 @@ export function openFieldVR(target, env) {
     ctx.stroke();
   }
 
+  /**
+   * The same ground, drawn under what is already on the canvas and only as
+   * tall as it: a screen laid out as a flow is as long as its content.
+   */
+  function groundUnder(ctx, W, bottom) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-over';
+    panelGround(ctx, W, Math.min(ctx.canvas.height, Math.ceil(bottom)));
+    ctx.restore();
+  }
+
   const hov = (p, id, data = '') => st.hoverBtn === `${p}:${id}:${data}`;
 
   function drawBar() {
@@ -850,8 +861,9 @@ export function openFieldVR(target, env) {
   }
 
   function drawCard() {
+    // A flow, top to bottom: the ways back, the hint, the name and what it is,
+    // the visits, the buttons, then the turn; the ground drawn last, under it, to fit.
     card.draw((ctx, W, H, hits) => {
-      panelGround(ctx, W, H);
       const x = 34;
       const w = W - 68;
       const T = TYPE.card;
@@ -910,7 +922,8 @@ export function openFieldVR(target, env) {
       }
       ctx.font = `500 ${T.body}px ${FONTS.body}`;
       ctx.fillStyle = look.accent;
-      wrapText(ctx, `↻ ${tv('vr.turn')}`, x, H - 34 - T.body * 1.3, w, T.body * 1.3, 2);
+      const end = wrapText(ctx, `↻ ${tv('vr.turn')}`, x, by + bh + 28 + T.body, w, T.body * 1.3, 2);
+      groundUnder(ctx, W, end - T.body * 1.3 + 34);
     });
   }
 

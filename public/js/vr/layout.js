@@ -35,7 +35,8 @@ export const LAYOUT = {
     main: { yawDeg: 0, dist: 2.0, dy: at(2.5, 2.0), w: 1.3, h: 0.93 },
     // Three rows' room: the second and third are used only while "More" is open.
     bar: { yawDeg: 0, dist: 1.95, dy: at(-20.2, 1.95), w: 1.65, h: 0.345, rowH: 0.115, pxPerM: 760 },
-    card: { yawDeg: 35, dist: 1.8, dy: at(1.5, 1.8), w: 0.85, h: 1.25, pxPerM: 760 },
+    // Drawn as tall as its content, top where it always was: the canvas leaves room below for the longest card.
+    card: { yawDeg: 35, dist: 1.8, dy: at(1.5, 1.8) - (1.7 - 1.25) / 2, w: 0.85, h: 1.7, pxPerM: 760 },
     side: { yawDeg: -35, dist: 1.8, dy: at(1.5, 1.8), w: 0.85, h: 1.25, pxPerM: 760 },
     // The marks made on the field, past the card on the left, shown while there are any.
     marks: { yawDeg: 66, dist: 1.8, dy: at(1.5, 1.8), w: 1.0, h: 1.3, pxPerM: 760 },

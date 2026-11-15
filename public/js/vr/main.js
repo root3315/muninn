@@ -29,7 +29,7 @@ import { radecToVec, vecToRadec, angleBetween } from './skydata.js';
 import { createMarkers } from './targets3d.js';
 import { createPointers } from './input.js';
 import { openFieldVR } from './field.js';
-import { readLook, loadFonts, createPanel, FONTS, wrapText, fitText, wrapLines } from './panel.js';
+import { readLook, loadFonts, createPanel, FONTS, wrapText, fitText, wrapLines, layoutReport } from './panel.js';
 import { LAYOUT, yawOf, minTextPx } from './layout.js';
 import { navigate } from './nav.js';
 import { tv } from './strings.js';
@@ -1123,6 +1123,8 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     screens: () => returnToScreens(),
     pointers,
     diagLines,
+    /** For the checks: every shown panel whose text or buttons overlap or run past its plate. */
+    layout: (opts) => layoutReport(opts),
     info: () => ({ calls: renderer.info.render.calls, textures: renderer.info.memory.textures, geometries: renderer.info.memory.geometries }),
     /** Frame intervals over the last `n` frames: median, 95th percentile and worst, in ms. */
     frameTimes(n = 600) {
