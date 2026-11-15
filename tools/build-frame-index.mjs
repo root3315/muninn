@@ -108,10 +108,12 @@ async function tapOnce(query) {
       const phase = await fetch(`${job}/phase`, { signal: AbortSignal.timeout(60_000) })
         .then(async (res) => (res.ok ? (await res.text()).trim() : 'UNKNOWN'), () => 'UNKNOWN');
       if (phase === 'COMPLETED') break;
-      if (phase === 'ERROR' || phase === 'ABORTED') {
-        const detail = await (await fetch(`${job}/error`, { signal: AbortSignal.timeout(60_000) })).text().catch(() => '');
-        throw Object.assign(new Error(`TAP job ${phase}: ${detail.replace(/<[^>]+>/g, ' ').trim().slice(0, 200)}`), { status: 200 });
+      if (phase === 'ERROR') {
+        const detail = await fetch(`${job}/error`, { signal: AbortSignal.timeout(60_000) }).then((r) => r.text(), () => '');
+        throw Object.assign(new Error(`TAP job ERROR: ${detail.replace(/<[^>]+>/g, ' ').trim().slice(0, 200)}`), { status: 200 });
       }
+      // Stopped by the service (its time limit for a job, under load): asked again later.
+      if (phase === 'ABORTED' || phase === 'CANCELLED') throw new Error(`TAP job ${phase} by the service`);
       if (Date.now() > until) throw new Error(`TAP job still ${phase} after ${TAP_TIMEOUT_MS / 60000} minutes`);
       await sleep(5000);
     }
