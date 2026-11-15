@@ -610,6 +610,8 @@
 .tour__acts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); margin-block-start: var(--space-2xs); padding-block-start: var(--space-xs); border-block-start: var(--rule-hair) solid var(--color-rule-soft); }
 .tour__acts .tour__read[hidden] { display: none; }
 .tour__acts .btn { min-block-size: 40px; padding-inline: var(--space-md); }
+.tour__acts .tour__back { padding-inline: var(--space-sm); }
+.tour__acts .tour__back[hidden] { display: none; }
 /* Sixteen steps fit: the pips share what room there is. */
 .tour__pips { display: flex; flex: 1 1 auto; min-inline-size: 0; gap: 3px; }
 .tour__pips span { flex: 0 1 12px; min-inline-size: 3px; block-size: 3px; border-radius: 2px; background: var(--color-paper-4); transition: background-color var(--dur-short) var(--ease-out); }
@@ -636,6 +638,8 @@
     inset-block-start: auto; inset-inline: var(--space-xs); inset-block-end: calc(var(--space-xs) + env(safe-area-inset-bottom, 0px));
     inline-size: auto; max-block-size: 55dvh; transform: none !important;
   }
+  /* Fingers: every button of the card at least 44 px tall. */
+  .tour__acts .btn, .tour .tour__read { min-block-size: 44px; }
   /* The demo needs room on a phone: with it open the card grows. */
   .tour__card.is-open { max-block-size: 82dvh; }
 }
