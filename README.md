@@ -618,18 +618,33 @@ start time, exposure, centre, footprint corners, wavelength range, collection an
 processing version that names its file. It is filed by the 2° sky cell of each frame's
 centre, as gzipped JSON, and a search reads the cells within reach and keeps the frames whose
 footprint meets the cone, which is IRSA's own rule. `tests/frame-index-irsa.test.mjs`
-compares it with IRSA file for file (`MUNINN_COMPARE_IRSA=1`).
+compares it with IRSA file for file (`MUNINN_COMPARE_IRSA=1`): named fields, both ecliptic
+poles, RA 0 and 360, and points just inside a frame's corner and just outside its edge.
+
+A long list is cut to 500 per collection, as the SIA cuts it: the earliest frames. The SIA
+keeps the first rows of its table, which runs by time with the first weeks interleaved, so at
+the south ecliptic pole 485 of its 500 are the index's 500; at the north pole all are.
+
+An index answer is not kept by the browser, and the SIA is asked again behind it; once IRSA
+answers, the next visitor gets IRSA's own list, frames newer than the index included. A
+missing index folder, an empty one, a `meta.json` cut short or without its build date, or a
+cell file that cannot be read is no index: said once in the log, and the search goes on to
+IRSA's routes. Cells are read when a question needs them and held under 64 MB
+(`MUNINN_INDEX_CACHE_BYTES`). On a full-size index a lookup takes 30–70 ms, 0.5 s cold at an
+ecliptic pole where the deep fields crowd; the relay runs in a 160 MB heap
+(`node --max-old-space-size=160`).
 
 ```bash
 node tools/build-frame-index.mjs --estimate   # one week, and the size of the whole (about 130 MB)
-node tools/build-frame-index.mjs              # fetch what is missing, three weeks at a time, then pack
+node tools/build-frame-index.mjs --days 28 --parallel 2  # fetch what is missing, then pack
 node tools/build-frame-index.mjs --source sia --days 1   # the same through the SIA, when TAP is down
 MUNINN_COMPARE_IRSA=1 node --test tests/frame-index-irsa.test.mjs
 ```
 
-The build reads IRSA's TAP a week at a time, as asynchronous jobs (one to four minutes each
-when IRSA is well, far longer when it is loaded), waits out bursts of 502 for up to two hours
-a week, and resumes from the weeks it has. Stopped and started again, it asks only for what
+The build reads IRSA's TAP by windows of exposure time, as asynchronous jobs. Each costs IRSA a
+scan of the table whatever its length (under a minute when IRSA is well, 18 minutes when it is
+loaded), so a window of four weeks is no slower than one of a week. It waits out bursts of 502
+for up to two hours a window, and resumes from the windows it has. Stopped and started again, it asks only for what
 is missing. It writes to `.index/` (not in git), or to
 `MUNINN_INDEX_DIR`. On a server, keep the index outside the app's folder, which a deploy
 replaces:
