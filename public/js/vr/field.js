@@ -347,6 +347,7 @@ export function openFieldVR(target, env) {
       // The view as it was opened: where it stood, at its own size.
       else if (id === 'reset') { depthHolder.scale.setScalar(1); stand(); depthView.setScale(1); }
     },
+    sound: env.sound ?? null,
     head: new THREE.Vector3(0, env.head.y, 0),
     behind: new THREE.Vector3(0, 0, 1),
     look,
@@ -388,6 +389,7 @@ export function openFieldVR(target, env) {
     else if (id === 'listRetry') { st.list.tries = 0; retryList(); }
     else if (id === 'planets' && st.host) env.onLeave?.(systemUrl(st.host, label, lang));
     else if (id === 'site') env.onLeave?.(siteUrl());
+    else if (id === 'air' && env.sound) { env.sound.setAir(!env.sound.air); drawCard(); }
     else if (id === 'sound' && env.sound) { env.sound.start(); env.sound.setEnabled(!env.sound.enabled); drawCard(); }
     else if (id === 'volume' && env.sound) {
       // Four steps round: quiet, the modest default, clear, full.
@@ -833,7 +835,7 @@ export function openFieldVR(target, env) {
         ['guide', tv('vr.guide')],
         ['read', t('about.title')],
         ['site', `${tv('vr.onSite')} →`],
-        ...(env.sound ? [['sound', env.sound.enabled ? tv('vr.soundOn') : tv('vr.soundOff')], ['volume', tv('vr.volume', { n: Math.round(env.sound.volume * 100) })]] : []),
+        ...(env.sound ? [['sound', env.sound.enabled ? tv('vr.soundOn') : tv('vr.soundOff')], ['volume', tv('vr.volume', { n: Math.round(env.sound.volume * 100) })], ['air', env.sound.air ? tv('vr.airOn') : tv('vr.airOff')]] : []),
         ...(st.host ? [['planets', `${t('card.planets', { n: st.host[2] })} →`]] : []),
       ];
       let bx = x;

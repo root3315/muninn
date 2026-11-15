@@ -140,7 +140,7 @@ const POINT_FRAGMENT = /* glsl */ `
  * `pxPerDeg` a shared uniform, `field` { ra, dec, radiusDeg, widthDeg,
  * heightDeg, target }.
  */
-export function createDepthView({ head, behind, field, look, pxPerDeg, onAction }) {
+export function createDepthView({ head, behind, field, look, pxPerDeg, onAction, sound = null }) {
   const group = new THREE.Group();
   group.name = 'depth';
   group.position.copy(head);
@@ -688,6 +688,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
       if (mode.tape) chip('tapeCancel', tv('vr.tapeArmed'), true);
       if (layers.tape) chip('tapeClear', tv('vr.tapeClear'));
       if (state.moved) chip('home', tv('vr.backEarth'));
+      if (sound) chip('sound', sound.enabled ? tv('vr.soundOn') : tv('vr.soundOff'), sound.enabled);
       // What a metre along the corridor is worth now, in distance.
       const decades = Math.log10((D.maxPc * AU_PER_PC) / D.minAU);
       const perM = 10 ** (decades / (D.farM - D.nearM) / scaleNow);
@@ -757,6 +758,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction 
     if (h.id === 'step') { onAction?.('sound', { kind: 'step', dir: Number(h.data) }); easeYears(Math.round(clock.years + Number(h.data) * stepYears())); return; }
     if (h.id === 'epoch') { clock.epochAt = clock.epochMjd; easeYears(epochYears()); return; }
     if (h.id === 'home') { clearFocus(); onAction?.('home'); return; }
+    if (h.id === 'sound' && sound) { sound.start(); sound.setEnabled(!sound.enabled); drawControls(); return; }
     if (h.id === 'speed') { clock.fast = !clock.fast; drawControls(); return; }
     if (h.id === 'today') { easeYears(0); return; }
     if (h.id === 'clock') { easeYears(yearsAt(uv)); return; }

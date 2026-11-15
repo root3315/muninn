@@ -360,11 +360,17 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
     }
     lines.push({ text: tv('vr.skyWhere', { ra: formatRA(ra), dec: formatDec(dec) }), mono: true, tone: 'neutral' });
     lines.push({ text: tv('vr.skyOpenNote'), tone: 'muted' });
+    // What its tone says, when it has one.
+    if (star >= 0) lines.push({ text: tv('vr.toneMap'), tone: 'neutral' });
     const name = star >= 0 ? (named.get(star)?.name ?? '') : '';
     return {
       title,
       lines,
       actions: [{
+        // The sound, from the sky as well as from a field.
+        id: 'sound', label: sound.enabled ? tv('vr.soundOn') : tv('vr.soundOff'),
+        run: () => { sound.start(); sound.setEnabled(!sound.enabled); card.hide(); },
+      }, {
         id: 'open', label: tv('vr.openHere'), primary: true,
         run: () => { card.hide(); openTarget({ v: radecToVec(ra, dec), target: { ra, dec, fov: 0.3, band: 'all', name } }); },
       }],
@@ -652,7 +658,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
         const at = toWorld([hit.dir.x, hit.dir.y, hit.dir.z]).multiplyScalar(10).add(headPose().head);
         showCard(content, at);
         // A star's tone from its colour (B−V); a bare point of sky has none.
-        if (hit.star >= 0) sound.tone(at, stars.bv[hit.star]);
+        if (hit.star >= 0) sound.tone(at, stars.bv[hit.star], stars.mag[hit.star]);
         if (hit.star >= 0) offerPlanets(content, at, stars.ra[hit.star], stars.dec[hit.star], named.get(hit.star)?.name ?? '');
         return;
       }
@@ -942,7 +948,12 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
       const s = await (given ?? navigator.xr.requestSession('immersive-vr', { optionalFeatures: OPTIONAL_FEATURES }));
       session = s;
       s.addEventListener('end', onSessionEnd);
-      s.addEventListener('visibilitychange', () => field?.pause(s.visibilityState !== 'visible'));
+      s.addEventListener('visibilitychange', () => {
+        const away = s.visibilityState !== 'visible';
+        field?.pause(away);
+        // The headset's own menu over the scene: the sound fades out, and back in after.
+        if (away) sound.quiet(); else if (sound.enabled) sound.resume();
+      });
       const granted = s.enabledFeatures ? [...s.enabledFeatures] : null;
       diag.features = granted ?? ['(not reported)'];
       const floorSpace = !granted || granted.includes('local-floor');
@@ -1368,6 +1379,12 @@ function bootPage() {
       };
       show();
       b.addEventListener('click', () => { s.start(); s.setEnabled(!s.enabled); show(); });
+      const a = $('vr-air');
+      if (a) {
+        const showAir = () => { a.textContent = tv(s.air ? 'vr.airOn' : 'vr.airOff'); a.setAttribute('aria-pressed', String(s.air)); };
+        showAir();
+        a.addEventListener('click', () => { s.start(); s.setAir(!s.air); showAir(); });
+      }
       r.addEventListener('input', () => { s.start(); s.setVolume(Number(r.value) / 100); });
       r.setAttribute('aria-label', tv('vr.volumeLabel'));
     },
