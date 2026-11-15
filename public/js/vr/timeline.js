@@ -47,7 +47,7 @@ const CELL_H = 192;
  * as the site's run draws them: the accent's opacity by score, clamped at
  * TOP, the unscored ones faint (sectors.js, strip.js).
  */
-const GRID_H = 46;
+const GRID_H = 60;
 const GRID_COLS = 5;
 const GRID_ROWS = 4;
 const SECTOR_TOP = 12;
@@ -327,6 +327,7 @@ export function createTimeline({ visits, onPick, look, lang }) {
       const months = Math.max(1, Math.round(g.days / 30.44));
       placeLabel(label(tv('vr.gap', { n: months }), { tone: 'neutral', font: 'body', priority: 1 }), g.at, 0, 'above');
     }
+    let legendBelow = null;
     if (layout.baseline) {
       const { a, b, chordAU, shiftArcmin, bodyAU } = layout.baseline;
       const pa = ringPoint(a, 0).p;
@@ -346,12 +347,14 @@ export function createTimeline({ visits, onPick, look, lang }) {
       const mid = pa.clone().lerp(pb, 0.5);
       l.mesh.position.copy(mid).add(new THREE.Vector3(0, -l.heightM * 1.8, 0));
       faceHead(l.mesh);
+      legendBelow = l.mesh.position.clone().add(new THREE.Vector3(0, -l.heightM * 2.4, 0));
     }
     // What the little grids under the frames are, once for the whole strip.
     {
+      // Under the baseline's words when there are any, else under the frames.
       const mid = (Math.min(...layout.angles) + Math.max(...layout.angles)) / 2;
-      const p = ringPoint(mid, 0).p;
-      p.y = dy0 - Math.max(...layout.tiers) * R.tierDropM - R.frameH / 2 - (layout.baseline ? 0.4 : 0.17);
+      const p = legendBelow ?? ringPoint(mid, 0).p;
+      if (!legendBelow) p.y = dy0 - Math.max(...layout.tiers) * R.tierDropM - R.frameH / 2 - 0.17;
       const l = label(tv('vr.sectorsLegend'), { tone: 'neutral', font: 'body', priority: 0.4 });
       l.mesh.position.copy(p);
       faceHead(l.mesh);
@@ -464,7 +467,7 @@ export function createTimeline({ visits, onPick, look, lang }) {
    * most unusual sector ringed.
    */
   function paintSectors(actx, x, y, i, s) {
-    actx.fillStyle = look.well;
+    actx.fillStyle = look.paper2;
     actx.fillRect(x, y, CELL_W, GRID_H);
     const gap = 2;
     const cw = (CELL_W - 12 - gap * (GRID_COLS - 1)) / GRID_COLS;
@@ -476,8 +479,8 @@ export function createTimeline({ visits, onPick, look, lang }) {
       const cy = y + 4 + Math.floor(c / GRID_COLS) * (ch + gap);
       const z = s.at >= 0 ? sectors?.cells?.[c]?.[s.at] : null;
       if (z == null) {
-        actx.fillStyle = look.rule;
-        actx.globalAlpha = s.at >= 0 ? 0.35 : 0.15;
+        actx.fillStyle = look.neutral;
+        actx.globalAlpha = s.at >= 0 ? 0.4 : 0.18;
       } else {
         actx.fillStyle = look.accent;
         actx.globalAlpha = Math.min(1, Math.max(0.05, z / SECTOR_TOP));
