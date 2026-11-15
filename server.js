@@ -34,7 +34,7 @@ import { parseVOTable } from './public/js/votable.js';
 import { frameFromRow } from './public/js/catalog.js';
 import { COLLECTIONS } from './public/js/release.js';
 import { parseCsv } from './public/js/csv.js';
-import { CATALOGUES, ROW_CAP, coneQuery, renameRow, mastGaiaRows } from './public/js/overlay.js';
+import { CATALOGUES, ROW_CAP, coneQuery, renameRow, mastGaiaRows, columnsTag } from './public/js/overlay.js';
 import { sbIdentUrl, parseSbIdent } from './public/js/sbident.js';
 import { smallBodyQuery, SBDB_TEXT, sbdbUrl, readSbdb, horizonsUrl, readHorizons } from './public/js/smallbody.js';
 import { archivesQuery, neossatQuery, neossatFilesQuery, readNeossat, ARCHIVE_RADIUS } from './public/js/archives.js';
@@ -908,7 +908,9 @@ async function handleTap(url, res) {
   // decimal is the same question, not a new file and a new archive query.
   if (field.limit !== null) field.limit = Math.round(field.limit * 2) / 2;
   field.radiusDeg = Math.max(1 / 3600, Number(field.radiusDeg.toPrecision(2)));
-  const key = safeKey(`tap_${cat}_${field.ra.toFixed(4)}_${field.dec.toFixed(4)}_${field.radiusDeg}_${field.top}_${field.limit ?? 'all'}`);
+  // The columns asked for are part of the question: a list cached before a
+  // column was added (AllWISE's cc_flags) is not an answer to the new one.
+  const key = safeKey(`tap_${cat}${columnsTag(archive)}_${field.ra.toFixed(4)}_${field.dec.toFixed(4)}_${field.radiusDeg}_${field.top}_${field.limit ?? 'all'}`);
   // A star's own lookup is a few arcseconds: MAST usually answers in one or
   // two, and IRSA is asked as well only once MAST is late or has failed —
   // either can take twenty seconds on a bad day, rarely both, and asking IRSA

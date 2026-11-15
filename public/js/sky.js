@@ -26,7 +26,7 @@ import { brightStarNear } from './brightstars.js';
 import { SECTOR_COLS, SECTOR_ROWS, sectorBounds } from './sectors.js';
 import { deltaRA } from './wcs.js';
 import { coadd } from './stack.js';
-import { epochOfMjd, propagate, markRadius } from './overlay.js';
+import { epochOfMjd, propagate, markRadius, ARTEFACT_TESTS } from './overlay.js';
 import { QUALITY } from './stamp.js';
 import { sharpness, sharpVerdict } from './sharpness.js';
 
@@ -62,6 +62,46 @@ export function coreQuality(quality, width, height, ci, cj, reach) {
  */
 export const mostlySaturated = (track) => track.length > 0
   && 2 * track.filter((p) => p.saturated).length > track.length;
+
+/**
+ * One label per bright star for its saturated patches (render.js
+ * saturatedPatches). A star can close several separate patches — its core and
+ * a bleed or a spike — and each used to get the same line. `starOf(patch)`
+ * names the star a patch belongs to (null when none is known; those go
+ * together). Each group comes back as one circle round all its patches:
+ * { star, area, ci, cj, reach }, in grid samples.
+ */
+export function patchLabelGroups(patches, starOf) {
+  const groups = new Map();
+  for (const p of patches ?? []) {
+    const star = starOf(p) ?? null;
+    const key = star ? star.name ?? `${star.ra},${star.dec}` : '';
+    if (!groups.has(key)) groups.set(key, { star, members: [] });
+    groups.get(key).members.push(p);
+  }
+  return [...groups.values()].map(({ star, members }) => {
+    const area = members.reduce((sum, p) => sum + p.area, 0);
+    const ci = members.reduce((sum, p) => sum + p.ci * p.area, 0) / area;
+    const cj = members.reduce((sum, p) => sum + p.cj * p.area, 0) / area;
+    const reach = Math.max(...members.map((p) => Math.hypot(p.ci - ci, p.cj - cj) + p.reach));
+    return { star, area, ci, cj, reach };
+  });
+}
+
+/** Whether grid position (i, j) lies on one of visit `v`'s saturated patches. */
+function onPatch(v, i, j) {
+  if (!v?.patches?.length) return false;
+  const { width, height } = v.stamp;
+  const x = Math.round(i);
+  const y = Math.round(j);
+  if (x < 0 || y < 0 || x >= width || y >= height) return false;
+  if (v.patchMask?.of !== v.patches) {
+    const cells = new Uint8Array(width * height);
+    for (const p of v.patches) for (const k of p.cells) cells[k] = 1;
+    v.patchMask = { of: v.patches, cells };
+  }
+  return v.patchMask.cells[y * width + x] === 1;
+}
 
 /** The two survey marks, added to the path being built. */
 function ring(ctx, x, y, r) {
@@ -592,7 +632,7 @@ export class SkyView {
     if (this.grid) {
       if (this.overlays.grid) this.drawGrid(ctx);
       if (this.overlays.compass) this.taken.push(this.compassBox(ctx));
-      if (this.mode !== 'difference' && this.mode !== 'stack') this.drawPatches(ctx, this.current);
+      if (this.patchesShown) this.drawPatches(ctx, this.current);
       // The field's own target and the user's crosses first: the names drawn
       // after them step around them ("(8270) 37″/h" sat on "Atala").
       if (this.overlays.marks && this.target) this.drawTarget(ctx);
@@ -602,6 +642,8 @@ export class SkyView {
       if (this.overlays.skybot && this.mode !== 'stack') this.drawKnownObjects(ctx);
       if (this.overlays.catalog) this.drawCatalog(ctx);
       this.drawSurveys(ctx);
+      // Placed once the survey marks are down, so the line steps round them.
+      if (this.patchesShown) this.labelPatches(ctx, this.current);
       if (this.overlays.sectors || this.sector) this.drawSectors(ctx);
       if (this.link) this.drawLink(ctx);
       if (this.overlays.marks) this.drawMarks(ctx);
@@ -854,6 +896,7 @@ export class SkyView {
    */
   drawSurveys(ctx) {
     this.surveyShown = {};
+    this.surveyHidden = {};
     const v = this.current;
     if (!v) return;
     const epoch = epochOfMjd(v.frame.mjd);
@@ -867,7 +910,10 @@ export class SkyView {
   drawSurvey(ctx, kind, color, alpha, where, shape) {
     const survey = this.surveys[kind];
     if (!survey?.rows.length) return;
+    const artefact = ARTEFACT_TESTS[kind];
+    const patched = this.patchesShown ? this.current : null;
     let shown = 0;
+    let hidden = 0;
     ctx.strokeStyle = color;
     ctx.globalAlpha = alpha;
     ctx.beginPath();
@@ -877,13 +923,29 @@ export class SkyView {
       if (!g) continue;
       const [x, y] = this.toCanvas(g[0], g[1]);
       if (x < 0 || y < 0 || x > this.cssW || y > this.cssH) continue;
+      // A mark on pixels the pipeline closed, or one its own catalogue flags
+      // as a bright star's spike, halo or ghost, is not drawn, only counted.
+      if (onPatch(patched, g[0], g[1]) || artefact(o, { nearBright: this.inBrightReach(at) })) {
+        hidden += 1;
+        continue;
+      }
       shape(ctx, x, y, markRadius(o.mag, survey.limit));
       this.hits.push({ kind, x, y, item: o, at });
       shown += 1;
     }
     ctx.stroke();
     this.surveyShown[kind] = shown;
+    this.surveyHidden[kind] = hidden;
   }
+
+  /** Whether (ra, dec) lies within the reach of the bright star in the field (brightstars.js). */
+  inBrightReach({ ra, dec }) {
+    const star = this.brightInField;
+    return Boolean(star && brightStarNear([star], ra, dec));
+  }
+
+  /** Whether the visit on screen is drawn with its saturated patches: not in a difference or a season's sum. */
+  get patchesShown() { return this.mode !== 'difference' && this.mode !== 'stack'; }
 
   /**
    * What SkyBoT says was in the field at the moment of the visit on screen,
@@ -1028,38 +1090,65 @@ export class SkyView {
 
   /**
    * A very bright star's saturated patch (render.js saturatedPatches), which
-   * the picture shows flat at the sky's level: a thin ring round it, and a
-   * line saying what it is, so a blank disc is not read as a glitch or as a
-   * star's size.
+   * the picture shows flat at the sky's level: a thin ring round it, so a
+   * blank disc is not read as a glitch or as a star's size. What it is, is
+   * said by labelPatches.
    */
   drawPatches(ctx, v) {
     if (!v?.patches?.length) return;
     const { scale } = this.view;
+    ctx.save();
+    ctx.strokeStyle = this.colors.muted;
+    ctx.globalAlpha = 0.8;
+    ctx.lineWidth = 1;
+    for (const p of v.patches) {
+      const [x, y] = this.toCanvas(p.ci, p.cj);
+      ctx.beginPath();
+      ctx.arc(x, y, (p.reach + 0.5) * scale, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  /**
+   * One line per bright star saying its patches are pixels the pipeline
+   * closed: outside the circle round all of them, and clear of the survey
+   * marks when there is room.
+   */
+  labelPatches(ctx, v) {
+    if (!v?.patches?.length) return;
+    const { scale } = this.view;
     const perPixel = this.samplesPerPixel;
+    const starOf = (p) => {
+      const [ra, dec] = this.grid.indexToWorld(p.ci, p.cj);
+      return brightStarNear(this.brightStars, ra, dec) ?? this.brightInField;
+    };
+    // The survey marks are in the way of this line only: the names placed
+    // after it may still sit beside a mark, as they always have.
+    const marks = new Set(this.hits.filter((h) => h.kind === 'gaia' || h.kind === 'wise')
+      .map((h) => ({ x0: h.x - 6, x1: h.x + 6, y0: h.y - 6, y1: h.y + 6 })));
+    this.taken.push(...marks);
     ctx.save();
     ctx.font = this.fonts.compass;
     ctx.textBaseline = 'middle';
-    for (const p of v.patches) {
-      const [x, y] = this.toCanvas(p.ci, p.cj);
-      const r = (p.reach + 0.5) * scale;
-      ctx.strokeStyle = this.colors.muted;
-      ctx.globalAlpha = 0.8;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.arc(x, y, r, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.globalAlpha = 1;
-      const [ra, dec] = this.grid.indexToWorld(p.ci, p.cj);
-      const star = brightStarNear(this.brightStars, ra, dec);
-      const text = this.labels.saturated(star?.name ?? null, Math.round(p.area / (perPixel * perPixel)));
+    for (const g of patchLabelGroups(v.patches, starOf)) {
+      const [x, y] = this.toCanvas(g.ci, g.cj);
+      const r = (g.reach + 0.5) * scale;
+      const d = (r + 10) / Math.SQRT2;
+      const text = this.labels.saturated(g.star?.name ?? null, Math.round(g.area / (perPixel * perPixel)));
       this.placeLabel(ctx, text, [
         { x, y: y - r - 10, align: 'center' },
         { x, y: y + r + 10, align: 'center' },
         { x: x + r + 6, y, align: 'left' },
         { x: x - r - 6, y, align: 'right' },
+        { x: x + d, y: y - d, align: 'left' },
+        { x: x - d, y: y - d, align: 'right' },
+        { x: x + d, y: y + d, align: 'left' },
+        { x: x - d, y: y + d, align: 'right' },
       ], this.colors.muted);
     }
     ctx.restore();
+    this.taken = this.taken.filter((b) => !marks.has(b));
   }
 
   /** The user's crosses, booked before any name is placed, so none lands on one. */

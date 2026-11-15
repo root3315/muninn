@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { gzipSync } from 'node:zlib';
 import { COLLECTIONS } from '../public/js/release.js';
 import { ROW, tileOf, indexRowFromObscore } from '../public/js/frameindex.js';
+import { CATALOGUES, columnsTag } from '../public/js/overlay.js';
 
 const PORT = Number(process.env.TEST_PORT) || 5199;
 const BASE = `http://127.0.0.1:${PORT}`;
@@ -234,7 +235,7 @@ test('a missing file is a 404 in plain text', async () => {
 
 test('an answer from the own cache of the server may be kept for a few minutes, an error never', async () => {
   const dir = join(fileURLToPath(new URL('..', import.meta.url)), '.cache');
-  const file = join(dir, 'tap_gaia_269.4500_4.6900_0.01_9_all.json');
+  const file = join(dir, `tap_gaia${columnsTag(CATALOGUES.gaia.irsa)}_269.4500_4.6900_0.01_9_all.json`);
   await mkdir(dir, { recursive: true });
   await writeFile(file, JSON.stringify({ rows: [], via: 'test' }), 'utf8');
   try {
