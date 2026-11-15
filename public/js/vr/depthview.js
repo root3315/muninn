@@ -170,7 +170,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
   const labels = [];
   const state = {
     gaia: null, bodies: [], galaxies: null, candidates: [], failed: [], depthAB: null,
-    asking: true, target: field.target ?? null, bodyNote: false, gaiaLimit: null,
+    asking: true, target: field.target ?? null, bodyNote: false, gaiaLimit: null, retry: {},
     beta: eclipticLatitude(field.ra, field.dec),
   };
 
@@ -378,7 +378,16 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
       if (counts) paragraphs.push([counts, 'accent']);
       if (state.candidates.length) paragraphs.push([tv('vr.depthUnmatched', { n: state.candidates.length }), 'counter']);
       if (state.bodyNote) paragraphs.push([tv('vr.nearFar'), 'counter']);
-      if (state.failed.length) paragraphs.push([state.failed.map((what) => tv('vr.depthFailed', { what })).join(' · '), 'counter']);
+      // What did not come, each with when it is asked again; what came is drawn regardless.
+      if (state.failed.length) {
+        const now = performance.now();
+        paragraphs.push([state.failed.map((what) => {
+          const at = state.retry[what];
+          const later = at ? Math.max(1, Math.ceil((at - now) / 1000)) : null;
+          const words = what === 'Bailer-Jones' ? tv('vr.depthNoBJ') : tv('vr.depthFailed', { what });
+          return later ? `${words} · ${tv('vr.retryIn', { s: later })}` : words;
+        }).join(' · '), 'counter']);
+      }
       const titleLines = wrapLines(`600 ${signType.heading}px ${FONTS.display}`, tv('vr.depthTitle'), w, 3);
       const bodyLines = paragraphs.map(([text]) => wrapLines(`400 ${signType.body}px ${FONTS.body}`, text, w, 99).length);
       const need = 24 + titleLines.length * signType.heading * 1.15 + 14 + bodyLines.reduce((n, k) => n + k * lh + 6, 0) + 20;
@@ -687,6 +696,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
       }
       if (mode.tape) chip('tapeCancel', tv('vr.tapeArmed'), true);
       if (layers.tape) chip('tapeClear', tv('vr.tapeClear'));
+      // A catalogue that did not answer can be asked again from here.
+      for (const what of state.failed) chip('retrySource', `↻ ${what}`, false, what);
       if (state.moved) chip('home', tv('vr.backEarth'));
       if (sound) chip('sound', sound.enabled ? tv('vr.soundOn') : tv('vr.soundOff'), sound.enabled);
       // What a metre along the corridor is worth now, in distance.
@@ -766,6 +777,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     if (h.id === 'dayNow') { when.mjd = null; if (when.bodies) api.setBodies(...when.bodies); return; }
     if (h.id === 'reset') clearFocus();
     if (h.id === 'tapeCancel') { go('tapeCancel'); return; }
+    if (h.id === 'retrySource') { onAction?.('retrySource', h.data); return; }
     if (h.id === 'tapeClear') { clearLayer('tape'); drawControls(); return; }
     onAction?.(h.id);
   };
@@ -1177,6 +1189,26 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     clockTo(years, play = false, dir = 1) { clock.playing = play; clock.dir = dir; clock.dirU.value = dir; clock.last = performance.now(); setYears(years); },
     /** For the checks: press a control by its id. */
     press(id, data = null) { controls.mesh.userData.pickAs?.(id, data); },
+    /** A catalogue being asked (again): its failure no longer said. */
+    sourceAsking(what) { delete state.retry[what]; drawSign(); },
+    /** A catalogue that answered. */
+    sourceOk(what) {
+      const k = state.failed.indexOf(what);
+      if (k >= 0) state.failed.splice(k, 1);
+      delete state.retry[what];
+      drawSign();
+      drawControls();
+    },
+    /** A catalogue that failed, and when it will be asked again (page time), or null. */
+    sourceFailed(what, retryAt) {
+      if (!state.failed.includes(what)) state.failed.push(what);
+      state.retry[what] = retryAt;
+      drawSign();
+      drawControls();
+    },
+    /** Whether any failed catalogue is counting down to its retry. */
+    get retrying() { return Object.values(state.retry).some(Boolean); },
+    redrawSign() { drawSign(); },
     /** B in the depth view: one level unwound; true if it was used here, false to leave the view. */
     back() { return !go('back').has('leaveDepth'); },
     /** Out of the depth view: everything stopped, the clock back to today. */
@@ -1236,7 +1268,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
       const epoch = opts.epoch ?? 2026;
       state.gaiaLimit = limit;
       if (rows instanceof Error) {
-        state.failed.push('Gaia DR3');
+        if (!state.failed.includes('Gaia DR3')) state.failed.push('Gaia DR3');
         state.gaia = { known: 0, unknown: 0 };
         state.asking = false;
         drawSign();
@@ -1492,7 +1524,7 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     },
     /** SIMBAD galaxies with a spectroscopic redshift, or an Error. */
     setGalaxies(list) {
-      if (list instanceof Error) { state.failed.push('SIMBAD'); state.galaxies = []; drawSign(); return; }
+      if (list instanceof Error) { if (!state.failed.includes('SIMBAD')) state.failed.push('SIMBAD'); state.galaxies = []; drawSign(); return; }
       const objs = list.map((g) => {
         const mpc = g.z >= MIN_REDSHIFT ? redshiftDistanceMpc(g.z) : null;
         return { g, dir: dirOf(g.ra, g.dec), mpc, au: mpc ? mpc * 1e6 * AU_PER_PC : null };

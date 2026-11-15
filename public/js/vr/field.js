@@ -73,6 +73,10 @@ const breathe = () => new Promise((r) => { setTimeout(r, 0); });
 const FOV_SIZES = [0.15, 0.3, 0.6];
 /** When the list of frames is asked again on its own, seconds after each failure. */
 const LIST_RETRY_S = [5, 15, 45];
+/** When a depth catalogue that failed is asked again on its own, seconds after each failure. */
+const DEPTH_RETRY_S = [5, 15, 45];
+/** When frames that failed to read are read again, seconds after the field's reading ends. */
+const FRAME_RETRY_S = [20, 60];
 /** The guide's five steps, by their strings' names. */
 const GUIDE = ['Point', 'Field', 'Mark', 'Depth', 'Move'];
 /** The site's "How to read this" cards that hold in the headset, in its order. */
@@ -337,6 +341,10 @@ export function openFieldVR(target, env) {
       if (id === 'back') env.onBack?.();
       else if (id === 'fly') env.onFly?.(data);
       else if (id === 'closeCard') env.onCloseCard?.();
+      else if (id === 'retrySource') {
+        const kind = Object.keys(DEPTH_NAMES).find((k) => DEPTH_NAMES[k] === data);
+        if (kind) askDepth(kind, true);
+      }
       else if (id === 'sound') {
         if (data.kind === 'step') env.sound?.step(data.dir);
         else if (data.kind === 'body' && data.world) env.sound?.tick3d(data.world);
@@ -1217,6 +1225,30 @@ export function openFieldVR(target, env) {
     if (sky.marks.length) retrackMarks();
     await hunt();
     updateDepthBodies(true);
+    retryFramesLater();
+  }
+
+  /**
+   * Frames whose read failed (a network error, a cut-off file) are crossed out
+   * on their tile and read again a little later, twice at most.
+   */
+  function retryFramesLater() {
+    const failed = st.entries.filter((e) => e.status === 'failed');
+    const delay = FRAME_RETRY_S[st.frameTries ?? 0];
+    if (!failed.length || delay == null || st.closed) return;
+    st.frameTries = (st.frameTries ?? 0) + 1;
+    clearTimeout(st.frameTimer);
+    st.frameTimer = setTimeout(async () => {
+      if (st.closed) return;
+      for (const e of failed) e.status = 'pending';
+      refreshTimeline();
+      await readEntries(failed);
+      if (st.closed) return;
+      measure();
+      drawAll();
+      refreshTimeline();
+      retryFramesLater();
+    }, delay * 1000);
   }
 
   function measure() {
@@ -1336,18 +1368,50 @@ export function openFieldVR(target, env) {
     depthView.setBodies(bodies, tracks);
   }
 
-  async function loadDepthData(chosen) {
-    const epoch = epochOfMjd(chosen[Math.floor(chosen.length / 2)].mjd);
-    const gaiaAsk = baked?.gaia ? Promise.resolve(baked.gaia)
-      : surveySources('gaia', { ra, dec, radiusDeg, limit: magLimit(grid.fovHeightDeg) }, { signal });
-    const bjAsk = baked?.bj ? Promise.resolve(new Map(baked.bj.map(([id, r, lo, hi]) => [id, { r, lo, hi }])))
-      : geometricDistances({ ra, dec, radiusDeg }, signal).catch(() => null);
-    Promise.all([gaiaAsk, bjAsk])
-      .then(([g, bj]) => { if (!signal.aborted) depthView.setGaia(g.rows, { bj, epoch, detected, limit: g.reached }); })
-      .catch((err) => { if (!signal.aborted) depthView.setGaia(err instanceof Error ? err : new Error(String(err))); });
-    (baked?.galaxies ? Promise.resolve(baked.galaxies) : galaxiesWithRedshift({ ra, dec, radiusDeg }, signal))
-      .then((list) => { if (!signal.aborted) depthView.setGalaxies(list); })
-      .catch((err) => { if (!signal.aborted) depthView.setGalaxies(err instanceof Error ? err : new Error(String(err))); });
+  /**
+   * The depth view's catalogues, each on its own: what comes is drawn, what
+   * fails is named in the depth view with a countdown, asked again after 5,
+   * 15 and 45 s, and can be asked again at once. A demonstration field's
+   * kept answers stand in for whatever they hold.
+   */
+  const DEPTH_NAMES = { gaia: 'Gaia DR3', bj: 'Bailer-Jones', galaxies: 'SIMBAD' };
+  const depthTry = { gaia: { tries: 0, timer: 0 }, bj: { tries: 0, timer: 0 }, galaxies: { tries: 0, timer: 0 } };
+  const depthKept = { rows: null, reached: null, bj: null, epoch: 2026 };
+  function drawGaia() {
+    if (depthKept.rows) depthView.setGaia(depthKept.rows, { bj: depthKept.bj, epoch: depthKept.epoch, detected, limit: depthKept.reached });
+  }
+  async function askDepth(kind, now = false) {
+    const d = depthTry[kind];
+    clearTimeout(d.timer);
+    if (now) d.tries = 0;
+    depthView.sourceAsking(DEPTH_NAMES[kind]);
+    try {
+      if (kind === 'gaia') {
+        const g = baked?.gaia ?? await surveySources('gaia', { ra, dec, radiusDeg, limit: magLimit(grid.fovHeightDeg) }, { signal });
+        depthKept.rows = g.rows;
+        depthKept.reached = g.reached;
+        drawGaia();
+      } else if (kind === 'bj') {
+        depthKept.bj = baked?.bj ? new Map(baked.bj.map(([id, r, lo, hi]) => [id, { r, lo, hi }])) : await geometricDistances({ ra, dec, radiusDeg }, signal);
+        drawGaia();
+      } else {
+        depthView.setGalaxies(baked?.galaxies ?? await galaxiesWithRedshift({ ra, dec, radiusDeg }, signal));
+      }
+      if (signal.aborted) return;
+      depthView.sourceOk(DEPTH_NAMES[kind]);
+    } catch {
+      if (signal.aborted || st.closed) return;
+      const delay = DEPTH_RETRY_S[d.tries];
+      d.tries += 1;
+      if (delay != null) d.timer = setTimeout(() => askDepth(kind), delay * 1000);
+      depthView.sourceFailed(DEPTH_NAMES[kind], delay != null ? performance.now() + delay * 1000 : null);
+      // No Gaia at all yet: the view says so rather than waiting for ever.
+      if (kind === 'gaia' && !depthKept.rows) depthView.setGaia(new Error('Gaia DR3'));
+    }
+  }
+  function loadDepthData(chosen) {
+    depthKept.epoch = epochOfMjd(chosen[Math.floor(chosen.length / 2)].mjd);
+    for (const kind of ['gaia', 'bj', 'galaxies']) askDepth(kind);
   }
 
   load();
@@ -1364,6 +1428,7 @@ export function openFieldVR(target, env) {
       const now = performance.now();
       // A retry's countdown, a second at a time.
       if (st.list.retryAt && now - (st.listBeat ?? 0) > 1000) { st.listBeat = now; drawNotice(); drawSide(); }
+      if (depthView.retrying && now - (st.depthBeat ?? 0) > 1000) { st.depthBeat = now; depthView.redrawSign(); }
       // The asking dot pulses: a redraw a few times a second, not every frame.
       if (marksPanel.animated && now - (st.marksBeat ?? 0) > 120) { st.marksBeat = now; drawMarks(); }
       if (st.anim) {
@@ -1482,6 +1547,8 @@ export function openFieldVR(target, env) {
     },
     close() {
       st.closed = true;
+      clearTimeout(st.frameTimer);
+      for (const d of Object.values(depthTry)) clearTimeout(d.timer);
       clearTimeout(st.list.timer);
       ctrl.abort();
       play(false);
