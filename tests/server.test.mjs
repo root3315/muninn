@@ -12,16 +12,20 @@ import { fileURLToPath } from 'node:url';
 import { mkdir, rm, writeFile, utimes as touch } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { gzipSync } from 'node:zlib';
 import { COLLECTIONS } from '../public/js/release.js';
+import { ROW, tileOf, indexRowFromObscore } from '../public/js/frameindex.js';
 
 const PORT = Number(process.env.TEST_PORT) || 5199;
 const BASE = `http://127.0.0.1:${PORT}`;
+/** No own frame index unless a test gives one: a built .index/ in the checkout must not change the answers. */
+const NO_INDEX = join(tmpdir(), `muninn-no-index-${process.pid}`);
 let child;
 
 before(async () => {
   child = spawn(process.execPath, ['server.js'], {
     cwd: fileURLToPath(new URL('..', import.meta.url)),
-    env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1' },
+    env: { ...process.env, PORT: String(PORT), HOST: '127.0.0.1', MUNINN_INDEX_DIR: NO_INDEX },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   await new Promise((resolve, reject) => {
@@ -276,10 +280,35 @@ describe('frame search against a fake IRSA', () => {
       + '</TABLEDATA></DATA></TABLE></RESOURCE></VOTABLE>';
   };
 
+  /** How the fake TAP answers, by `${collection} ${ra}`: { status, csv }. Unplanned: 503. */
+  const tapPlan = new Map();
+  const tapHits = new Map();
+
+  /** The fake TAP's ObsCore answer and the fake S3 mirror's listing. */
+  async function answerTap(req, res) {
+    let body = '';
+    for await (const chunk of req) body += chunk;
+    const query = new URLSearchParams(body).get('QUERY') ?? '';
+    const collection = /obs_collection = '([\w]+)'/.exec(query)?.[1];
+    const ra = Number(/CIRCLE\('ICRS', ([\d.]+),/.exec(query)?.[1]);
+    const at = `${collection} ${ra}`;
+    tapHits.set(at, (tapHits.get(at) ?? 0) + 1);
+    const step = tapPlan.get(at) ?? { status: 503 };
+    res.writeHead(step.status, { 'content-type': 'text/csv' });
+    res.end(step.csv ?? 'Service unavailable');
+  }
+  function answerS3(url, res) {
+    const prefix = url.searchParams.get('prefix');
+    res.writeHead(200, { 'content-type': 'application/xml' });
+    res.end(`<ListBucketResult><CommonPrefixes><Prefix>${prefix}l2b-test/</Prefix></CommonPrefixes></ListBucketResult>`);
+  }
+
   before(async () => {
     await mkdir(cacheDir, { recursive: true });
     fake = createServer((req, res) => {
       const url = new URL(req.url, 'http://fake');
+      if (url.pathname.startsWith('/TAP')) { answerTap(req, res); return; }
+      if (url.pathname.startsWith('/S3')) { answerS3(url, res); return; }
       const collection = url.searchParams.get('COLLECTION');
       const [, ra, dec] = url.searchParams.get('POS').split(' ');
       const at = `${collection} ${ra}`;
@@ -307,6 +336,9 @@ describe('frame search against a fake IRSA', () => {
         PORT: String(SEARCH_PORT),
         HOST: '127.0.0.1',
         MUNINN_SIA_URL: `http://127.0.0.1:${fake.address().port}/SIA`,
+        MUNINN_TAP_URL: `http://127.0.0.1:${fake.address().port}/TAP/sync`,
+        MUNINN_S3_URL: `http://127.0.0.1:${fake.address().port}/S3/`,
+        MUNINN_INDEX_DIR: NO_INDEX,
         MUNINN_CACHE_DIR: cacheDir,
         MUNINN_RETRY_MS: '20,40',
         MUNINN_ATTEMPT_MS: '300',
@@ -514,6 +546,30 @@ describe('frame search against a fake IRSA', () => {
     assert.deepEqual(body.missing, COLLECTIONS);
     assert.equal(relayed.exitCode, null);
   });
+
+  test("search: with the SIA failing, IRSA's TAP answers, the footprint rule applied and the file named from the mirror", async () => {
+    plan.set('* 113.5', [{ status: 502 }]);
+    tapPlan.set('spherex_dr1 113.5', {
+      status: 200,
+      csv: obscoreCsv([
+        obscoreRow('2025W30_1A_0001_1', 'spherex_dr1', 114.5, 10.5),
+        obscoreRow('2025W30_1A_0002_1', 'spherex_dr1', 116.5, 10),
+      ]),
+    });
+    const { res, body } = await search(113.5, 10);
+    assert.equal(body.ok, true);
+    assert.equal(body.source, 'irsa-tap');
+    assert.equal(body.partial, true);
+    assert.deepEqual(body.missing, ['spherex_dr1_deep', 'spherex_qr3', 'spherex_qr3_deep']);
+    assert.deepEqual(body.frames.map((f) => f.obsId), ['2025W30_1A_0001_1']);
+    assert.equal(body.frames[0].url,
+      'https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/level2/2025W30_1A/l2b-test/2/level2_2025W30_1A_0001_1D2_spx_l2b-test.fits');
+    assert.equal(body.frames[0].band, 'D2');
+    assert.equal(res.headers.get('cache-control'), 'no-cache');
+    // Asked once the SIA had failed, its three asks done.
+    assert.equal(tapHits.get('spherex_dr1 113.5'), 1);
+    assert.equal(hits.get('spherex_dr1 113.5'), 3);
+  });
 });
 
 /* ------------------------------------------------- the memory the cache keeps */
@@ -525,7 +581,7 @@ describe('the in-memory cache under a byte ceiling', () => {
     await mkdir(cacheDir, { recursive: true });
     const proc = spawn(process.execPath, ['server.js'], {
       cwd: fileURLToPath(new URL('..', import.meta.url)),
-      env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', MUNINN_CACHE_DIR: cacheDir, MUNINN_MEMORY_MAX_BYTES: '10' },
+      env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', MUNINN_CACHE_DIR: cacheDir, MUNINN_MEMORY_MAX_BYTES: '10', MUNINN_INDEX_DIR: NO_INDEX },
       stdio: ['ignore', 'pipe', 'inherit'],
     });
     try {
@@ -544,5 +600,168 @@ describe('the in-memory cache under a byte ceiling', () => {
       proc.kill();
       await rm(cacheDir, { recursive: true, force: true });
     }
+  });
+});
+
+/** A 3.5° square frame centred at (ra, dec), as ObsCore writes a footprint. */
+function square(ra, dec, half = 1.75) {
+  const w = half / Math.cos((dec * Math.PI) / 180);
+  return `POLYGON ICRS ${ra - w} ${dec - half} ${ra + w} ${dec - half} ${ra + w} ${dec + half} ${ra - w} ${dec + half} ${ra - w} ${dec - half}`;
+}
+
+const OBSCORE_FIELDS = ['obs_id', 'obs_collection', 'energy_bandpassname', 'em_min', 'em_max', 't_min', 't_exptime', 's_ra', 's_dec', 's_region'];
+
+function obscoreRow(obsId, collection, ra, dec, mjd = 60900) {
+  return {
+    obs_id: obsId, obs_collection: collection, energy_bandpassname: 'SPHEREx-D2', em_min: '1.1033e-06', em_max: '1.6499e-06',
+    t_min: String(mjd), t_exptime: '113.5826', s_ra: String(ra), s_dec: String(dec), s_region: square(ra, dec),
+  };
+}
+
+const obscoreCsv = (rows) => [OBSCORE_FIELDS.join(','), ...rows.map((r) => OBSCORE_FIELDS.map((f) => r[f]).join(','))].join('\n');
+
+describe('frame search with an own frame index', () => {
+  const INDEX_PORT = PORT + 3;
+  const INDEX_BASE = `http://127.0.0.1:${INDEX_PORT}`;
+  const indexDir = join(tmpdir(), `muninn-index-test-${process.pid}`);
+  const cacheDir = join(tmpdir(), `muninn-index-cache-${process.pid}`);
+  const BUILT = '2026-11-14T10:00:00.000Z';
+  /** How the fake SIA answers, by ra: { status, delay }. */
+  const plan = new Map();
+  const hits = new Map();
+  let tapAsked = 0;
+  let fake;
+  let relayed;
+
+  const votable = (collection, ra) => {
+    const fields = ['obs_id', 't_min', 'energy_bandpassname', 'access_url', 'dataproduct_subtype', 'calib_level', 'obs_collection', 's_ra', 's_dec'];
+    const rows = [0, 1, 2].map((i) => [`${collection}_${i}`, 60800 + i, 'SPHEREx-D2', `https://example.invalid/${collection}/${ra}/${i}.fits`, 'science', 2, collection, ra, 10]);
+    return '<?xml version="1.0"?><VOTABLE><RESOURCE type="results"><INFO name="QUERY_STATUS" value="OK"/><TABLE>'
+      + fields.map((f) => `<FIELD name="${f}" datatype="char"/>`).join('')
+      + `<DATA><TABLEDATA>${rows.map((r) => `<TR>${r.map((v) => `<TD>${v}</TD>`).join('')}</TR>`).join('')}`
+      + '</TABLEDATA></DATA></TABLE></RESOURCE></VOTABLE>';
+  };
+
+  /** Each field: one DR1 frame over it, one beside it, and one QR3 frame over it. */
+  async function writeIndex() {
+    const meta = { collections: COLLECTIONS, versions: ['l2b-test'] };
+    const cells = new Map();
+    for (const ra of [120.5, 131.5]) {
+      const tag = String(ra).replace('.', '');
+      const rows = [
+        obscoreRow(`2025W30_1A_${tag}_1`, 'spherex_dr1', ra + 1, 10.5),
+        obscoreRow(`2025W30_1A_${tag}_2`, 'spherex_dr1', ra + 3, 10, 60901),
+        obscoreRow(`2026W30_1A_${tag}_1`, 'spherex_qr3', ra - 1, 9, 61250),
+      ];
+      for (const row of rows) {
+        const stored = indexRowFromObscore(row, COLLECTIONS, 0);
+        const tile = tileOf(stored[ROW.ra], stored[ROW.dec]);
+        if (!cells.has(tile)) cells.set(tile, []);
+        cells.get(tile).push(stored);
+      }
+    }
+    for (const [tile, rows] of cells) {
+      const band = tile.split('-')[0];
+      await mkdir(join(indexDir, 'tiles', band), { recursive: true });
+      await writeFile(join(indexDir, 'tiles', band, `${tile}.json.gz`), gzipSync(JSON.stringify(rows)));
+    }
+    const counts = Object.fromEntries(COLLECTIONS.map((c) => [c, 1]));
+    await writeFile(join(indexDir, 'meta.json'), JSON.stringify({ ...meta, format: 1, builtAt: BUILT, reachDeg: 2.6, counts, rows: 6 }));
+  }
+
+  before(async () => {
+    await mkdir(cacheDir, { recursive: true });
+    await writeIndex();
+    fake = createServer((req, res) => {
+      const url = new URL(req.url, 'http://fake');
+      if (url.pathname.startsWith('/TAP')) { tapAsked += 1; res.writeHead(503); res.end(); return; }
+      const collection = url.searchParams.get('COLLECTION');
+      const ra = Number(url.searchParams.get('POS').split(' ')[1]);
+      hits.set(ra, (hits.get(ra) ?? 0) + 1);
+      const step = plan.get(ra) ?? { status: 200 };
+      setTimeout(() => {
+        if (res.destroyed) return;
+        if (step.status !== 200) { res.writeHead(step.status); res.end('Bad gateway'); return; }
+        res.writeHead(200, { 'content-type': 'text/xml' });
+        res.end(votable(collection, ra));
+      }, step.delay ?? 0);
+    });
+    await new Promise((resolve) => { fake.listen(0, '127.0.0.1', resolve); });
+    relayed = spawn(process.execPath, ['server.js'], {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      env: {
+        ...process.env,
+        PORT: String(INDEX_PORT),
+        HOST: '127.0.0.1',
+        MUNINN_SIA_URL: `http://127.0.0.1:${fake.address().port}/SIA`,
+        MUNINN_TAP_URL: `http://127.0.0.1:${fake.address().port}/TAP/sync`,
+        MUNINN_INDEX_DIR: indexDir,
+        MUNINN_CACHE_DIR: cacheDir,
+        MUNINN_RETRY_MS: '20,40',
+        MUNINN_ATTEMPT_MS: '5000',
+        MUNINN_RETRY_LATER_MS: '60000',
+        MUNINN_INDEX_AFTER_MS: '300',
+      },
+      stdio: ['ignore', 'pipe', 'inherit'],
+    });
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('index server did not start')), 10000);
+      relayed.stdout.on('data', (chunk) => {
+        if (String(chunk).includes(`:${INDEX_PORT}`)) { clearTimeout(timer); resolve(); }
+      });
+    });
+  });
+
+  after(async () => {
+    relayed?.kill();
+    fake?.closeAllConnections?.();
+    fake?.close();
+    await rm(cacheDir, { recursive: true, force: true });
+    await rm(indexDir, { recursive: true, force: true });
+  });
+
+  const search = async (ra, dec) => {
+    const res = await fetch(`${INDEX_BASE}/api/search?ra=${ra}&dec=${dec}`);
+    return { res, body: await res.json() };
+  };
+
+  test('search: with IRSA failing, the own index answers, by the footprint rule, and says of when', async () => {
+    plan.set(120.5, { status: 502 });
+    const { res, body } = await search(120.5, 10);
+    assert.equal(body.ok, true);
+    assert.equal(body.source, 'own-index');
+    assert.equal(body.indexDate, BUILT);
+    assert.deepEqual(body.fromIndex, COLLECTIONS);
+    assert.equal(body.partial, false);
+    assert.deepEqual(body.missing, []);
+    assert.deepEqual(body.frames.map((f) => f.obsId), ['2025W30_1A_1205_1', '2026W30_1A_1205_1']);
+    assert.deepEqual(body.frames.map((f) => f.collection), ['spherex_dr1', 'spherex_qr3']);
+    assert.equal(body.frames[1].url,
+      'https://irsa.ipac.caltech.edu/ibe/data/spherex/qr3/level2/2026W30_1A/l2b-test/2/level2_2026W30_1A_1205_1D2_spx_l2b-test.fits');
+    // Not kept by the browser: IRSA's own list is asked for again behind it.
+    assert.equal(res.headers.get('cache-control'), 'no-cache');
+    // With an own index, IRSA's slow TAP is not asked.
+    assert.equal(tapAsked, 0);
+  });
+
+  test('search: a slow IRSA is answered for by the own index, and its list is kept for the next ask', async () => {
+    plan.set(131.5, { status: 200, delay: 1200 });
+    const began = Date.now();
+    const first = await search(131.5, 10);
+    assert.ok(Date.now() - began < 1100, `took ${Date.now() - began} ms`);
+    assert.equal(first.body.source, 'own-index');
+    assert.equal(first.body.frames.length, 2);
+    await new Promise((r) => { setTimeout(r, 1500); });
+    const second = await search(131.5, 10);
+    assert.equal(second.body.source, 'irsa');
+    assert.equal(second.body.indexDate, undefined);
+    assert.equal(second.body.frames.length, 12);
+    assert.equal(hits.get(131.5), 4);
+  });
+
+  test('search: IRSA answering in time is answered with, the own index unused', async () => {
+    const { body } = await search(122.5, 10);
+    assert.equal(body.source, 'irsa');
+    assert.equal(body.frames.length, 12);
   });
 });

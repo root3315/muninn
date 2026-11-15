@@ -38,6 +38,10 @@ import { CATALOGUES, ROW_CAP, coneQuery, renameRow, mastGaiaRows } from './publi
 import { sbIdentUrl, parseSbIdent } from './public/js/sbident.js';
 import { smallBodyQuery, SBDB_TEXT, sbdbUrl, readSbdb, horizonsUrl, readHorizons } from './public/js/smallbody.js';
 import { archivesQuery, neossatQuery, neossatFilesQuery, readNeossat, ARCHIVE_RADIUS } from './public/js/archives.js';
+import {
+  ROW, searchIndex, footprintMeetsCone, frameFromIndexRow, indexRowFromObscore, spreadCap,
+  s3List, folderOf, folderVersions, versionIn,
+} from './public/js/frameindex.js';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
 const PUBLIC = join(ROOT, 'public');
@@ -49,6 +53,12 @@ const SIA = 'https://irsa.ipac.caltech.edu/SIA';
 /** Where the frame search asks. Only a test points it anywhere else. */
 const FRAME_SIA = process.env.MUNINN_SIA_URL || SIA;
 const IRSA_TAP = 'https://irsa.ipac.caltech.edu/TAP/sync';
+/** Where the frame search's second route, IRSA's ObsCore table over TAP, asks; "off" for none. */
+const FRAME_TAP = process.env.MUNINN_TAP_URL || IRSA_TAP;
+/** The public S3 mirror, read for the processing version that names a frame's file. */
+const S3_MIRROR = process.env.MUNINN_S3_URL || 'https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/';
+/** Muninn's own frame index (tools/build-frame-index.mjs), kept outside the app's folder in production. */
+const INDEX_DIR = process.env.MUNINN_INDEX_DIR || join(ROOT, '.index');
 const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 
 /** A duration from the environment, for the tests; the default otherwise. */
@@ -70,6 +80,15 @@ const SEARCH_KEEP_MS = 30 * DAY_MS;
 const SEARCH_RETRY_WAITS_MS = (process.env.MUNINN_RETRY_MS || '1000,3000').split(',').map(Number).filter(Number.isFinite);
 /** The longest one ask may take, so that a timed-out first ask leaves room for another. */
 const SEARCH_ATTEMPT_MS = envMs('MUNINN_ATTEMPT_MS', 100_000);
+/**
+ * How long the SIA may keep a visitor waiting before the own index answers in
+ * its place (the SIA keeps going behind, and its list is kept for the next
+ * ask), and, with no own index, before IRSA's TAP is asked as well.
+ */
+const INDEX_AFTER_MS = envMs('MUNINN_INDEX_AFTER_MS', 15_000);
+const TAP_AFTER_MS = envMs('MUNINN_TAP_AFTER_MS', 40_000);
+/** IRSA's ObsCore cone takes 35–50 s; past this it is not coming in time for the page. */
+const TAP_SEARCH_MS = envMs('MUNINN_TAP_SEARCH_MS', 100_000);
 /** A retry is not started with less than this left of the deadline. */
 const SEARCH_MIN_LEFT_MS = 5_000;
 /** Background refreshes at once (two fields of four collections), and the pause after one failed before the same list is asked about again. */
@@ -365,10 +384,171 @@ function refreshInBackground(collection, ra, dec, radius) {
     .finally(() => { refreshing -= 1; });
 }
 
+/* --------------------------------------------------------- own frame index */
+
+/**
+ * Every SPHEREx frame's centre, footprint, time and band, fetched from IRSA
+ * ahead of time by tools/build-frame-index.mjs and filed by 2° sky cell. When
+ * IRSA does not answer, a cone search is answered from it, with IRSA's own
+ * rule: a frame is listed when its footprint meets the circle.
+ */
+let ownIndex = null;
+const indexCells = new Map();
+/**
+ * Cells read are kept in memory up to a byte ceiling, as the answer cache
+ * is: a deep-field cell holds tens of thousands of frames, and the relay
+ * runs on a small box.
+ */
+const INDEX_CELLS_MAX_BYTES = envMs('MUNINN_INDEX_CACHE_BYTES', 32 * 1024 * 1024);
+let indexCellBytes = 0;
+const gunzipCell = promisify(gunzip);
+
+async function loadOwnIndex() {
+  try {
+    const meta = JSON.parse(await readFile(join(INDEX_DIR, 'meta.json'), 'utf8'));
+    if (meta.format !== 1 || !Array.isArray(meta.collections)) return;
+    // A rebuilt index replaces the cells read from the one before.
+    if (ownIndex?.meta.builtAt !== meta.builtAt) { indexCells.clear(); indexCellBytes = 0; }
+    ownIndex = { meta };
+  } catch {
+    /* no index here: the search has IRSA's routes only */
+  }
+}
+
+async function readCell(id) {
+  let cell = indexCells.get(id);
+  if (cell) {
+    indexCells.delete(id);
+  } else {
+    let text = '[]';
+    try {
+      text = String(await gunzipCell(await readFile(join(INDEX_DIR, 'tiles', id.split('-')[0], `${id}.json.gz`))));
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err;
+    }
+    // Parsed rows take a few times their JSON's length.
+    cell = { rows: JSON.parse(text), bytes: text.length * 3 };
+    indexCellBytes += cell.bytes;
+  }
+  indexCells.set(id, cell);
+  while (indexCellBytes > INDEX_CELLS_MAX_BYTES && indexCells.size > 1) {
+    const oldest = indexCells.keys().next().value;
+    indexCellBytes -= indexCells.get(oldest).bytes;
+    indexCells.delete(oldest);
+  }
+  return cell.rows;
+}
+
+const indexHolds = (collection) => (ownIndex?.meta.counts?.[collection] ?? 0) > 0;
+
+/** One collection's frames at a position, from the own index, capped as IRSA caps them. */
+async function indexAnswer(collection, ra, dec, radius) {
+  const frames = await searchIndex(readCell, ownIndex.meta, collection, ra, dec, radius);
+  const capped = spreadCap(frames, MAXREC);
+  return { frames: capped, truncated: capped.length < frames.length };
+}
+
+/* ------------------------------------------------- IRSA's TAP, second route */
+
+/** Week folder → its processing version on the S3 mirror, read once each. */
+const folderVersionsKnown = new Map();
+
+function versionsOf(folder) {
+  let pending = folderVersionsKnown.get(folder);
+  if (!pending) {
+    pending = folderVersions(folder, (prefix, opts) => s3List(prefix, { ...opts, base: S3_MIRROR, timeoutMs: 15_000 }));
+    pending.catch(() => folderVersionsKnown.delete(folder));
+    folderVersionsKnown.set(folder, pending);
+  }
+  return pending;
+}
+
+const OBSCORE_COLUMNS = 'obs_id,obs_collection,energy_bandpassname,em_min,em_max,t_min,t_exptime,s_ra,s_dec,s_region';
+/** The farthest a frame's corner lies from its centre (3.5° square frames), with a margin. */
+const FRAME_REACH_DEG = 2.6;
+
+/**
+ * One collection's frames from IRSA's ObsCore table: every frame centred
+ * within reach, then IRSA's footprint rule applied here. The table names a
+ * DataLink page, not the file, so the file's processing version is read from
+ * the S3 mirror's week folder.
+ */
+async function tapCollection(collection, ra, dec, radius) {
+  const reach = (ownIndex?.meta.reachDeg ?? FRAME_REACH_DEG) + radius;
+  const query = `SELECT ${OBSCORE_COLUMNS} FROM spherex.obscore WHERE obs_collection = '${collection}' `
+    + `AND CONTAINS(POINT('ICRS', s_ra, s_dec), CIRCLE('ICRS', ${ra}, ${dec}, ${reach.toFixed(4)})) = 1`;
+  const res = await fetch(FRAME_TAP, {
+    method: 'POST',
+    headers: { 'user-agent': 'Muninn/1.0 (NASA Space Apps 2026)' },
+    body: new URLSearchParams({ LANG: 'ADQL', FORMAT: 'csv', QUERY: query }),
+    signal: AbortSignal.timeout(TAP_SEARCH_MS),
+  });
+  const text = await res.text();
+  if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
+  if (text.trimStart().startsWith('<')) throw new Error(/QUERY_STATUS" value="ERROR">([^<]*)/.exec(text)?.[1]?.trim() || 'not a table');
+
+  const meta = { collections: COLLECTIONS };
+  const rows = parseCsv(text)
+    .map((row) => indexRowFromObscore(row, COLLECTIONS, -1))
+    .filter((row) => row && footprintMeetsCone(row[ROW.corners], ra, dec, radius));
+  const frames = [];
+  for (const row of rows) {
+    const version = versionIn(await versionsOf(folderOf(collection, row[ROW.obsId])), row[ROW.obsId], row[ROW.det]);
+    if (version) frames.push(frameFromIndexRow(row, meta, version));
+  }
+  const capped = spreadCap(frames, MAXREC);
+  const value = { frames: capped, truncated: capped.length < frames.length };
+  await writeCache(framesKey(collection, ra, dec, radius), value);
+  return value;
+}
+
+/* --------------------------------------------------------- the answer */
+
+/**
+ * The first of several routes to answer. A route is started when the one
+ * before it fails, or has kept the page waiting its `patience`; a route
+ * started never stops the ones before it, so the slower of two can still
+ * win. Fails, with every route's reason, only when all have failed.
+ */
+function firstAnswer(routes) {
+  return new Promise((resolve, reject) => {
+    const reasons = [];
+    let next = 0;
+    let running = 0;
+    let done = false;
+    let timer = null;
+    const startNext = () => {
+      clearTimeout(timer);
+      if (done) return;
+      if (next >= routes.length) {
+        if (!running) { done = true; reject(new Error(reasons.join('; '))); }
+        return;
+      }
+      const route = routes[next];
+      next += 1;
+      running += 1;
+      route.ask().then((value) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve({ source: route.name, value });
+      }, (err) => {
+        running -= 1;
+        reasons.push(route.name === 'irsa' ? err.message : `${route.name}: ${err.message}`);
+        startNext();
+      });
+      if (next < routes.length && Number.isFinite(route.patience)) timer = setTimeout(startNext, route.patience);
+    };
+    startNext();
+  });
+}
+
 /**
  * One collection's part of the answer: the kept list if there is one, however
- * old (refreshed behind the scenes once it is past its days), else IRSA's
- * answer, else the reason there is none.
+ * old (refreshed behind the scenes once it is past its days); else the first
+ * to answer of IRSA's SIA, the own index (when SIA fails or is slow) and
+ * IRSA's TAP (when there is no own index for the collection); else the
+ * reasons there is none.
  */
 async function collectionAnswer(collection, ra, dec, radius) {
   const kept = await readEntry(framesKey(collection, ra, dec, radius), SEARCH_KEEP_MS);
@@ -376,13 +556,24 @@ async function collectionAnswer(collection, ra, dec, radius) {
     const age = Date.now() - kept.at;
     const stale = age >= SEARCH_FRESH_MS;
     if (stale) refreshInBackground(collection, ra, dec, radius);
-    return { collection, ...kept.value, cached: true, staleMs: stale ? age : 0 };
+    return { collection, ...kept.value, cached: true, staleMs: stale ? age : 0, source: 'irsa' };
   }
+  const sia = fetchCollection(collection, ra, dec, radius).then(({ value }) => value);
+  // Whoever answers the page, a SIA that fails is asked again behind it.
+  sia.catch(() => retryInBackground(collection, ra, dec, radius));
+
+  const routes = [];
+  if (indexHolds(collection)) {
+    routes.push({ name: 'irsa', ask: () => sia, patience: INDEX_AFTER_MS });
+    routes.push({ name: 'own-index', ask: () => indexAnswer(collection, ra, dec, radius) });
+  } else {
+    routes.push({ name: 'irsa', ask: () => sia, patience: TAP_AFTER_MS });
+  }
+  if (FRAME_TAP !== 'off') routes.push({ name: 'irsa-tap', ask: () => tapCollection(collection, ra, dec, radius) });
   try {
-    const { value } = await fetchCollection(collection, ra, dec, radius);
-    return { collection, ...value, cached: false, staleMs: 0 };
+    const { source, value } = await firstAnswer(routes);
+    return { collection, ...value, cached: false, staleMs: 0, source };
   } catch (err) {
-    retryInBackground(collection, ra, dec, radius);
     return { collection, error: err.message };
   }
 }
@@ -439,8 +630,17 @@ async function lookup(ra, dec, radius, collections) {
     return { ok: false, error: warnings.join('; '), partial: answered.length > 0, missing, queried };
   }
   const staleMs = Math.max(0, ...answered.map((p) => p.staleMs));
+  // Said when any part did not come from IRSA's SIA: the own index (with the
+  // day it was built), or IRSA's TAP.
+  const sources = new Set(answered.map((p) => p.source));
+  const source = ['own-index', 'irsa-tap'].find((s) => sources.has(s)) ?? 'irsa';
   return {
     ok: true,
+    source,
+    ...(source === 'own-index' ? {
+      indexDate: ownIndex.meta.builtAt,
+      fromIndex: answered.filter((p) => p.source === 'own-index').map((p) => p.collection),
+    } : {}),
     cached: answered.every((p) => p.cached),
     frames,
     truncated: answered.some((p) => p.truncated),
@@ -611,6 +811,8 @@ const BAD_COLLECTIONS = { ok: false, error: `collections must be among ${COLLECT
 function searchHeaders(body) {
   if (!body.ok) return {};
   if (body.stale) return { 'x-muninn-stale-age': String(body.staleAgeS) };
+  // IRSA's own list is on its way behind an answer from the own index.
+  if (body.source === 'own-index') return {};
   return body.partial ? {} : KEEP_FRAME_LIST;
 }
 
@@ -1389,6 +1591,9 @@ const server = createServer(async (req, res) => {
 });
 
 await loadBakedFields();
+await loadOwnIndex();
+// A refreshed index is copied in beside a running relay: looked for again every ten minutes.
+setInterval(loadOwnIndex, 10 * 60 * 1000).unref();
 
 /**
  * Drop answers older than they are kept for. Every relay question is a
@@ -1456,4 +1661,7 @@ server.listen(PORT, HOST, () => {
   console.log(baked.length
     ? `  ${baked.length} pre-resolved fields loaded: ${baked.map((b) => b.key).join(', ')}\n`
     : `  No pre-resolved fields — run "npm run bake" to make the presets open instantly.\n`);
+  console.log(ownIndex
+    ? `  Own frame index of ${ownIndex.meta.builtAt.slice(0, 10)}: ${ownIndex.meta.rows} frames, in ${INDEX_DIR}\n`
+    : `  No own frame index in ${INDEX_DIR}: with IRSA down, only kept lists are served.\n`);
 });
