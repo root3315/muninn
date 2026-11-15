@@ -27,20 +27,26 @@
 const KEPT = 'muninn.vrSound';
 /** A modest level: the room's own quiet, not a soundtrack. */
 const DEFAULT_VOLUME = 0.35;
+/** After this long with nothing done, the room tone rests. */
+const ROOM_REST_MS = 50000;
 /** The partials of a small bell or glass, as ratios of the first. */
 const BELL = [1, 2.76, 5.4];
 
 /**
  * A star's tone from its colour: B−V to a temperature (Ballesteros 2012),
  * the temperature to a pitch on a log scale, 3000 K at 196 Hz to 30 000 K at
- * 784 Hz (two octaves). A sonification, not a sound of the star.
+ * 1568 Hz (three octaves). A sonification, not a sound of the star.
  */
+export const TONE_RANGE = { kLo: 3000, kHi: 30000, hzLo: 196, hzHi: 1568 };
 export function toneOfColour(bv) {
-  if (!Number.isFinite(bv)) return 330;
+  if (!Number.isFinite(bv)) return null;
   const t = 4600 * (1 / (0.92 * bv + 1.7) + 1 / (0.92 * bv + 0.62));
   const k = Math.max(0, Math.min(1, Math.log(Math.max(3000, Math.min(30000, t)) / 3000) / Math.log(10)));
-  return 196 * 2 ** (2 * k);
+  return 196 * 2 ** (3 * k);
 }
+
+/** A second honest mapping: brighter stars a little louder, ×0.5 to ×1.4 from V 6 to V −1. */
+export const loudnessOfMag = (mag) => (Number.isFinite(mag) ? Math.max(0.5, Math.min(1.4, 1.25 - 0.13 * mag)) : 1);
 
 /** Within ±3 %, so a repeat never sounds quite the same. */
 const wobble = (x) => x * (1 + (Math.random() * 2 - 1) * 0.03);
@@ -70,11 +76,14 @@ function buildEngine(ctx, gain) {
 
   // Noise, made once: white, and pink (Kellet's filter) for air.
   const white = ctx.createBuffer(1, sr * 2, sr);
-  const pink = ctx.createBuffer(1, sr * 4, sr);
   {
     const w = white.getChannelData(0);
     for (let i = 0; i < w.length; i++) w[i] = Math.random() * 2 - 1;
-    const p = pink.getChannelData(0);
+  }
+  /** Pink noise (Kellet's filter), `seconds` long. */
+  const pinkOf = (seconds) => {
+    const buf = ctx.createBuffer(1, Math.round(sr * seconds), sr);
+    const p = buf.getChannelData(0);
     let b0 = 0; let b1 = 0; let b2 = 0; let b3 = 0; let b4 = 0; let b5 = 0; let b6 = 0;
     for (let i = 0; i < p.length; i++) {
       const x = Math.random() * 2 - 1;
@@ -83,8 +92,16 @@ function buildEngine(ctx, gain) {
       p[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + x * 0.5362) * 0.11;
       b6 = x * 0.115926;
     }
-  }
+    return buf;
+  };
+  // Two different lengths, so the two sides of the air never line up.
+  const pink = pinkOf(8);
+  const pinkB = pinkOf(9.3);
   const loop = (buffer) => { const s = ctx.createBufferSource(); s.buffer = buffer; s.loop = true; s.start(); return s; };
+  /** When a voice last sounded, in the context's time: for falling silent when nothing does. */
+  const last = { sound: 0 };
+  /** After an exponential fall, a true zero, so nothing lingers far under the floor. */
+  const zeroAt = (param, t) => param.setValueAtTime(0, t + 0.01);
 
   // One reverb for everything: a stereo impulse of decaying noise, about 1.2 s, darker as it fades.
   const reverb = ctx.createConvolver();
@@ -136,6 +153,8 @@ function buildEngine(ctx, gain) {
     v.env.gain.linearRampToValueAtTime(0.0001, t + 0.002);
     v.env.gain.linearRampToValueAtTime(wobble(level), t + 0.0035);
     v.env.gain.exponentialRampToValueAtTime(0.0001, t + 0.0035 + ms / 1000);
+    zeroAt(v.env.gain, t + 0.0035 + ms / 1000);
+    last.sound = t + ms / 1000;
   }
 
   // Bells: three partials each, decaying at their own pace.
@@ -167,17 +186,22 @@ function buildEngine(ctx, gain) {
       p.osc.frequency.setValueAtTime(f * BELL[k] * (1 + (k ? (Math.random() - 0.5) * 0.004 : 0)), t + 0.004);
       p.g.gain.linearRampToValueAtTime(l / (1 + k * 1.6), t + 0.012);
       p.g.gain.exponentialRampToValueAtTime(0.0001, t + 0.012 + decay / (1 + k * 0.9));
+      zeroAt(p.g.gain, t + 0.012 + decay / (1 + k * 0.9));
     });
+    last.sound = t + decay;
   }
 
   // Air: pink noise with body, through two wandering bands panned apart.
   let air;
   {
-    const src = loop(pink);
-    const shelf = ctx.createBiquadFilter(); shelf.type = 'lowshelf'; shelf.frequency.value = 220; shelf.gain.value = 6;
     const level = ctx.createGain(); level.gain.value = 0;
-    src.connect(shelf);
-    const bands = [-0.55, 0.55].map((pan, k) => {
+    // Its own switch and level under the master: on, 6 dB down, by default.
+    const own = ctx.createGain(); own.gain.value = 0.5;
+    const bands = [-0.8, 0.8].map((pan, k) => {
+      // A noise of its own for each side, so the two are not the same air.
+      const src = loop(k ? pinkB : pink);
+      const shelf = ctx.createBiquadFilter(); shelf.type = 'lowshelf'; shelf.frequency.value = 220; shelf.gain.value = 6;
+      src.connect(shelf);
       const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 0.8; bp.frequency.value = 400;
       // A slow random-feeling drift of the centre: two slow sines of unrelated rates.
       for (const [hz, depth] of [[0.11 + k * 0.03, 70], [0.047 + k * 0.021, 50]]) {
@@ -192,16 +216,21 @@ function buildEngine(ctx, gain) {
       if (p) bp.connect(p).connect(level); else bp.connect(level);
       return bp;
     });
-    out(level, 0.12);
-    air = { level, bands, target: 0 };
+    level.connect(own);
+    out(own, 0.12);
+    air = { level, own, bands, target: 0 };
   }
+  /** The level of the air for a speed, m/s: a low ceiling, silent at rest. */
+  const airLevel = (s) => (s < 0.05 ? 0 : Math.min(0.25, 0.04 + s * 0.05));
   function airTo(t, mps, tau = 0.15) {
     const s = Math.max(0, mps);
-    const g = s < 0.05 ? 0 : Math.min(0.5, 0.06 + s * 0.07);
+    const g = airLevel(s);
     hold(air.level.gain, t);
     air.level.gain.setTargetAtTime(g, t, tau);
-    air.bands.forEach((bp, k) => { hold(bp.frequency, t); bp.frequency.setTargetAtTime((300 + Math.min(2400, s * 300)) * (k ? 1.18 : 0.86), t, tau); });
+    // The centre stays low (to about 1.2 kHz): a bright rushing is what sickens.
+    air.bands.forEach((bp, k) => { hold(bp.frequency, t); bp.frequency.setTargetAtTime((300 + Math.min(900, s * 300)) * (k ? 1.18 : 0.86), t, tau); });
     air.target = g;
+    if (g > 0) last.sound = t + 1;
   }
 
   // Swishes and dives: pink noise through a sweeping band.
@@ -225,14 +254,18 @@ function buildEngine(ctx, gain) {
     v.env.gain.linearRampToValueAtTime(0.0001, t + 0.004);
     v.env.gain.linearRampToValueAtTime(level, t + (ms / 1000) * 0.4);
     v.env.gain.exponentialRampToValueAtTime(0.0001, t + ms / 1000);
+    zeroAt(v.env.gain, t + ms / 1000);
+    last.sound = t + ms / 1000;
   }
 
   // The room: a soft pad, a few low sines a hair apart, each swelling slowly.
   let room;
   {
     const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 420; lp.Q.value = 0.3;
+    // Above the floor's drone: nothing under 80 Hz.
+    const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 80; hp.Q.value = 0.5;
     const level = ctx.createGain(); level.gain.value = 0;
-    const base = [55, 82.4, 110.2, 164.9];
+    const base = [110, 165, 220, 330];
     const oscs = base.map((f, k) => {
       const o = ctx.createOscillator(); o.frequency.value = f;
       const g = ctx.createGain(); g.gain.value = 0.5 / (1 + k * 0.6);
@@ -246,15 +279,22 @@ function buildEngine(ctx, gain) {
       o.start(); lfo.start(); drift.start();
       return { o, f };
     });
-    lp.connect(level);
+    lp.connect(hp).connect(level);
     out(level, 0.35);
-    room = { level, oscs };
+    room = { level, oscs, lp, target: 0 };
   }
-  function roomTo(t, which) {
-    const k = which === 'depth' ? 0.75 : 1;
-    for (const r of room.oscs) { hold(r.o.frequency, t); r.o.frequency.setTargetAtTime(r.f * k, t, 1.2); }
+  /** The room for a view: the sky's, the depth's darker (its colour, not its pitch), or none; `tau` its fade. */
+  function roomTo(t, which, tau = 1.5) {
+    hold(room.lp.frequency, t);
+    room.lp.frequency.setTargetAtTime(which === 'depth' ? 250 : 420, t, 1.2);
+    room.target = which === 'sky' || which === 'depth' ? 0.013 : 0;
     hold(room.level.gain, t);
-    room.level.gain.setTargetAtTime(which === 'sky' || which === 'depth' ? 0.05 : 0, t, 1.5);
+    room.level.gain.setTargetAtTime(room.target, t, tau);
+  }
+  /** The room falls silent after a while with nothing done, and comes back on the next action. */
+  function roomRest(t, on) {
+    hold(room.level.gain, t);
+    room.level.gain.setTargetAtTime(on ? room.target : 0, t, on ? 1.2 : 4);
   }
 
   // Spatial voices: placed in the room, HRTF where there is one, equal power where not.
@@ -282,26 +322,64 @@ function buildEngine(ctx, gain) {
   let star;
   {
     const v = placed(0.4);
-    const a = ctx.createOscillator(); const b = ctx.createOscillator();
-    const gb = ctx.createGain(); gb.gain.value = 0.28;
+    // The tone: the fundamental, its octave, and a little of the 3rd and 5th
+    // harmonics (−24, −30 dB), which the ear needs to place it.
+    const tone = ctx.createGain(); tone.gain.value = 0;
+    const partials = [[1, 1], [2, 0.28], [3, 0.063], [5, 0.032]].map(([k, g]) => {
+      const o = ctx.createOscillator(); const gg = ctx.createGain(); gg.gain.value = g;
+      o.connect(gg).connect(tone); o.start();
+      return { o, k };
+    });
     const trem = ctx.createGain(); trem.gain.value = 0.85;
     const lfo = ctx.createOscillator(); lfo.frequency.value = 0.6;
     const depth = ctx.createGain(); depth.gain.value = 0.15;
     lfo.connect(depth).connect(trem.gain);
-    a.connect(trem); b.connect(gb).connect(trem);
+    lfo.start();
+    tone.connect(trem);
+    // Where a thing has no colour: a soft rustle at a middle pitch instead of a tone.
+    const rustle = ctx.createGain(); rustle.gain.value = 0;
+    {
+      const src = loop(pink);
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 330; bp.Q.value = 8;
+      src.connect(bp).connect(rustle);
+    }
+    rustle.connect(trem);
+    // A short breath of air on the attack, 2–4 kHz, 20 dB under the tone.
+    const breath = ctx.createGain(); breath.gain.value = 0;
+    {
+      const src = loop(pinkB);
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 3000; bp.Q.value = 1.2;
+      src.connect(bp).connect(breath);
+    }
+    breath.connect(v.g);
     trem.connect(v.g);
-    a.start(); b.start(); lfo.start();
-    star = { ...v, a, b };
+    v.g.gain.value = 1;
+    star = { ...v, tone, partials, rustle, breath };
   }
-  function starOn(t, freq, pos) {
+  /** A thing's tone from its place: `freq` Hz, or a rustle when null; `loud` its brightness (×0.5–1.4). */
+  function starOn(t, freq, pos, loud = 1) {
     place(star, pos, t);
-    hold(star.a.frequency, t); hold(star.b.frequency, t);
-    star.a.frequency.setTargetAtTime(freq, t, 0.04);
-    star.b.frequency.setTargetAtTime(freq * 2, t, 0.04);
-    hold(star.g.gain, t);
-    star.g.gain.setTargetAtTime(0.05, t, 0.3);
+    const peak = 0.05 * loud;
+    for (const p of star.partials) { hold(p.o.frequency, t); p.o.frequency.setTargetAtTime((freq ?? 330) * p.k, t, 0.02); }
+    const on = freq == null ? star.rustle : star.tone;
+    const off = freq == null ? star.tone : star.rustle;
+    hold(off.gain, t); off.gain.setTargetAtTime(0, t, 0.05);
+    // A ramp would start from the last event, maybe long before: a short approach from now instead.
+    hold(on.gain, t);
+    on.gain.setTargetAtTime(freq == null ? peak * 3 : peak, t, 0.015);
+    // A held note, then a quiet tail: never an endless drone.
+    on.gain.setTargetAtTime(freq == null ? peak * 0.6 : 0.012 * loud, t + 2.5, 1.5);
+    star.breath.gain.setValueAtTime(0, t);
+    star.breath.gain.linearRampToValueAtTime(peak * 0.1 * 4, t + 0.008);
+    star.breath.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+    zeroAt(star.breath.gain, t + 0.05);
+    star.on = true;
+    last.sound = t + 4;
   }
-  function starOff(t) { hold(star.g.gain, t); star.g.gain.setTargetAtTime(0, t, 0.45); }
+  function starOff(t) {
+    for (const g of [star.tone.gain, star.rustle.gain]) { hold(g, t); g.setTargetAtTime(0, t, 0.45); }
+    star.on = false;
+  }
 
   // A known body's tick, from its place: a short bright knock.
   let knock;
@@ -313,56 +391,64 @@ function buildEngine(ctx, gain) {
     knock = v;
   }
   function knockAt(t, pos) {
+    // Placed first, sounded 50 ms later: the panner has moved before the knock.
     place(knock, pos, t);
+    const at = t + 0.05;
     hold(knock.g.gain, t);
-    knock.g.gain.linearRampToValueAtTime(0.0001, t + 0.003);
-    knock.g.gain.linearRampToValueAtTime(wobble(0.35), t + 0.005);
-    knock.g.gain.exponentialRampToValueAtTime(0.0001, t + 0.06);
+    knock.g.gain.linearRampToValueAtTime(0.0001, at);
+    knock.g.gain.linearRampToValueAtTime(wobble(0.35), at + 0.002);
+    knock.g.gain.exponentialRampToValueAtTime(0.0001, at + 0.06);
+    zeroAt(knock.g.gain, at + 0.06);
+    last.sound = at + 0.06;
   }
 
   // The clock: a wooden tick, a noise burst through a resonant band.
   let wood;
   {
     const src = loop(white);
-    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 14; bp.frequency.value = 1400;
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = 6; bp.frequency.value = 1400;
     const env = ctx.createGain(); env.gain.value = 0;
     src.connect(bp).connect(env);
     out(env, 0.1);
-    wood = { bp, env };
+    wood = { bp, env, odd: false };
   }
   function woodAt(t, dir, level = 0.5) {
-    wood.bp.frequency.setValueAtTime(wobble(dir > 0 ? 1560 : 1260), t);
+    // Tick and tock: the pitch alternates by ±4 %.
+    wood.odd = !wood.odd;
+    wood.bp.frequency.setValueAtTime(wobble(dir > 0 ? 1560 : 1260) * (wood.odd ? 1.04 : 0.96), t);
     wood.env.gain.setValueAtTime(0.0001, t);
     wood.env.gain.linearRampToValueAtTime(wobble(level), t + 0.002);
     wood.env.gain.exponentialRampToValueAtTime(0.0001, t + 0.035);
+    zeroAt(wood.env.gain, t + 0.035);
+    last.sound = t + 0.04;
   }
 
   return {
     ctx, master, air, star,
     voices: clicks.length + bells.length + sweeps.length + 6,
     panning: star.panner.panningModel,
-    click: (t) => click(t, { hiHz: 3600, loHz: 950, body: 0.45, level: 0.22, ms: 22 }),
-    tick: (t) => click(t, { hiHz: 6200, loHz: 2200, body: 0.2, level: 0.09, ms: 9 }),
+    click: (t) => click(t, { hiHz: 3600, loHz: 950, body: 0.45, level: 0.55, ms: 22 }),
+    tick: (t, k = 1) => click(t, { hiHz: 6200, loHz: 2200, body: 0.2, level: 0.25 * k, ms: 9 }),
     open: (t) => bell(t, 1046, 0.06, 0.9),
     close: (t) => bell(t, 784, 0.05, 0.7),
-    mark: (t) => { click(t, { hiHz: 2800, loHz: 700, body: 0.6, level: 0.2, ms: 26 }); },
+    mark: (t) => { click(t, { hiHz: 2800, loHz: 700, body: 0.6, level: 0.5, ms: 26 }); },
     verdict(t, kind) {
       if (kind === 'moving' || kind === 'transient') { bell(t, 784, 0.05, 0.8); bell(t + 0.12, 1175, 0.05, 1.0); } else if (kind === 'fixed' || kind === 'saturated' || kind === 'intermittent') bell(t, 659, 0.055, 1.1);
       else bell(t, 392, 0.045, 0.6);
     },
     swish: (t) => sweep(t, 2000, 450, 0.35, 280),
     dive: (t) => sweep(t, 260, 2400, 0.4, 700),
-    airTo, roomTo, starOn, starOff, knockAt, woodAt,
-    step: (t, dir) => woodAt(t, dir, 0.35),
+    airTo, airLevel, roomTo, roomRest, starOn, starOff, knockAt, woodAt, last, room,
+    step: (t, dir) => woodAt(t, dir, 0.8),
   };
 }
 
 function readKept() {
   try {
     const k = JSON.parse(localStorage.getItem(KEPT) ?? 'null');
-    if (k && typeof k.on === 'boolean' && Number.isFinite(k.volume)) return k;
+    if (k && typeof k.on === 'boolean' && Number.isFinite(k.volume)) return { air: true, ...k };
   } catch { /* nothing kept */ }
-  return { on: true, volume: DEFAULT_VOLUME };
+  return { on: true, volume: DEFAULT_VOLUME, air: true };
 }
 
 /** The page's one sound: a field or a session entered again reuses it, never a second context. */
@@ -392,13 +478,13 @@ function audition(e, t0) {
   e.airTo(f, 0.5, 0.25); e.airTo(f + 0.4, 3, 0.3); e.airTo(f + 1.4, 5, 0.3); e.airTo(f + 2.4, 0, 0.35);
   // A blue star from the left, a red one from the right.
   const s = at(3.6);
-  e.starOn(s, toneOfColour(-0.1), { x: -2, y: 1.6, z: -1.5 }); e.starOff(s + 1.6);
-  e.starOn(s + 2.2, toneOfColour(1.6), { x: 2, y: 1.6, z: -1.5 }); e.starOff(s + 3.8);
+  e.starOn(s, toneOfColour(-0.1), { x: -2, y: 1.6, z: -1.5 }, loudnessOfMag(1)); e.starOff(s + 1.6);
+  e.starOn(s + 2.2, toneOfColour(1.6), { x: 2, y: 1.6, z: -1.5 }, loudnessOfMag(3)); e.starOff(s + 3.8);
   e.knockAt(s + 4.4, front); e.knockAt(s + 4.9, { x: 1.5, y: 1.6, z: -1 });
   // The clock forward, then back, then a step each way.
   const c = at(5.6);
   for (let k = 0; k < 8; k++) e.woodAt(c + k * 0.25, 1);
-  for (let k = 0; k < 12; k++) e.woodAt(c + 2.2 + k * 0.09, -1);
+  for (let k = 0; k < 12; k++) e.woodAt(c + 2.2 + k * 0.09, -1, 0.3);
   e.step(c + 3.6, 1); e.step(c + 3.9, -1);
   // The room: the sky's tone, then the depth's, then gone.
   const r = at(4.4);
@@ -434,38 +520,72 @@ export function createSound() {
   const now = () => e.ctx.currentTime;
   const save = () => { try { localStorage.setItem(KEPT, JSON.stringify(kept)); } catch { /* not kept */ } };
   const ramp = (param, value, tau) => { const t = now(); hold(param, t); param.setTargetAtTime(value, t, tau); };
-  const live = () => e && kept.on;
+  /** When something was last done, page time: the room rests after a while of nothing. */
+  let lastAction = performance.now();
+  let resting = false;
+  /** Asleep because nothing was sounding: woken by the next sound. */
+  let idle = false;
+  /** When the last tick sounded: ticks come at most every 70 ms, softer when fast. */
+  let lastTick = -1;
+  const wakeCtx = () => { if (e && e.ctx.state === 'suspended') e.ctx.resume().catch(() => {}); };
+  /** Something was done: the room comes back if it was resting, a sleeping context wakes. */
+  const touch = () => {
+    lastAction = performance.now();
+    if (idle) { idle = false; wakeCtx(); }
+    if (resting && e) { resting = false; e.roomRest(now(), true); }
+  };
+  /** An event may sound: something done, and the sound on. */
+  const ready = () => { if (!e) return false; touch(); return kept.on; };
 
   const api = {
     /** On a gesture (the session's start, a first press or key): the context made, or woken. */
     start() {
       if (!e) {
         try { e = buildEngine(new (window.AudioContext || window.webkitAudioContext)(), level()); } catch { e = null; return; }
+        if (!kept.air) e.air.own.gain.value = 0;
       }
-      if (e.ctx.state === 'suspended') e.ctx.resume();
+      api.resume();
     },
-    suspend() { if (e && e.ctx.state === 'running') e.ctx.suspend(); },
-    resume() { if (e && e.ctx.state === 'suspended') e.ctx.resume(); },
-    /** Every voice let down and the context asleep: leaving VR, or the page going away. */
+    suspend() { if (e && e.ctx.state === 'running') e.ctx.suspend().catch(() => {}); },
+    /** Awake again, the level brought back in smoothly. */
+    resume() {
+      if (!e) return;
+      idle = false;
+      wakeCtx();
+      ramp(e.master.gain, level(), 0.05);
+      touch();
+    },
+    /** Every voice let down, the master faded, then asleep: leaving VR, the system menu, the page going away. */
     quiet() {
       if (!e) return;
+      const t = now();
+      hold(e.master.gain, t);
+      e.master.gain.setTargetAtTime(0, t, 0.03);
       api.motion(0);
       clockState.playing = false;
-      e.starOff(now());
+      e.starOff(t);
       view = null;
-      e.roomTo(now(), null);
-      setTimeout(() => api.suspend(), 300);
+      e.roomTo(t, null);
+      setTimeout(() => api.suspend(), 200);
     },
     get started() { return Boolean(e); },
     get running() { return e?.ctx.state === 'running'; },
     get enabled() { return kept.on; },
     get volume() { return kept.volume; },
+    /** The flight's own sound, apart from the rest (some find rushing air unsettling). */
+    get air() { return kept.air; },
+    setAir(on) { kept.air = on; save(); if (e) ramp(e.air.own.gain, on ? 0.5 : 0, 0.1); },
     setEnabled(on) { kept.on = on; save(); if (e) ramp(e.master.gain, level(), 0.05); },
     setVolume(v) { kept.volume = Math.max(0, Math.min(1, v)); save(); if (e) ramp(e.master.gain, level(), 0.05); },
 
     /** The listener at the head: position and the way it faces, every frame, no allocation. */
     listen(pos, quat) {
       if (!e) return;
+      // A minute of nothing: the room fades out (τ 4 s) until the next action.
+      if (!resting && e.room.target > 0 && performance.now() - lastAction > ROOM_REST_MS) { resting = true; e.roomRest(now(), false); }
+      // Nothing sounding for five seconds and no room: the context sleeps until the next sound.
+      if (!idle && e.ctx.state === 'running' && (e.room.target === 0 || resting) && e.air.target === 0 && !e.star.on
+        && now() - e.last.sound > 5) { idle = true; e.ctx.suspend().catch(() => {}); }
       const l = e.ctx.listener;
       const { x, y, z, w } = quat;
       const fx = -(2 * (x * z + w * y));
@@ -488,38 +608,51 @@ export function createSound() {
     motion(mps) {
       if (!e) return;
       const s = Number.isFinite(mps) ? Math.max(0, mps) : 0;
-      const g = s < 0.05 ? 0 : Math.min(0.5, 0.06 + s * 0.07);
-      if (Math.abs(g - e.air.target) < 0.008) return;
+      const g = e.airLevel(s);
+      if (Math.abs(g - e.air.target) < 0.004) return;
+      if (g > 0) touch();
       e.airTo(now(), s);
     },
     /** The room's tone for a view: in the sky, deeper in the depth view, gone otherwise. */
     ambience(next) {
       if (!e || next === view) return;
       view = next;
+      touch();
       e.roomTo(now(), next);
     },
-    click() { if (live()) e.click(now()); },
-    tick() { if (live()) e.tick(now()); },
-    open() { if (live()) e.open(now()); },
-    close() { if (live()) e.close(now()); },
-    mark() { if (live()) e.mark(now()); },
-    verdict(kind) { if (live()) e.verdict(now(), kind); },
-    swish() { if (live()) e.swish(now()); },
-    dive() { if (live()) e.dive(now()); },
-    /** A faint tone from where the chosen thing is, pitched by its colour (a plain middle tone without one). */
-    tone(pos, bv = null) { if (live()) e.starOn(now(), toneOfColour(bv), pos); },
+    click() { if (ready()) e.click(now()); },
+    /** A snap: at most one every 70 ms, softer when they come fast. */
+    tick() {
+      if (!ready()) return;
+      const t = now();
+      if (t - lastTick < 0.07) return;
+      e.tick(t, t - lastTick < 0.2 ? 0.6 : 1);
+      lastTick = t;
+    },
+    open() { if (ready()) e.open(now()); },
+    close() { if (ready()) e.close(now()); },
+    mark() { if (ready()) e.mark(now()); },
+    verdict(kind) { if (ready()) e.verdict(now(), kind); },
+    swish() { if (ready()) e.swish(now()); },
+    dive() { if (ready()) e.dive(now()); },
+    /**
+     * A faint tone from where the chosen thing is: pitched by its colour (B−V),
+     * a little louder for a brighter star (V); without a colour, a soft rustle.
+     */
+    tone(pos, bv = null, mag = null) { if (ready()) e.starOn(now(), toneOfColour(bv), pos, loudnessOfMag(mag)); },
     toneOff() { if (e) e.starOff(now()); },
-    tick3d(pos) { if (live()) e.knockAt(now(), pos); },
-    step(dir) { if (live()) e.step(now(), dir); },
+    tick3d(pos) { if (ready()) e.knockAt(now(), pos); },
+    step(dir) { if (ready()) e.step(now(), dir); },
     /** While the clock plays: a soft wooden tick, faster at ×10, a touch higher toward the future. */
     clock(playing, fast, dir) {
       if (!e) return;
       clockState.playing = playing && kept.on;
       if (!clockState.playing) return;
+      touch();
       const t = now();
       if (clockState.next < t) clockState.next = t;
       while (clockState.next < t + 0.1) {
-        e.woodAt(clockState.next, dir);
+        e.woodAt(clockState.next, dir, fast ? 0.3 : 0.5);
         clockState.next += fast ? 0.09 : 0.25;
       }
     },
