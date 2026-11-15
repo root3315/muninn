@@ -20,7 +20,7 @@
  */
 
 import * as THREE from '../vendor/three.module.js';
-import { t, fmt } from '../i18n.js';
+import { t, fmt, fmtDate } from '../i18n.js';
 import { seasonChunks, chunkAt, forStack } from '../stack.js';
 import { searchFrames, askMissingFrames, groupVisits, bandsPresent, toS3, skybotCone, knownBodies, surveySources, findHeldVisit } from '../catalog.js';
 import { planetHostNear, systemUrl } from '../exovision.js';
@@ -964,7 +964,7 @@ export function openFieldVR(target, env) {
       const reading = st.status === 'searching' || st.status === 'reading';
       // Where the list of frames came from, and what of it is still missing.
       const notes = [];
-      if (st.list.source === 'own-index') notes.push(tv('vr.ownIndex', { date: st.list.indexDate ?? '—' }));
+      if (st.list.source === 'own-index') notes.push(tv('vr.ownIndex', { date: fmtDate(st.list.indexDate) }));
       if (st.list.partial && st.entries.length) {
         const later = st.list.retryAt ? Math.max(1, Math.ceil((st.list.retryAt - performance.now()) / 1000)) : null;
         notes.push(`${tv('vr.listPartial')}${later ? ` ${tv('vr.retryIn', { s: later })}` : ''}`);
@@ -1193,7 +1193,8 @@ export function openFieldVR(target, env) {
   function noteList(answer) {
     st.list.partial = Boolean(answer.partial);
     st.list.missing = answer.missing ?? [];
-    st.list.source = answer.source ?? st.list.source;
+    // Frames from the own index stay in the list when a later part comes from IRSA: so does the note.
+    if (st.list.source !== 'own-index') st.list.source = answer.source ?? st.list.source;
     st.list.indexDate = answer.indexDate ?? st.list.indexDate;
     if (st.list.partial) listRetryLater();
     else { clearTimeout(st.list.timer); st.list.retryAt = null; }

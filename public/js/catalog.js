@@ -325,7 +325,8 @@ async function askFrames({ ra, dec, radius }, signal) {
 
   const body = await res.json();
   if (!body.ok) throw new UpstreamError(body.error ?? 'search failed');
-  return { ...readPartial(body), truncated: Boolean(body.truncated), source: 'live', ownIndexDate: ownIndexDate(body) };
+  // The relay's own word on where the list came from (its own index, IRSA's TAP) wins over "live".
+  return { source: 'live', ...readPartial(body), truncated: Boolean(body.truncated), ownIndexDate: ownIndexDate(body) };
 }
 
 /**
