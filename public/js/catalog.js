@@ -325,7 +325,16 @@ async function askFrames({ ra, dec, radius }, signal) {
 
   const body = await res.json();
   if (!body.ok) throw new UpstreamError(body.error ?? 'search failed');
-  return { ...readPartial(body), truncated: Boolean(body.truncated), source: 'live' };
+  // The relay's own word on where the list came from (its own index, IRSA's TAP) wins over "live".
+  return { source: 'live', ...readPartial(body), truncated: Boolean(body.truncated), ownIndexDate: ownIndexDate(body) };
+}
+
+/**
+ * When the relay answered from Muninn's own frame index because IRSA did not,
+ * the day that index was built; null for IRSA's own answer.
+ */
+export function ownIndexDate(body) {
+  return body?.source === 'own-index' && typeof body.indexDate === 'string' ? body.indexDate : null;
 }
 
 /**
@@ -368,7 +377,7 @@ export async function askMissingFrames({ ra, dec, radius = 0.006, collections },
     const { missing } = readPartial(body);
     return { failed: true, frames: [], partial: true, missing: missing.length ? missing : collections };
   }
-  return readPartial(body);
+  return { ...readPartial(body), ownIndexDate: ownIndexDate(body) };
 }
 
 /** Shape a raw SIA row into the fields the app actually uses. */

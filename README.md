@@ -590,7 +590,80 @@ preview images. The typefaces are served by the site itself. `server.js` reads t
 
 **A new SPHEREx release** is a new IRSA collection on the same mirror: add its name to
 `public/js/release.js` (one list for the relay, the edge function and the bake script), run
-`npm run bake` and `npm test`, deploy. Nothing stores pixels, so nothing else is rebuilt.
+`npm run bake` and `npm test`, deploy, and refresh the own frame index (below). Nothing stores
+pixels, so nothing else is rebuilt.
+
+### The frame search when IRSA does not answer
+
+The S3 mirror holds the pixels but no list of frames, so "which frames cover this position" is
+IRSA's to answer. `/api/search` asks, collection by collection, in this order:
+
+1. **IRSA's SIA v2**, the usual route (1–3 s, with bursts of 502), asked up to three times;
+   its answers are kept on disk for a month and served stale while IRSA is down.
+2. **Muninn's own frame index**, when the SIA fails, or has kept the page waiting 15 s
+   (`MUNINN_INDEX_AFTER_MS`). The SIA keeps going behind it and its list is kept for the next
+   visitor. The answer says `source: 'own-index'` and `indexDate`, and the page says
+   "from Muninn's own index of …".
+3. **IRSA's TAP** (`spherex.obscore`), only when there is no own index for the collection:
+   a 35–50 s cone over the frame centres, footprints checked here, the file's processing
+   version read from the mirror's week folder. Started 40 s into a silent SIA, or at once
+   when it fails (`MUNINN_TAP_AFTER_MS`, `MUNINN_TAP_URL=off` to turn it off).
+
+There is no SIA v1 or IBE search for SPHEREx at IRSA (both answer 404 or "unknown table"),
+and `irsaproxy1.ipac.caltech.edu` is the same machine as `irsa.ipac.caltech.edu`, not a
+second route.
+
+The own index is every DR1 and QR3 level-2 frame from `spherex.obscore`: obsId, detector,
+start time, exposure, centre, footprint corners, wavelength range, collection and the
+processing version that names its file. It is filed by the 2° sky cell of each frame's
+centre, as gzipped JSON, and a search reads the cells within reach and keeps the frames whose
+footprint meets the cone, which is IRSA's own rule. `tests/frame-index-irsa.test.mjs`
+compares it with IRSA file for file (`MUNINN_COMPARE_IRSA=1`): named fields, both ecliptic
+poles, RA 0 and 360, and points just inside a frame's corner and just outside its edge.
+
+A long list is cut to 500 per collection, as the SIA cuts it: the earliest frames. The SIA
+keeps the first rows of its table, which runs by time with the first weeks interleaved, so at
+the south ecliptic pole 485 of its 500 are the index's 500; at the north pole all are.
+
+An index answer is not kept by the browser, and the SIA is asked again behind it; once IRSA
+answers, the next visitor gets IRSA's own list, frames newer than the index included. A
+missing index folder, an empty one, a `meta.json` cut short or without its build date, or a
+cell file that cannot be read is no index: said once in the log, and the search goes on to
+IRSA's routes. Cells are read when a question needs them and held under 64 MB
+(`MUNINN_INDEX_CACHE_BYTES`). On a full-size index a lookup takes 30–70 ms, 0.5 s cold at an
+ecliptic pole where the deep fields crowd; the relay runs in a 160 MB heap
+(`node --max-old-space-size=160`).
+
+```bash
+node tools/build-frame-index.mjs --estimate   # one week, and the size of the whole (about 130 MB)
+node tools/build-frame-index.mjs --parallel 2   # fetch what is missing, a week a question, then pack
+node tools/build-frame-index.mjs --source sia --days 1   # the same through the SIA, when TAP is down
+MUNINN_COMPARE_IRSA=1 node --test tests/frame-index-irsa.test.mjs
+```
+
+The build reads IRSA's TAP a week of exposure time at a time, as asynchronous jobs: under a
+minute each when IRSA is well, 18 minutes when it is loaded (82 weeks: from an hour to half a
+day). Longer windows are not faster: under load IRSA cancels a four-week job. A cancelled job
+is asked again; bursts of 502 are waited out for up to two hours a week; the build resumes
+from the weeks it has. Stopped and started again, it asks only for what
+is missing. It writes to `.index/` (not in git), or to
+`MUNINN_INDEX_DIR`. On a server, keep the index outside the app's folder, which a deploy
+replaces:
+
+```bash
+# on the PC, after a build
+tar czf - -C .index meta.json tiles | ssh <box> 'mkdir -p ~/apps/muninn-index.new && tar xzf - -C ~/apps/muninn-index.new \
+  && rm -rf ~/apps/muninn-index.old && { [ ! -d ~/apps/muninn-index ] || mv ~/apps/muninn-index ~/apps/muninn-index.old; } \
+  && mv ~/apps/muninn-index.new ~/apps/muninn-index'
+# and in the server's environment
+MUNINN_INDEX_DIR=$HOME/apps/muninn-index
+```
+
+The relay looks for a new `meta.json` every ten minutes, so a copied index is used without a
+restart. To refresh after IRSA publishes more weeks, or a new release: run the build again on
+the PC (only new weeks, and weeks fetched before they were over, are asked for; a new
+collection named in `release.js` needs no refetch, since every week keeps all collections) and
+copy it over the same way.
 
 ---
 
@@ -605,7 +678,7 @@ public/          the site: index.html, talk.html and its PDFs, _headers, css/ (r
                  picture:   render.js, sky.js, strip.js, stack.js, gaiasky.js, wise.js, gate.js, twilight.js
                  science:   depth.js, sectors.js, huntcore.js, hunt.js, seasons.js, sharpness.js,
                             spectrum.js, spectrum-view.js
-                 services:  catalog.js, overlay.js, sbident.js, archives.js, csv.js, votable.js,
+                 services:  catalog.js, frameindex.js (the own frame index), overlay.js, sbident.js, archives.js, csv.js, votable.js,
                             lookup.js, names.js, smallbody.js, hosts.js, exovision.js, brightstars.js
                  marks:     marks.js (shared with VR), markfacts.js
                  page:      app.js (state and wiring), i18n.js, hash.js, export.js, suggest*.js, ephemeris.js,
@@ -618,7 +691,8 @@ public/          the site: index.html, talk.html and its PDFs, _headers, css/ (r
                  sky/ (the sky map), vr/ (the demo fields' depth data)
 functions/       the frame search for Cloudflare Pages
 tools/           measurement, bake and benchmark scripts
-tests/           npm test, offline
+tests/           npm test, offline (frame-index-irsa.test.mjs only on request: it asks IRSA)
+.index/          the own frame index, built by tools/build-frame-index.mjs; not in git
 notebooks/       an independent check of the key numbers with astropy
 docs/            the Hunter X benchmark, the Russian study guide, images
 design/          a design study, not deployed
@@ -658,6 +732,10 @@ AWS по диапазонам байтов: заголовок, только н�
 полёте, щелчки и тоны интерфейса, а выбранная звезда звучит со своего места тоном её цвета
 (это озвучивание данных, не «звук звезды»); выключается в карточке звезды, в карточке поля и в
 виде глубины.
+
+Если IRSA не отвечает, список заходов для любой точки берётся из собственного индекса кадров
+Muninn (`tools/build-frame-index.mjs`, около 130 МБ, лежит вне папки приложения в
+`MUNINN_INDEX_DIR`), и страница пишет «из собственного индекса Muninn от …».
 
 Подробное руководство: [docs/study-guide.ru.pdf](docs/study-guide.ru.pdf).
 Запуск: `node server.js`, затем <http://127.0.0.1:5173>. Зависимостей нет.

@@ -8,7 +8,9 @@
  * The long content: a field with a long name and many bodies, three marks
  * (one on a Gaia star with a nineteen-digit name), its spectrum, the
  * walk-through's every step and its end card, "How to read this", the sky
- * card of a star, and the depth view with every failure note on (its
+ * card of a star, the field's list as the relay gives it from its own index
+ * with a part missing (LIST_PARTIAL=0 for the index note alone), and the
+ * depth view with every failure note on (its
  * catalogues refused for the run). Needs Chrome (CHROME to point elsewhere)
  * and a free port; the server is started here.
  */
@@ -73,6 +75,18 @@ for (const lang of ['ru', 'en']) {
   await collect(problems, `${lang} welcome`);
   for (let k = 0; k < 13; k++) { await run("muninnVR.tour.press('next')"); await sleep(150); await collect(problems, `${lang} tour`); }
   await run("muninnVR.tour.press('close')");
+  // The field's list as the relay gives it with IRSA down: from Muninn's own index, one collection
+  // missing, so the own-index note, the partial-list note and its retry are all on the side panel.
+  await run(`(() => { const real = window.fetch; window.fetch = async (u, o) => {
+    const url = String(u);
+    if (/data\\/fields\\/(?!index)/.test(url)) return new Response('no', { status: 404 });
+    if (/api\\/search/.test(url)) {
+      const field = await (await real(\`data/fields/${FIELD}.json\`)).json();
+      return new Response(JSON.stringify({ ok: true, source: 'own-index', indexDate: '2026-11-15T06:33:45.390Z', frames: field.frames,
+        partial: ${process.env.LIST_PARTIAL !== '0'}, missing: ${process.env.LIST_PARTIAL !== '0' ? "['spherex_qr3_deep']" : '[]'}, warnings: [] }), { headers: { 'content-type': 'application/json' } });
+    }
+    return real(u, o);
+  }; return 1; })()`);
   await run(`muninnVR.open(${JSON.stringify(FIELD)})`);
   if (!await until("muninnVR.field?.stats.status === 'ready'", 240000)) { problems.add(`${lang}: the field did not open`); continue; }
   await run('(() => { const f = muninnVR.field; f.markAt(0.5, 0.5); f.markAt(0.3, 0.62); f.markAt(0.72, 0.38); f.markAct("spectrum", 0); f.act("read"); return 1; })()');

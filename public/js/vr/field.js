@@ -20,7 +20,7 @@
  */
 
 import * as THREE from '../vendor/three.module.js';
-import { t, fmt } from '../i18n.js';
+import { t, fmt, fmtDate } from '../i18n.js';
 import { seasonChunks, chunkAt, forStack } from '../stack.js';
 import { searchFrames, askMissingFrames, groupVisits, bandsPresent, toS3, skybotCone, knownBodies, surveySources, findHeldVisit } from '../catalog.js';
 import { planetHostNear, systemUrl } from '../exovision.js';
@@ -901,9 +901,12 @@ export function openFieldVR(target, env) {
         const days = Math.round(st.all.at(-1).mjd - st.all[0].mjd);
         y = wrapText(ctx, tv('vr.visits', { n: st.all.length, d: days }), x, y, w, T.body * 1.3, 2);
       }
+      y = listNotes(ctx, x, y, w);
       // The way on: the guide, the site's "How to read this", the same field on
       // the site, and a host's planets in ExoVision; the headset is left first.
+      // A list with a part missing leads with the way to ask for it again.
       const ways = [
+        ...(st.list.partial && st.entries.length && !st.list.asking ? [['listRetry', tv('vr.retryNow')]] : []),
         ['guide', tv('vr.guide')],
         ['read', t('about.title')],
         ['site', `${tv('vr.onSite')} →`],
@@ -923,6 +926,25 @@ export function openFieldVR(target, env) {
       const end = wrapText(ctx, `↻ ${tv('vr.turn')}`, x, by + bh + 28 + T.body, w, T.body * 1.3, 2);
       groundUnder(ctx, W, end - T.body * 1.3 + 34);
     });
+  }
+
+  /**
+   * Under the count of visits: where the list of frames came from (Muninn's
+   * own index, when IRSA did not answer) and what of it is still missing; the
+   * way to ask again leads the row of buttons below. Returns where the card goes on.
+   */
+  function listNotes(ctx, x, y, w) {
+    const notes = [];
+    if (st.list.source === 'own-index') notes.push(`${tv('vr.ownIndex', { date: fmtDate(st.list.indexDate) })}.`);
+    if (st.list.partial && st.entries.length) {
+      const later = st.list.retryAt ? Math.max(1, Math.ceil((st.list.retryAt - performance.now()) / 1000)) : null;
+      // Beside the own-index note, the short form: the card keeps its room.
+      notes.push(`${tv(notes.length ? 'vr.listPartialShort' : 'vr.listPartial')}${later ? ` ${tv('vr.retryIn', { s: later })}` : ''}`);
+    }
+    if (!notes.length) return y;
+    ctx.font = `400 ${SMALL}px ${FONTS.body}`;
+    ctx.fillStyle = look.neutral;
+    return wrapText(ctx, notes.join(' '), x, y + SMALL * 0.5, w, SMALL * 1.3, 4) - SMALL * 0.8;
   }
 
   function heading(ctx, x, y, text) {
@@ -962,27 +984,6 @@ export function openFieldVR(target, env) {
       const body = `400 ${T.body}px ${FONTS.body}`;
       let y = 34 + T.body;
       const reading = st.status === 'searching' || st.status === 'reading';
-      // Where the list of frames came from, and what of it is still missing.
-      const notes = [];
-      if (st.list.source === 'own-index') notes.push(tv('vr.ownIndex', { date: st.list.indexDate ?? '—' }));
-      if (st.list.partial && st.entries.length) {
-        const later = st.list.retryAt ? Math.max(1, Math.ceil((st.list.retryAt - performance.now()) / 1000)) : null;
-        notes.push(`${tv('vr.listPartial')}${later ? ` ${tv('vr.retryIn', { s: later })}` : ''}`);
-      }
-      if (notes.length) {
-        ctx.font = `400 ${SMALL}px ${FONTS.body}`;
-        ctx.fillStyle = look.neutral;
-        for (const n of notes) y = wrapText(ctx, n, x, y, w, SMALL * 1.3, 3) + 4;
-        if (st.list.partial && st.entries.length && !st.list.asking) {
-          const font = `500 ${T.body}px ${FONTS.body}`;
-          const bh = Math.round(T.body * 1.8);
-          const bw = Math.min(w, chipWidth(ctx, font, tv('vr.retryNow'), bh, 120));
-          button(ctx, hits, look, { x, y: y - SMALL, w: bw, h: bh, label: tv('vr.retryNow'), id: 'listRetry', font, hover: st.hoverBtn === 'side:listRetry:' });
-          y += bh + 10;
-        }
-        y += T.body;
-      }
-
       // How deep one visit goes: the key number, measured here or, for a
       // demonstration field, as measured when its answers were kept.
       const d = st.depth ?? (baked?.depth ? { ...baked.depth, baked: true } : null);
@@ -1193,10 +1194,12 @@ export function openFieldVR(target, env) {
   function noteList(answer) {
     st.list.partial = Boolean(answer.partial);
     st.list.missing = answer.missing ?? [];
-    st.list.source = answer.source ?? st.list.source;
+    // Frames from the own index stay in the list when a later part comes from IRSA: so does the note.
+    if (st.list.source !== 'own-index') st.list.source = answer.source ?? st.list.source;
     st.list.indexDate = answer.indexDate ?? st.list.indexDate;
     if (st.list.partial) listRetryLater();
     else { clearTimeout(st.list.timer); st.list.retryAt = null; }
+    drawCard();
   }
 
   /** Ask again later: after 5, 15 and 45 s, or when a busy archive says. */
@@ -1221,6 +1224,7 @@ export function openFieldVR(target, env) {
     st.list.asking = true;
     st.list.busy = false;
     drawNotice();
+    drawCard();
     drawSide();
     let answer = null;
     try {
@@ -1245,6 +1249,7 @@ export function openFieldVR(target, env) {
       await addFrames(answer.frames);
     }
     drawNotice();
+    drawCard();
     drawSide();
   }
 
@@ -1549,7 +1554,7 @@ export function openFieldVR(target, env) {
     update(dt, { head, gazeYaw }) {
       const now = performance.now();
       // A retry's countdown, a second at a time.
-      if (st.list.retryAt && now - (st.listBeat ?? 0) > 1000) { st.listBeat = now; drawNotice(); drawSide(); }
+      if (st.list.retryAt && now - (st.listBeat ?? 0) > 1000) { st.listBeat = now; drawNotice(); drawCard(); }
       if (depthView.retrying && now - (st.depthBeat ?? 0) > 1000) { st.depthBeat = now; depthView.redrawSign(); }
       // The asking dot pulses: a redraw a few times a second, not every frame.
       if (marksPanel.animated && now - (st.marksBeat ?? 0) > 120) { st.marksBeat = now; drawMarks(); }

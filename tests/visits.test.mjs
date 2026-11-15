@@ -169,3 +169,16 @@ test('a list is partial when the relay says so, names what is missing, or warns'
   assert.deepEqual(readPartial({ frames: [2] }), { frames: [2], partial: false, missing: [] });
   assert.deepEqual(readPartial({ missing: [3, '', 'ok'] }).missing, ['ok'], 'only names are kept');
 });
+
+test("a list from the relay's own index carries the day the index was built", async () => {
+  const { ownIndexDate } = await import('../public/js/catalog.js');
+  assert.equal(ownIndexDate({ source: 'own-index', indexDate: '2026-11-15T04:00:00.000Z' }), '2026-11-15T04:00:00.000Z');
+  assert.equal(ownIndexDate({ source: 'irsa', indexDate: '2026-11-15T04:00:00.000Z' }), null);
+  assert.equal(ownIndexDate({ source: 'own-index' }), null);
+  assert.equal(ownIndexDate(null), null);
+  // The headset reads the same answer by its source and date.
+  const { readPartial } = await import('../public/js/catalog.js');
+  const said = readPartial({ frames: [], source: 'own-index', indexDate: '2026-11-15T04:00:00.000Z' });
+  assert.equal(said.source, 'own-index');
+  assert.equal(said.indexDate, '2026-11-15T04:00:00.000Z');
+});
