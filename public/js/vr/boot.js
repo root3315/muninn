@@ -4,7 +4,7 @@
  * If the module or one of its imports (three.js among them) fails to load,
  * or the scene has not come up after a while, the page says so with a way
  * to try again, instead of staying a black screen. main.js sets
- * window.muninnVRStarted once the scene is up (or has failed and said so).
+ * window.muninnVRStarted as soon as its code has loaded.
  */
 (function guard() {
   var WAIT_MS = 25000;
@@ -26,10 +26,15 @@
     box.hidden = false;
   }
 
-  // A script that fails to load (the module, or anything it imports) fires an error on its element.
+  // A script of our own that fails to load (the module, or anything it
+  // imports) fires an error on its element. Scripts from other origins, such
+  // as an analytics beacon the edge may insert and the policy blocks, are not
+  // ours and say nothing about the page.
   window.addEventListener('error', function onError(e) {
     var t = e.target;
-    if (t && t.tagName === 'SCRIPT') say();
+    if (!t || t.tagName !== 'SCRIPT' || !t.src) return;
+    var url = new URL(t.src, location.href);
+    if (url.origin === location.origin && url.pathname.indexOf('/js/') !== -1) say();
   }, true);
   setTimeout(say, WAIT_MS);
 }());

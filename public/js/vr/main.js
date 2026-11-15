@@ -1420,6 +1420,10 @@ function contextFromUrl() {
 /* ------------------------------------------------------------- the page */
 
 function bootPage() {
+  // The module and all its imports have loaded, which is what boot.js waits
+  // for; a scene that then fails says so itself. A slow field must not be
+  // taken for missing code.
+  window.muninnVRStarted = true;
   const canvas = document.getElementById('vr-canvas');
   if (!canvas) return;
   const lang = pageLanguage();
