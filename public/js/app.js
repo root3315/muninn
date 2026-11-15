@@ -94,7 +94,7 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 const state = {
   ra: null, dec: null, fov: 0.3, band: 'all', label: '',
-  frames: [], visits: [], truncated: false, partial: false,
+  frames: [], visits: [], truncated: false, partial: false, ownIndexDate: null,
   /** Every visit the archive has for this field and band; `visits` is the part being read. */
   allVisits: [],
   /** A visit index from a link, held until that visit has landed. */
@@ -561,6 +561,8 @@ function renderFacts() {
   // The archive caps a long list. Said here, or the count above reads as all
   // there is.
   if (state.truncated) rows.push([t('facts.list'), t('facts.listCapped')]);
+  // IRSA did not answer, and the list came from Muninn's own copy of its index.
+  if (state.ownIndexDate) rows.push([t('facts.list'), t('facts.listOwnIndex', { date: fmtDate(state.ownIndexDate) })]);
   // One collection of the archive did not answer: the run is short, and
   // "nothing moved" would be said about visits nobody was shown.
   if (state.partial && !state.loading) {
@@ -3572,6 +3574,7 @@ async function retryPartialList() {
     state.truncated = state.truncated || Boolean(answer.truncated);
     state.partial = answer.partial;
     state.missing = answer.missing;
+    state.ownIndexDate = state.ownIndexDate ?? answer.ownIndexDate ?? null;
     populateBands();
     // The new visits are read the way the rest are, in the background.
     if (!state.filling && !state.loading) fillVisits(Math.max(state.visitGoal, fillCap()));
@@ -3618,6 +3621,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.truncated = false;
   state.partial = false;
   state.missing = [];
+  state.ownIndexDate = null;
   resetListRetry();
   // What the last field measured goes with it: the reading is now built up as
   // this field's visits land, and must not start from someone else's numbers.
@@ -3676,8 +3680,9 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   let truncated = false;
   let partial = false;
   let missing = [];
+  let ownIndexDate = null;
   try {
-    ({ frames, truncated, partial = false, missing = [] } = await searchFrames({ ra, dec }, { signal: ctrl.signal }));
+    ({ frames, truncated, partial = false, missing = [], ownIndexDate = null } = await searchFrames({ ra, dec }, { signal: ctrl.signal }));
   } catch (err) {
     if (ctrl.signal.aborted) return;
     state.loading = false;
@@ -3705,6 +3710,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.truncated = truncated;
   state.partial = partial;
   state.missing = missing;
+  state.ownIndexDate = ownIndexDate;
   populateBands();
 
   state.allVisits = groupVisits(frames, { ra, dec, band: state.band });
