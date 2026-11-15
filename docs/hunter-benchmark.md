@@ -24,6 +24,12 @@ Reproduce:
 The first run reads 20 frames from the public S3 mirror (about 3 MB each) and
 caches the cut stamps, so later runs work offline.
 
+Rerun on 15 Nov 2026 with `--per-cell 48` and the default seed (20261114),
+frames read fresh: every table below came out the same, cell for cell, in about
+5 minutes. The seed fixes the placements, so the same seed and the same frames
+give the same counts; a later data release that changes the frame list can
+change them.
+
 ## Method
 
 **Frames.** Two real fields, band D2, DR1 (`spherex_dr1`), each cut onto the
