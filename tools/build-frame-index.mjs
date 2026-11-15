@@ -32,6 +32,7 @@
 
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { gzipSync, gunzipSync } from 'node:zlib';
+import { get as httpsGet } from 'node:https';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -130,11 +131,28 @@ const worthRetry = (err) => err.status === undefined || [429, 500, 502, 503, 504
 const tap = (query) => patiently(() => tapOnce(query));
 
 /** IRSA's SIA, the same frames by exposure time, one collection at a time, for when TAP is down. */
+/**
+ * A GET that waits as long as it is told to. fetch() gives up when the
+ * first byte takes more than five minutes, and a loaded SIA can take longer
+ * to start a day's list.
+ */
+function getSlowly(url, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    const req = httpsGet(url, { headers: { 'user-agent': USER_AGENT } }, (res) => {
+      const parts = [];
+      res.on('data', (part) => parts.push(part));
+      res.on('end', () => resolve({ status: res.statusCode, text: Buffer.concat(parts).toString('utf8') }));
+      res.on('error', reject);
+    });
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`no answer in ${timeoutMs / 60000} minutes`)));
+    req.on('error', reject);
+  });
+}
+
 async function siaOnce(collection, t0, t1) {
   const url = `${SIA}?COLLECTION=${collection}&TIME=${t0}+${t1}&MAXREC=1000000&RESPONSEFORMAT=csv`;
-  const res = await fetch(url, { headers: { 'user-agent': USER_AGENT }, signal: AbortSignal.timeout(TAP_TIMEOUT_MS) });
-  const text = await res.text();
-  if (!res.ok) throw Object.assign(new Error(`SIA HTTP ${res.status}`), { status: res.status });
+  const { status, text } = await getSlowly(url, TAP_TIMEOUT_MS);
+  if (status !== 200) throw Object.assign(new Error(`SIA HTTP ${status}`), { status });
   if (text.trimStart().startsWith('<')) throw Object.assign(new Error('SIA answer is not a table'), { status: 200 });
   return parseCsv(text).filter((r) => r.dataproduct_subtype === 'science' && Number(r.calib_level) >= 2);
 }
