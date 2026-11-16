@@ -16,6 +16,7 @@
 <!-- Every module, named up front: found one import at a time they arrive several round trips deep,
      and the controls stand empty until they do. -->
 <link rel="modulepreload" href="js/allsky.js">
+<link rel="modulepreload" href="js/embed.js">
 <link rel="modulepreload" href="js/allsky/view.js">
 <link rel="modulepreload" href="js/allsky/healpix.js">
 <link rel="modulepreload" href="js/allsky/hips.js">
@@ -45,6 +46,7 @@
 </header>
 
 <main class="as-sky" id="sky">
+  <button type="button" class="embed-back" id="embed-back" data-i18n="world.back"></button>
   <canvas class="as-sky__canvas" id="canvas" tabindex="0" role="img" data-i18n-label="allsky.canvas"></canvas>
   <!-- The ready fields, as rings on the sky; placed by allsky.js on every redraw. -->
   <div class="as-sky__rings" id="rings"></div>

@@ -279,7 +279,7 @@ export class Gate {
    * @param {HTMLCanvasElement} canvas
    * @param {{onPick: (o: object) => void, onName: (o: object|null) => void}} hooks
    */
-  constructor(canvas, { onPick, onName, onSurvey = () => {} }) {
+  constructor(canvas, { onPick, onName, onSurvey = () => {}, onStepOut = null }) {
     this.canvas = canvas;
     // The band on the GPU, under this canvas, where WebGL 2 can be had; then
     // this canvas is clear between the stars so the band shows through it.
@@ -298,6 +298,9 @@ export class Gate {
     this.onPick = onPick;
     this.onName = onName;
     this.onSurvey = onSurvey;
+    /** Called when the sky is zoomed out past its widest: the way out into space. */
+    this.onStepOut = onStepOut;
+    this.outward = 0;
     /** The surveyed band, once it has arrived: `{ pixels, W, H }`. */
     this.survey = null;
     this.surveyAt = 0;
@@ -1388,6 +1391,16 @@ export class Gate {
     this.canvas.addEventListener('wheel', (e) => {
       if (this.flight) return;
       e.preventDefault();
+      // Already at its widest and still zooming out: out of the sphere, into space.
+      if (this.onStepOut && e.deltaY > 0 && this.cam.fov >= FOV_MAX - 1e-6) {
+        this.outward += e.deltaY;
+        if (this.outward > 400) {
+          this.outward = 0;
+          this.onStepOut({ ra: this.cam.ra, dec: this.cam.dec, fov: this.cam.fov });
+        }
+        return;
+      }
+      this.outward = 0;
       this.cam.fov = Math.max(FOV_MIN, Math.min(FOV_MAX, this.cam.fov * Math.exp(e.deltaY * 0.0012)));
       this.findHit();
       this.draw();

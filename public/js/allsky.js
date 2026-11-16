@@ -14,6 +14,7 @@
 import { setLanguage, getLanguage, t, applyTranslations, fmt } from './i18n.js';
 import { parseCoordinates, resolveSesame, formatRA, formatDec } from './catalog.js';
 import { encodeHash } from './hash.js';
+import { openInTool, close as closeEmbed } from './embed.js';
 import { createSkyView, FOV_MIN, FOV_MAX } from './allsky/view.js';
 import { galacticOf } from './allsky/maps.js';
 import {
@@ -466,7 +467,7 @@ function toolUrl({ ra, dec, name = '' }) {
 $('open').addEventListener('click', () => {
   if (!view || inMap()) return;
   const s = view.state;
-  location.href = toolUrl({ ra: s.ra, dec: s.dec });
+  openInTool(toolUrl({ ra: s.ra, dec: s.dec }));
 });
 
 /* ---- after every redraw ------------------------------------------------ */
@@ -577,3 +578,5 @@ window.addEventListener('hashchange', () => {
     showView();
   }
 });
+
+$('embed-back').addEventListener('click', closeEmbed);

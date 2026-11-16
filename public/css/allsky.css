@@ -261,3 +261,19 @@ body[data-map="true"] .as-ring__name {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; }
 }
+
+/* Inside the front page: no bar of its own, a way back to the sky instead. */
+:root[data-embed="1"] body { grid-template-rows: 1fr; }
+:root[data-embed="1"] .bar { display: none; }
+.embed-back {
+  position: absolute; z-index: 5;
+  inset-inline-end: var(--edge); inset-block-start: calc(var(--edge) + 6rem);
+  min-block-size: var(--hit); padding-inline: var(--space-md);
+  border: 0; border-radius: var(--radius-round); cursor: pointer;
+  color: var(--color-ink); background: var(--gate-veil-deep);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  font: inherit; font-size: var(--text-sm); font-weight: 600;
+  transition: background-color var(--dur-micro) var(--ease-out);
+}
+.embed-back:hover { background: var(--color-paper-3); }
+:root:not([data-embed="1"]) .embed-back { display: none; }

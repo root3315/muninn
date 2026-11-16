@@ -13,6 +13,7 @@
 import { setLanguage, getLanguage, t, applyTranslations, fmt } from './i18n.js';
 import { starColour, direction } from './gate.js';
 import { encodeHash } from './hash.js';
+import { close as closeEmbed } from './embed.js';
 import { radecOf } from './allsky/healpix.js';
 import { createSpace, screenOf } from './fly/space.js';
 import { temperatureOf, luminosityOf, radiusOf, vMinusW2, R_SUN_PC, T_SUN } from './fly/stars.js';
@@ -202,6 +203,13 @@ function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));
   const xyz = ['x', 'y', 'z'].map((k) => Number(p.get(k)));
   if (xyz.every(Number.isFinite)) cam.eye = xyz;
+  // Opened from the front page: facing where its sky faced.
+  const look = (p.get('look') ?? '').split(',').map(Number);
+  if (look.length === 2 && look.every(Number.isFinite)) {
+    cam.F = direction(look[0], look[1]);
+    cam.U = [0, 0, 1];
+    orthonormal();
+  }
 }
 
 let hashTimer = 0;
@@ -730,3 +738,5 @@ if (!space) {
   setTimeout(() => { $('hint').dataset.gone = 'true'; }, 9000);
   requestAnimationFrame(frame);
 }
+
+$('embed-back').addEventListener('click', closeEmbed);

@@ -1911,3 +1911,14 @@ body { font-size: var(--text-base); line-height: 1.5; }
     color: var(--color-ink);
   }
 }
+
+/* The whole sky and the flight, opened over the front page: one place at
+   other scales. It fades in over the sky it came from. */
+.world {
+  position: fixed; inset: 0; z-index: var(--z-modal);
+  background: var(--color-well);
+  opacity: 0; transition: opacity var(--dur-long) var(--ease-out);
+}
+.world[hidden] { display: none; }
+.world--on { opacity: 1; }
+.world__frame { inline-size: 100%; block-size: 100%; border: 0; display: block; }
