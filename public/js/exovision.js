@@ -26,6 +26,19 @@ export async function planetHostNear(ra, dec, reach = HOST_REACH_ARCSEC) {
   return nearestHost(await planetHosts, ra, dec, reach);
 }
 
+/**
+ * The address of ExoVision's own search for planets round any star: it takes
+ * the star's name, or its position as "RA Dec" in degrees, fetches the
+ * star's TESS (or Kepler) light curve from MAST and looks for transits in it
+ * with its model. For a star with no known planets, the way to look.
+ */
+export function detectorUrl({ name = null, ra, dec }, lang) {
+  const url = new URL('/ai-detector', EXOVISION_URL);
+  const target = name ?? `${ra.toFixed(5)} ${dec >= 0 ? '+' : ''}${dec.toFixed(5)}`;
+  url.search = new URLSearchParams({ target, from: 'muninn', lang }).toString();
+  return url.href;
+}
+
 /** The address of a host's system in ExoVision, named `label`, in language `lang`. */
 export function systemUrl([ra, dec, , name], label, lang) {
   const url = new URL('/system', EXOVISION_URL);

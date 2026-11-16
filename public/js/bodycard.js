@@ -14,7 +14,7 @@
 
 import { orbitPath, positionAt, earthAt, referencesFor, sketchReach, julianDay, drawable } from './orbit.js';
 import { smallBodyOrbit } from './catalog.js';
-import { planetHostNear, systemUrl } from './exovision.js';
+import { planetHostNear, systemUrl, detectorUrl } from './exovision.js';
 import { whoSoFar } from './marks.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -160,6 +160,22 @@ function fixedNodes(m, { t, fmt, lang, live, onChange }) {
   } else if (FAR_FAMILIES.has(family)) {
     nodes.push(line(kindWords(simbad, t)));
     if (Number.isFinite(simbad.z)) nodes.push(line(t('body.redshift', { z: fmt(simbad.z, Math.abs(simbad.z) < 0.01 ? 4 : 3) }), 'body__line num'));
+  } else if (!simbad) {
+    // Still in every visit and in no list of names: a star, most likely, or
+    // a galaxy too small to show its shape; SIMBAD has nothing on it.
+    nodes.push(line(t('body.unnamed')));
+  }
+  // Any star, planets known or not, can be searched for transits in ExoVision.
+  if (!FAR_FAMILIES.has(family)) {
+    const p = line(`${t('body.detect')} · `);
+    const a = document.createElement('a');
+    a.className = 'mark__who-name';
+    a.target = '_blank';
+    a.rel = 'noopener';
+    a.href = detectorUrl({ name: simbad?.name ?? null, ra: m.ra, dec: m.dec }, lang);
+    a.textContent = 'ExoVision';
+    p.append(a);
+    nodes.push(p);
   }
   if (host) {
     const [, , n, name, letters = ''] = host;

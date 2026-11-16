@@ -44,7 +44,7 @@ import {
 } from './marks.js';
 import { brightStars } from './brightstars.js';
 import { loadWise, WISE_BANDS } from './wise.js';
-import { planetHostNear, systemUrl } from './exovision.js';
+import { planetHostNear, systemUrl, detectorUrl } from './exovision.js';
 import { drawGaiaSky, psfFor } from './gaiasky.js';
 import { fieldArchives, cadcSearchUrl } from './archives.js';
 import { markFacts } from './markfacts.js';
@@ -4316,8 +4316,20 @@ async function showFieldPlanets() {
   const at = state.target ?? { ra: state.ra, dec: state.dec };
   if (!Number.isFinite(at?.ra) || !Number.isFinite(at?.dec)) return;
   const host = await planetHostNear(at.ra, at.dec);
-  if (gen !== fieldSeq || !host) return;
-  offerSystem(link, host, state.label ? state.label.split(' · ')[0] : null, 'field.planets');
+  if (gen !== fieldSeq) return;
+  const label = state.label ? state.label.split(' · ')[0] : null;
+  if (host) {
+    offerSystem(link, host, label, 'field.planets');
+    return;
+  }
+  // No known planets: the field's star can still be searched for transits.
+  // Only a named target is a star to search; a field's middle is just sky.
+  if (!state.target) return;
+  link.href = detectorUrl({ name: label, ra: at.ra, dec: at.dec }, getLanguage());
+  link.textContent = t('field.detect');
+  link.title = t('field.detectTitle');
+  link.onclick = null;
+  link.hidden = false;
 }
 
 /** Point `link` at a host's system in ExoVision, entered by the flight in. */
