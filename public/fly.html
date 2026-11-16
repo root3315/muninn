@@ -16,6 +16,9 @@
 <link rel="stylesheet" href="css/fly.css">
 <link rel="modulepreload" href="js/fly.js">
 <link rel="modulepreload" href="js/fly/space.js">
+<link rel="modulepreload" href="js/fly/stars.js">
+<link rel="modulepreload" href="js/hash.js">
+<link rel="modulepreload" href="js/allsky/healpix.js">
 <link rel="modulepreload" href="js/gate.js">
 <link rel="modulepreload" href="js/gate-band.js">
 <link rel="modulepreload" href="js/i18n.js">
@@ -37,6 +40,17 @@
   <div class="fly-labels" id="labels"></div>
   <p class="as-sky__hint" id="hint"></p>
   <p class="as-sky__nogl" id="nogl" hidden data-i18n="allsky.noGl"></p>
+
+  <aside class="fly-card" id="card" hidden aria-live="polite">
+    <button type="button" class="fly-card__close" id="card-close" data-i18n-label="fly.close" data-i18n-title="fly.close">×</button>
+    <h2 class="fly-card__title" id="card-title"></h2>
+    <p class="fly-card__note" id="card-note"></p>
+    <dl class="fly-card__rows" id="card-rows"></dl>
+    <div class="fly-card__acts">
+      <button type="button" class="as-open" id="card-fly" data-i18n="fly.flyHere"></button>
+      <a class="as-toggle fly-card__frames" id="card-frames" data-i18n="fly.frames"></a>
+    </div>
+  </aside>
 
   <div class="fly-pad">
     <button type="button" class="as-zoom__key" id="go-forward" data-i18n-label="fly.forward" data-i18n-title="fly.forward">▲</button>

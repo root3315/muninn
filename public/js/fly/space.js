@@ -19,6 +19,11 @@ const STAR_VS = `#version 300 es
 in vec3 aPos;
 in float aMag;
 in vec3 aCol;
+in float aRad;
+uniform float uFocalPx;
+uniform float uMaxPoint;
+uniform int uSkip;
+uniform vec4 uNear;
 uniform vec3 uEye;
 uniform vec3 uR;
 uniform vec3 uU;
@@ -28,21 +33,38 @@ uniform float uLimit;
 uniform float uPx;
 out vec3 vCol;
 out float vAlpha;
+out float vDisk;
+const float R_SUN_PC = ${695700 / 3.0856775814913673e13};
 void main() {
   vec3 rel = aPos - uEye;
   float d = length(rel);
   vec3 c = vec3(dot(rel, uR), dot(rel, uU), dot(rel, uF));
-  if (c.z < 1e-6 || d < 1e-5) {
+  // The near star is drawn as a sphere instead, from exact coordinates.
+  if (c.z < 1e-6 || d < 1e-9 || gl_VertexID == uSkip) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     gl_PointSize = 0.0;
     return;
+  }
+  // Behind the near star's sphere: hidden by it.
+  if (uNear.w > 0.0 && d > length(uNear.xyz)) {
+    float along = dot(rel, uNear.xyz) / d;
+    if (along > 0.0 && dot(uNear.xyz, uNear.xyz) - along * along < uNear.w * uNear.w) {
+      gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+      gl_PointSize = 0.0;
+      return;
+    }
   }
   gl_Position = vec4(c.x / c.z * uFocal.x, c.y / c.z * uFocal.y, 0.0, 1.0);
   // Apparent magnitude from here, and the light that gets through.
   float m = aMag + 5.0 * log(d / 10.0) / log(10.0);
   float flux = pow(10.0, -0.4 * (m - uLimit));
   vAlpha = clamp(flux, 0.0, 1.0);
-  gl_PointSize = clamp(uPx * (1.2 + 1.6 * log(1.0 + flux)), uPx, 48.0 * uPx);
+  // The star's own disc, at its real size: its radius over its distance.
+  float disc = aRad * R_SUN_PC / c.z * uFocalPx;
+  float glow = clamp(uPx * (1.2 + 1.6 * log(1.0 + flux)), uPx, 48.0 * uPx);
+  float size = min(max(glow, 2.0 * disc + 4.0 * uPx), uMaxPoint);
+  gl_PointSize = size;
+  vDisk = disc > 0.75 * uPx ? min(1.0, 2.0 * disc / size) : 0.0;
   vCol = aCol;
 }`;
 
@@ -50,11 +72,19 @@ const STAR_FS = `#version 300 es
 precision mediump float;
 in vec3 vCol;
 in float vAlpha;
+in float vDisk;
 out vec4 outColour;
 void main() {
   vec2 p = gl_PointCoord * 2.0 - 1.0;
   float r2 = dot(p, p);
   if (r2 > 1.0) discard;
+  if (vDisk > 0.0 && r2 < vDisk * vDisk) {
+    // Inside the disc: limb darkening, the edge of a star dimmer than its
+    // middle because the eye sees cooler, higher layers there.
+    float mu = sqrt(1.0 - r2 / (vDisk * vDisk));
+    outColour = vec4(vCol * (0.4 + 0.6 * mu), 1.0);
+    return;
+  }
   // A bright core and a soft halo, as a star looks through any optics.
   float core = exp(-r2 * 9.0);
   float halo = exp(-r2 * 2.5) * 0.25;
@@ -83,6 +113,39 @@ void main() {
   vec3 v = normalize(uF + (ndc.x / uFocal.x) * uR + (ndc.y / uFocal.y) * uU);
   vec2 uv = vec2(fract(atan(v.y, v.x) / (2.0 * PI) + 1.0), 0.5 - asin(clamp(v.z, -1.0, 1.0)) / PI);
   outColour = vec4(textureLod(uSky, uv, 0.0).rgb * uDim, 1.0);
+}`;
+
+/*
+ * The star the camera is close to, as a sphere: per pixel, the ray from the
+ * eye meets it or passes it. A point sprite cannot be drawn larger than the
+ * GPU allows; a star seen from a few of its own radii fills the sky.
+ */
+const NEAR_FS = `#version 300 es
+precision highp float;
+uniform vec3 uR;
+uniform vec3 uU;
+uniform vec3 uF;
+uniform vec2 uFocal;
+uniform vec2 uSize;
+uniform vec3 uCentre;
+uniform float uRadius;
+uniform vec3 uCol;
+out vec4 outColour;
+void main() {
+  vec2 ndc = gl_FragCoord.xy / uSize * 2.0 - 1.0;
+  vec3 v = normalize(uF + (ndc.x / uFocal.x) * uR + (ndc.y / uFocal.y) * uU);
+  float along = dot(v, uCentre);
+  if (along <= 0.0) discard;
+  float miss2 = dot(uCentre, uCentre) - along * along;
+  float r2 = uRadius * uRadius;
+  if (miss2 < r2) {
+    float mu = sqrt(1.0 - miss2 / r2);
+    outColour = vec4(uCol * (0.4 + 0.6 * mu), 1.0);
+  } else {
+    // Its light scattered in the eye: a glow that falls off with distance from the limb.
+    float out_ = (sqrt(miss2) - uRadius) / uRadius;
+    outColour = vec4(uCol * 0.35 * exp(-out_ * 2.5), 1.0);
+  }
 }`;
 
 function compile(gl, vs, fs, attributes = []) {
@@ -114,12 +177,14 @@ function compile(gl, vs, fs, attributes = []) {
 export function createSpace(canvas, { stars, sky }) {
   const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false });
   if (!gl) return null;
-  const starProg = compile(gl, STAR_VS, STAR_FS, ['aPos', 'aMag', 'aCol']);
+  const starProg = compile(gl, STAR_VS, STAR_FS, ['aPos', 'aMag', 'aCol', 'aRad']);
   const skyProg = compile(gl, SKY_VS, SKY_FS);
+  const nearProg = compile(gl, SKY_VS, NEAR_FS);
+  const maxPoint = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1];
 
   const vao = gl.createVertexArray();
   gl.bindVertexArray(vao);
-  for (const [i, data, size] of [[0, stars.pos, 3], [1, stars.mag, 1], [2, stars.col, 3]]) {
+  for (const [i, data, size] of [[0, stars.pos, 3], [1, stars.mag, 1], [2, stars.col, 3], [3, stars.rad, 1]]) {
     gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
     gl.enableVertexAttribArray(i);
@@ -157,9 +222,11 @@ export function createSpace(canvas, { stars, sky }) {
   return {
     /**
      * Draw from `eye` (parsecs) looking along the basis { R, U, F }, with a
-     * vertical field of `fov` degrees. Returns the projection, for labels.
+     * vertical field of `fov` degrees; `near` is the star the camera is
+     * closest to, { index, pos, rpc, col }, drawn as a sphere. Returns the
+     * projection, for labels.
      */
-    draw({ eye, R, U, F, fov, limit = 8.5 }) {
+    draw({ eye, R, U, F, fov, limit = 8.5, near = null }) {
       const { w, h, dpr } = fit();
       const fy = 1 / Math.tan((fov * Math.PI) / 360);
       const focal = [fy * (h / w), fy];
@@ -193,8 +260,27 @@ export function createSpace(canvas, { stars, sky }) {
       gl.uniform2fv(starProg.u.Focal, focal);
       gl.uniform1f(starProg.u.Limit, limit);
       gl.uniform1f(starProg.u.Px, dpr);
+      gl.uniform1f(starProg.u.FocalPx, (fy * h) / 2);
+      gl.uniform1f(starProg.u.MaxPoint, maxPoint);
+      gl.uniform1i(starProg.u.Skip, near ? near.index : -1);
+      gl.uniform4fv(starProg.u.Near, near
+        ? [near.pos[0] - eye[0], near.pos[1] - eye[1], near.pos[2] - eye[2], near.rpc]
+        : [0, 0, 0, 0]);
       gl.bindVertexArray(vao);
       gl.drawArrays(gl.POINTS, 0, count);
+      if (near) {
+        gl.useProgram(nearProg.program);
+        gl.uniform3fv(nearProg.u.R, R);
+        gl.uniform3fv(nearProg.u.U, U);
+        gl.uniform3fv(nearProg.u.F, F);
+        gl.uniform2fv(nearProg.u.Focal, focal);
+        gl.uniform2f(nearProg.u.Size, w, h);
+        gl.uniform3fv(nearProg.u.Centre, [near.pos[0] - eye[0], near.pos[1] - eye[1], near.pos[2] - eye[2]]);
+        gl.uniform1f(nearProg.u.Radius, near.rpc);
+        gl.uniform3fv(nearProg.u.Col, near.col);
+        gl.bindVertexArray(emptyVao);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
       gl.disable(gl.BLEND);
       gl.bindVertexArray(null);
       return { focal, w, h, dpr };

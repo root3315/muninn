@@ -10,7 +10,8 @@
  *   public/data/fly/stars.bin   Float32 x, y, z per star in parsecs (ICRS
  *                               axes, the Sun at 0), every star's; then
  *                               Int16 absolute Hipparcos magnitude × 100 and
- *                               B−V × 1000 per star. Positions are full
+ *                               B−V × 1000 per star; then Int32 Hipparcos
+ *                               number per star. Positions are full
  *                               floats: the autopilot stops a few hundredths
  *                               of a parsec from a star, and a tenth of a
  *                               parsec of rounding put the star beside its
@@ -35,17 +36,21 @@ const ASU = 'https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=I/311/hip2'
 const MIN_PLX_SNR = 5;
 const DEG = Math.PI / 180;
 
-/** The stars the page names, by Hipparcos number. */
+/**
+ * The stars the page names, by Hipparcos number, with their radii in solar
+ * radii as measured (interferometry, eclipses, asteroseismology; rounded).
+ * Every other star's radius is estimated from its brightness and colour.
+ */
 const NAMED = [
-  [32349, 'Sirius', 'Сириус'], [30438, 'Canopus', 'Канопус'], [71683, 'α Centauri A', 'α Центавра A'],
-  [70890, 'Proxima Centauri', 'Проксима Центавра'], [69673, 'Arcturus', 'Арктур'], [91262, 'Vega', 'Вега'],
-  [24608, 'Capella', 'Капелла'], [24436, 'Rigel', 'Ригель'], [37279, 'Procyon', 'Процион'],
-  [27989, 'Betelgeuse', 'Бетельгейзе'], [97649, 'Altair', 'Альтаир'], [21421, 'Aldebaran', 'Альдебаран'],
-  [80763, 'Antares', 'Антарес'], [65474, 'Spica', 'Спика'], [37826, 'Pollux', 'Поллукс'],
-  [102098, 'Deneb', 'Денеб'], [11767, 'Polaris', 'Полярная'], [113368, 'Fomalhaut', 'Фомальгаут'],
-  [17702, 'Alcyone (Pleiades)', 'Альциона (Плеяды)'], [54035, 'Lalande 21185', 'Лаланд 21185'],
-  [16537, 'ε Eridani', 'ε Эридана'], [3829, 'van Maanen’s Star', 'Звезда ван Маанена'],
-  [87937, 'Barnard’s Star', 'Звезда Барнарда'], [108870, 'ε Indi (with B)', 'ε Индейца (с B)'],
+  [32349, 'Sirius', 'Сириус', 1.711], [30438, 'Canopus', 'Канопус', 71], [71683, 'α Centauri A', 'α Центавра A', 1.223],
+  [70890, 'Proxima Centauri', 'Проксима Центавра', 0.154], [69673, 'Arcturus', 'Арктур', 25.4], [91262, 'Vega', 'Вега', 2.5],
+  [24608, 'Capella', 'Капелла', 12.0], [24436, 'Rigel', 'Ригель', 78.9], [37279, 'Procyon', 'Процион', 2.05],
+  [27989, 'Betelgeuse', 'Бетельгейзе', 764], [97649, 'Altair', 'Альтаир', 1.8], [21421, 'Aldebaran', 'Альдебаран', 45.1],
+  [80763, 'Antares', 'Антарес', 680], [65474, 'Spica', 'Спика', 7.5], [37826, 'Pollux', 'Поллукс', 8.8],
+  [102098, 'Deneb', 'Денеб', 203], [11767, 'Polaris', 'Полярная', 37.5], [113368, 'Fomalhaut', 'Фомальгаут', 1.84],
+  [17702, 'Alcyone (Pleiades)', 'Альциона (Плеяды)', 9.3], [54035, 'Lalande 21185', 'Лаланд 21185', 0.39],
+  [16537, 'ε Eridani', 'ε Эридана', 0.735], [3829, 'van Maanen’s Star', 'Звезда ван Маанена', 0.011],
+  [87937, 'Barnard’s Star', 'Звезда Барнарда', 0.187], [108870, 'ε Indi (with B)', 'ε Индейца (с B)', 0.71],
 ];
 
 const vec = (ra, dec, pc) => [
@@ -60,6 +65,7 @@ const rows = (await res.text()).split('\n').filter((l) => /^\s*\d/.test(l)).map(
 
 const positions = [];
 const looks = [];
+const hips = [];
 const byHip = new Map();
 for (const [hip, ra, dec, plx, ePlx, hp, bv] of rows) {
   const p = Number(plx);
@@ -72,14 +78,15 @@ for (const [hip, ra, dec, plx, ePlx, hp, bv] of rows) {
   const colour = bv === '' ? 0.65 : Number(bv);
   positions.push(...xyz);
   looks.push(Math.round(absMag * 100), Math.round(colour * 1000));
+  hips.push(Number(hip));
   byHip.set(Number(hip), { xyz, absMag, colour });
 }
 
-const named = [{ key: 'sun', en: 'Sun', ru: 'Солнце', pos: [0, 0, 0], absMag: 4.83, bv: 0.65, ref: 'IAU 2015' }];
-for (const [hip, en, ru] of NAMED) {
+const named = [{ key: 'sun', en: 'Sun', ru: 'Солнце', pos: [0, 0, 0], absMag: 4.83, bv: 0.65, radius: 1, ref: 'IAU 2015' }];
+for (const [hip, en, ru, radius] of NAMED) {
   const s = byHip.get(hip);
   if (!s) continue;
-  named.push({ key: `hip${hip}`, en, ru, pos: s.xyz.map((c) => +c.toFixed(4)), absMag: +s.absMag.toFixed(2), bv: s.colour, ref: `HIP ${hip}` });
+  named.push({ key: `hip${hip}`, hip, en, ru, radius, pos: s.xyz.map((c) => +c.toFixed(4)), absMag: +s.absMag.toFixed(2), bv: s.colour, ref: `HIP ${hip}` });
 }
 // The challenge's own targets, at the parallaxes the site already cites.
 const { targets } = JSON.parse(await readFile(join(ROOT, 'public', 'data', 'targets.json'), 'utf8'));
@@ -87,7 +94,8 @@ for (const t of targets) {
   const plx = t.target?.plx;
   if (!(plx > 0)) continue;
   named.push({
-    key: t.key, en: t.name, ru: t.name, target: true,
+    // A brown dwarf is about Jupiter's size whatever its mass: a tenth of the Sun's.
+    key: t.key, en: t.name, ru: t.name, target: true, radius: 0.1,
     pos: vec(t.target.ra, t.target.dec, 1000 / plx).map((c) => +c.toFixed(4)),
     ref: t.target.ref,
   });
@@ -96,6 +104,7 @@ for (const t of targets) {
 await mkdir(OUT, { recursive: true });
 await writeFile(join(OUT, 'stars.bin'), Buffer.concat([
   Buffer.from(new Float32Array(positions).buffer), Buffer.from(new Int16Array(looks).buffer),
+  Buffer.from(new Int32Array(hips).buffer),
 ]));
 await writeFile(join(OUT, 'named.json'), `${JSON.stringify({
   source: 'Hipparcos new reduction (van Leeuwen 2007, VizieR I/311), parallax better than 20 %',

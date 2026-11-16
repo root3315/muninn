@@ -41,3 +41,37 @@
   .fly-pad { inset-block-start: 30%; }
   .fly-label__far { display: none; }
 }
+
+/* A star's card: what the catalogue knows, and where to go from it. */
+.fly-card {
+  position: absolute; inset-inline-end: var(--edge); inset-block-start: var(--edge);
+  inline-size: min(22rem, calc(100% - 2 * var(--edge)));
+  display: grid; gap: var(--space-xs);
+  padding: var(--space-md) var(--space-lg) var(--space-lg);
+  border-radius: var(--radius-lg);
+  background: var(--gate-veil-deep);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.fly-card[hidden] { display: none; }
+.fly-card__close {
+  position: absolute; inset-inline-end: var(--space-xs); inset-block-start: var(--space-xs);
+  inline-size: var(--hit); block-size: var(--hit); border: 0; border-radius: 50%; cursor: pointer;
+  background: transparent; color: var(--color-muted); font-size: var(--text-lg); line-height: 1;
+  transition: background-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
+}
+.fly-card__close:hover { background: var(--color-paper-3); color: var(--color-ink); }
+.fly-card__title { margin: 0; padding-inline-end: var(--hit); font-family: var(--font-display); font-weight: 500; font-size: var(--text-lg); line-height: 1.15; }
+.fly-card__note { margin: 0; font-size: var(--text-xs); color: var(--color-neutral); }
+.fly-card__note:empty { display: none; }
+.fly-card__rows { margin: 0; display: grid; gap: var(--space-3xs); }
+.fly-card__rows > div { display: flex; justify-content: space-between; gap: var(--space-md); font-size: var(--text-sm); }
+.fly-card__rows dt { color: var(--color-muted); }
+.fly-card__rows dd { margin: 0; text-align: end; }
+.fly-card__acts { display: flex; flex-wrap: wrap; gap: var(--space-xs); padding-block-start: var(--space-xs); }
+.fly-card__acts .as-open { margin-inline-start: 0; }
+.fly-card__frames { text-decoration: none; }
+.fly-card__frames[hidden] { display: none; }
+
+@media (max-width: 640px) {
+  .fly-card { inset-block-start: auto; inset-block-end: calc(var(--edge) + 9.5rem); padding: var(--space-sm) var(--space-md); }
+}
