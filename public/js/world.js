@@ -113,7 +113,9 @@ addEventListener('message', (e) => {
   if (e.data.type === 'muninn:close') closeWorld();
   if (e.data.type === 'muninn:scale' && ['sky', 'allsky', 'fly'].includes(e.data.scale)) goTo(e.data.scale, e.data.look);
   if (e.data.type === 'muninn:open' && typeof e.data.hash === 'string' && e.data.hash.startsWith('#')) {
-    closeWorld();
+    // The field is put up under the layer first, and the layer fades off it
+    // once it is there: closed first, the front page's sky showed between.
     location.hash = e.data.hash;
+    setTimeout(closeWorld, 450);
   }
 });
