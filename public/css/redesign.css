@@ -1679,6 +1679,8 @@ body { font-size: var(--text-base); line-height: 1.5; }
 
 /* Phone-only pieces of the sky's chrome; a wide screen lays out as before. */
 .gate .gate__theme, .gate .gate__foot { display: none; }
+/* Off the phone the foot links are not shown; their line takes no room. */
+.gate__feet { display: contents; }
 .gate__jump-row { display: contents; }
 
 /*
@@ -1769,6 +1771,8 @@ body { font-size: var(--text-base); line-height: 1.5; }
     display: inline-flex; align-items: center;
     font-size: var(--text-sm); white-space: nowrap; text-shadow: none;
   }
+  /* The talk and the whole sky share one line at the foot, not a row each. */
+  .gate .gate__feet { display: flex; flex-wrap: wrap; gap: 0 var(--space-xs); margin: 0; }
   .gate .gate__foot {
     display: inline-flex; justify-self: start;
     margin-inline-start: calc(-1 * var(--space-sm));

@@ -4760,11 +4760,22 @@ function loadSkyLayers() {
   return skyLayersAsked;
 }
 
+/** Where the sky in the entry screen comes from, with the other credits. */
+function showSkyCredit() {
+  const skyCredit = [
+    state.skyLayers.stars && t('credit.stars'), state.skyLayers.deep && t('credit.deep'),
+    t(gate?.survey ? 'gate.surveyed' : 'gate.modelled'),
+  ].filter(Boolean).join(' · ');
+  $('credit').textContent = [t('foot.short'), skyCredit].filter(Boolean).join(String.fromCharCode(10));
+}
+
 async function buildGate() {
   gate = new Gate($('gate-sky'), {
     // A press shows what was pressed. The flight starts from the card.
     onPick: (hit) => { gate.select(hit); showCard(hit); },
     onName: nameOnSky,
+    // The colophon names what is drawn: the survey once it is here.
+    onSurvey: showSkyCredit,
   });
   window.addEventListener('resize', () => { if (!$('gate').hidden) gate.resize(); });
   // On a phone the sky is the space between the bar and the panel under it,
@@ -5837,11 +5848,7 @@ function relabel() {
   renderPresets();
   renderArchives();
   if (state.ra != null) showFieldPlanets();
-  // Where the sky in the entry screen comes from, with the other credits.
-  const skyCredit = [
-    state.skyLayers.stars && t('credit.stars'), state.skyLayers.deep && t('credit.deep'), t('gate.modelled'),
-  ].filter(Boolean).join(' · ');
-  $('credit').textContent = [t('foot.short'), skyCredit].filter(Boolean).join(String.fromCharCode(10));
+  showSkyCredit();
   updateIdentity();
   renderBytes();
   renderDepth();

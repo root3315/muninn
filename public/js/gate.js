@@ -19,10 +19,12 @@
  *   · stars      — catalogue positions and magnitudes. Nothing invented.
  *   · markers    — things this tool can open: planets computed for tonight,
  *                  Messier objects, and fields whose frames are indexed here.
- *   · the disc   — the Milky Way, computed from galactic coordinates. A model
- *                  of the galactic disc, not a photograph and not a survey. It
- *                  is there so the sky reads as a sky; nothing is measured from
- *                  it, and the colophon says as much.
+ *   · the disc   — the Milky Way as SPHEREx surveyed it (data/sky/milkyway.png,
+ *                  made by tools/build-gate-sky.mjs from the DR1 all-sky cube
+ *                  at 0.91, 2.00 and 4.70 µm as blue, green and red). Until it
+ *                  has arrived, a model of the galactic disc stands in for it,
+ *                  computed from galactic coordinates, and gives way to it
+ *                  over most of a second; the colophon says which is on screen.
  *
  * Drag to look around, wheel to widen or narrow. Press a marker and the camera
  * turns onto it and dives: the field of view closes from seventy-eight degrees
@@ -266,17 +268,23 @@ const FOV_DIVE = 1.0;
  * frame is filled by the GPU, and fewer pixels is what keeps it on time.
  */
 const DIVE_DPR = 0.7;
+/** How long the model takes to give way to the surveyed band, ms. */
+const SURVEY_FADE_MS = 900;
 
 export class Gate {
   /**
    * @param {HTMLCanvasElement} canvas
    * @param {{onPick: (o: object) => void, onName: (o: object|null) => void}} hooks
    */
-  constructor(canvas, { onPick, onName }) {
+  constructor(canvas, { onPick, onName, onSurvey = () => {} }) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d', { alpha: false });
     this.onPick = onPick;
     this.onName = onName;
+    this.onSurvey = onSurvey;
+    /** The surveyed band, once it has arrived: `{ pixels, W, H }`. */
+    this.survey = null;
+    this.surveyAt = 0;
 
     this.stars = null;
     this.targets = [];
@@ -543,6 +551,40 @@ export class Gate {
   }
 
   /**
+   * The Milky Way as SPHEREx surveyed it, in the same layout as the model's
+   * band. Fetched once, after the model is up, so nothing on the page waits
+   * for it; if it cannot be had, the model stays and says so.
+   */
+  async loadSurvey(url = 'data/sky/milkyway.png') {
+    this.surveyAsked = true;
+    try {
+      const res = await fetch(url, { cache: 'force-cache', signal: AbortSignal.timeout(30_000) });
+      if (!res.ok) return;
+      const bitmap = await createImageBitmap(await res.blob());
+      const c = document.createElement('canvas');
+      c.width = bitmap.width;
+      c.height = bitmap.height;
+      const g = c.getContext('2d', { willReadFrequently: true });
+      g.drawImage(bitmap, 0, 0);
+      this.survey = { pixels: g.getImageData(0, 0, c.width, c.height).data, W: c.width, H: c.height };
+      this.surveyAt = performance.now();
+      this.onSurvey();
+      const step = () => {
+        this.draw();
+        if (this.surveyShare() < 1) requestAnimationFrame(step);
+      };
+      requestAnimationFrame(step);
+    } catch { /* the model stays, and the colophon says it is the model */ }
+  }
+
+  /** How far the surveyed band has come in over the model, 0 to 1. */
+  surveyShare() {
+    if (!this.survey) return 0;
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return 1;
+    return Math.min(1, (performance.now() - this.surveyAt) / SURVEY_FADE_MS);
+  }
+
+  /**
    * The faint field.
    *
    * Five thousand catalogued stars is the naked-eye sky, and the naked-eye sky
@@ -655,11 +697,14 @@ export class Gate {
    * parallelogram is under a pixel, so one affine transform per cell is enough.
    * Cells are drawn slightly large so the seams between them close.
    */
-  drawBand(target) {
-    if (!this.band) return;
-    /** Screen pixels per sample. The disc has no detail this fine — and in a
-     * dive it is smeared by the motion anyway, so it is sampled coarser. */
-    const SS = this.quality.band * (this.flight ? 1.6 : 1);
+  drawBand(target, source = { pixels: this.bandPixels, W: this.bandW, H: this.bandH }, alpha = 1) {
+    if (!this.band || alpha <= 0) return;
+    /** Screen pixels per sample. The model has no detail this fine — and in a
+     * dive it is smeared by the motion anyway, so it is sampled coarser. The
+     * survey has dust lanes and nebulae: on the faster machines it is
+     * sampled finer. */
+    const fine = source === this.survey && this.tier <= 1 ? 0.65 : 1;
+    const SS = this.quality.band * fine * (this.flight ? 1.6 : 1);
     const { width, height } = this.box;
     const W = Math.max(2, Math.ceil(width / SS));
     const H = Math.max(2, Math.ceil(height / SS));
@@ -673,9 +718,9 @@ export class Gate {
     }
 
     const out = this.lowImg.data;
-    const src = this.bandPixels;
-    const bw = this.bandW;
-    const bh = this.bandH;
+    const src = source.pixels;
+    const bw = source.W;
+    const bh = source.H;
     const { f, r, u } = this.basis;
     const { focal } = this;
     const cx = width / 2;
@@ -715,7 +760,9 @@ export class Gate {
     // in a dive it is one less full-frame pass for the GPU.
     target.imageSmoothingQuality = this.flight ? 'low' : 'high';
     target.globalCompositeOperation = 'lighter';
+    target.globalAlpha = alpha;
     target.drawImage(this.low, 0, 0, width, height);
+    target.globalAlpha = 1;
     target.globalCompositeOperation = 'source-over';
   }
 
@@ -741,11 +788,15 @@ export class Gate {
     ctx.fillStyle = this.paint.well;
     ctx.fillRect(0, 0, width, height);
 
-    this.drawBand(ctx);
+    // The model, giving way to the survey once it is here.
+    const surveyed = this.surveyShare();
+    if (surveyed < 1) this.drawBand(ctx, undefined, 1 - surveyed);
+    if (surveyed > 0) this.drawBand(ctx, this.survey, surveyed);
     if (!this.stars) return;
 
-    // The faint field: the ground the catalogue sits on.
-    if (this.haze) {
+    // The faint field: the ground the catalogue sits on. It is drawn from the
+    // model, so it goes when the survey comes, which shows the real one.
+    if (this.haze && surveyed < 1) {
       const { v } = this.haze;
       ctx.fillStyle = '#cfe0f2';
       ctx.strokeStyle = '#cfe0f2';
@@ -755,7 +806,7 @@ export class Gate {
       ctx.lineCap = streak ? 'butt' : 'round';
       for (const b of this.haze.buckets) {
         const { idx } = b;
-        ctx.globalAlpha = b.alpha;
+        ctx.globalAlpha = b.alpha * (1 - surveyed);
         ctx.beginPath();
         let drew = false;
         for (let k = 0; k < idx.length; k++) {
@@ -1521,5 +1572,6 @@ export class Gate {
     if (!this.haze) this.buildHaze(this.quality.haze);
     if (!this.glows) this.buildGlows();
     this.draw();
+    if (!this.surveyAsked) this.loadSurvey();
   }
 }

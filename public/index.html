@@ -89,9 +89,9 @@
   Every point is a catalogued star at its own position, sized by its own
   magnitude and tinted by its own colour index, down to the naked-eye limit.
   Move the pointer and the sky names itself; press, and the view falls through
-  that position into SPHEREx's frames of it. The soft band behind is the Milky
-  Way, computed from galactic coordinates — a model of the disc, said so in the
-  fine print, because it is the one thing here that is not a measurement.
+  that position into SPHEREx's frames of it. The band behind is the Milky Way
+  as SPHEREx surveyed it, in false colour; a model of the disc stands in for
+  it for the moment it takes to arrive, and the fine print says which is up.
 -->
 <section class="gate" id="gate" aria-label="The sky" data-i18n-label="aria.gate">
   <canvas class="gate__sky" id="gate-sky" aria-hidden="true"></canvas>
@@ -141,8 +141,10 @@
          sky opens facing the galactic centre and none of them is in view. -->
     <p class="gate__jump" id="gate-jump" hidden></p>
     <!-- On a phone the talk leaves the bar for the foot of the panel. -->
-    <a class="link gate__foot" href="talk.html" data-i18n="gate.talk"></a>
-    <a class="link gate__foot" href="allsky.html" data-i18n="gate.allsky"></a>
+    <p class="gate__feet">
+      <a class="link gate__foot" href="talk.html" data-i18n="gate.talk"></a>
+      <a class="link gate__foot" href="allsky.html" data-i18n="gate.allsky"></a>
+    </p>
 
   </div>
 
