@@ -163,9 +163,13 @@ void main() {
   } else if (uLit) {
     discard;
   } else {
-    // A star's light scattered in the eye: added, not drawn over.
-    float out_ = (sqrt(miss2) - uRadius) / uRadius;
-    outColour = vec4(uCol * 0.35 * exp(-out_ * 2.5), 0.0);
+    // A star's light scattered in the eye: added, not drawn over. Its reach
+    // is in pixels, at least the glow its point had, so it never shrinks.
+    float pxPerRad = uFocal.y * uSize.y * 0.5;
+    float limbPx = (sqrt(miss2) - uRadius) / along * pxPerRad;
+    float discPx = uRadius / along * pxPerRad;
+    float reach = max(discPx * 0.6, 7.0);
+    outColour = vec4(uCol * 0.55 * exp(-limbPx / reach), 0.0);
   }
 }`;
 
@@ -348,11 +352,12 @@ export function createSpace(canvas, { stars, sky }) {
       gl.uniform1f(starProg.u.MaxPoint, maxPoint);
       const nears = (Array.isArray(near) ? near : near ? [near] : []).slice(0, 12);
       // The spheres are drawn exactly; their points are left out of the star pass.
-      // A planet's point is left out: its sphere is all of it. A star keeps its
-      // glow under its sphere, so a star approached grows into its disc rather
-      // than shrinking from a bright point into a small ball.
+      // A body drawn as a sphere is left out of the point pass: its point,
+      // placed in single precision, would sit beside it. Its glow is the
+      // sphere pass's, sized in pixels, so a star approached grows into its
+      // disc rather than shrinking from a bright point into a small ball.
       const skip = new Int32Array(12).fill(-1);
-      nears.forEach((n, k) => { if (n.lit) skip[k] = n.index; });
+      nears.forEach((n, k) => { skip[k] = n.index; });
       gl.uniform1iv(starProg.u['Skip[0]'], skip);
       const front = nears[0];
       gl.uniform4fv(starProg.u.Near, front
@@ -370,6 +375,10 @@ export function createSpace(canvas, { stars, sky }) {
         gl.uniform2fv(lineProg.u.Focal, focal);
         for (const g of [...lineGroups, ...(live ? [live] : [])]) {
           if (g !== live && !show(g.key)) continue;
+          // The changing lines come relative to the eye already, worked out in
+          // double precision: a system's orbits are hundred-millionths of a
+          // parsec across, finer than single precision holds at its distance.
+          gl.uniform3fv(lineProg.u.Eye, g === live ? [0, 0, 0] : eye);
           gl.uniform4fv(lineProg.u.Ink, g.ink);
           gl.bindVertexArray(g.vao);
           gl.drawArrays(gl.LINES, 0, g.count);

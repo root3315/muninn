@@ -327,6 +327,13 @@ function flyTo(s) {
 
 function steer(dt) {
   if (stepPullOut()) return;
+  if (autopilot?.follow) {
+    const to = autopilot.follow();
+    if (to) {
+      autopilot.to = add(to, norm(sub(autopilot.to, autopilot.look)), autopilot.stop);
+      autopilot.look = to;
+    }
+  }
   if (autopilot && autopilot.body >= 0) {
     const to = posOf(autopilot.body);
     const dir = norm(sub(to, autopilot.from));
@@ -1165,8 +1172,9 @@ function drawSystem() {
     for (let k = 0; k < 96; k++) {
       const a0 = (k / 96) * 2 * Math.PI;
       const a1 = ((k + 1) / 96) * 2 * Math.PI;
-      segs.push(...add(add(sys.center, o.toSun, o.r * Math.cos(a0)), o.side, o.r * Math.sin(a0)));
-      segs.push(...add(add(sys.center, o.toSun, o.r * Math.cos(a1)), o.side, o.r * Math.sin(a1)));
+      // Relative to the eye, in double precision, before they become single.
+      segs.push(...sub(add(add(sys.center, o.toSun, o.r * Math.cos(a0)), o.side, o.r * Math.sin(a0)), cam.eye));
+      segs.push(...sub(add(add(sys.center, o.toSun, o.r * Math.cos(a1)), o.side, o.r * Math.sin(a1)), cam.eye));
     }
   }
   space.setLiveLines(new Float32Array(segs), [0.55, 0.9, 0.75, 0.45]);
@@ -1281,6 +1289,7 @@ function openSystemCard(sys) {
   $('card-note').textContent = t('exo.note');
   const rows = [[t('fly.cardSun'), distanceText(sys.pc)]];
   if (sys.teff) rows.push([t('fly.cardTemp'), t('fly.kelvin', { n: fmt(sys.teff, 0) })]);
+  const planetRows = [];
   for (const pl of sys.planets) {
     const bits = [];
     if (pl.r) bits.push(t('exo.radius', { r: fmt(pl.r, pl.r < 10 ? 1 : 0) }));
@@ -1288,9 +1297,19 @@ function openSystemCard(sys) {
     if (pl.p) bits.push(t('exo.period', { p: fmt(pl.p, pl.p < 10 ? 2 : 0) }));
     if (pl.t) bits.push(t('exo.teq', { t: fmt(pl.t, 0) }));
     bits.push(t('exo.found', { method: pl.method ?? '—', year: pl.year ?? '—' }));
-    rows.push([pl.name, bits.join(' · ')]);
+    planetRows.push([pl, bits.join(' · ')]);
   }
-  $('card-rows').replaceChildren(systemDiagram(sys), ...rows.map(([k, v]) => cardRow(k, v)));
+  const planetRow = ([pl, text]) => {
+    const row = cardRow(pl.name, text);
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'fly-planet-go';
+    go.textContent = t('exo.goPlanet');
+    go.addEventListener('click', () => flyToExoPlanet(sys, pl));
+    row.querySelector('dt').append(' ', go);
+    return row;
+  };
+  $('card-rows').replaceChildren(systemDiagram(sys), ...rows.map(([k, v]) => cardRow(k, v)), ...planetRows.map(planetRow));
   const frames = $('card-frames');
   frames.hidden = false;
   const url = new URL('./', location.href);
@@ -1303,17 +1322,81 @@ function openSystemCard(sys) {
   $('card').hidden = false;
 }
 
-/** Fly into a system: far enough out to see its widest orbit whole. */
+/** The plane a system's orbits are drawn in: towards the Sun, and across. */
+function systemFrame(sys) {
+  const toSun = norm(sub([0, 0, 0], sys.center));
+  let side = cross(toSun, [0, 0, 1]);
+  if (len(side) < 1e-6) side = cross(toSun, [1, 0, 0]);
+  side = norm(side);
+  return { toSun, side, up: norm(cross(toSun, side)) };
+}
+
+/**
+ * Fly into a system: to a point above the plane of its orbits, high enough
+ * that the widest is whole on the screen, looking down at the star, so the
+ * star and every planet are seen together.
+ */
 function flyToSystem(sys) {
   closeCard();
   carried = null;
-  const widest = Math.max(...sys.planets.map((pl) => pl.a || 0), 0.05) * AU;
-  const stop = Math.max(widest * 2.5, (sys.starR || 1) * R_SUN_PC * 8);
-  const dir = norm(sub(sys.center, cam.eye));
-  const to = add(sys.center, dir, -stop);
-  autopilot = { from: cam.eye, to, look: sys.center, stop, t0: performance.now(), ms: reduceMotion ? 1 : 3200 + 400 * Math.log10(1 + len(sub(sys.center, cam.eye)) / stop), body: -1 };
+  const widest = Math.max(...sys.planets.map((pl) => pl.a || 0), 0.02) * AU;
+  const height = Math.max(widest / Math.tan((FOV * Math.PI) / 360) * 1.35, (sys.starR || 1) * R_SUN_PC * 10);
+  const { up, toSun } = systemFrame(sys);
+  // From above and a little to the Sun's side, so the orbits are ellipses, not lines.
+  const to = add(add(sys.center, up, height * 0.92), toSun, height * 0.4);
+  autopilot = {
+    from: cam.eye, to, look: sys.center, stop: height, t0: performance.now(), body: -1,
+    ms: reduceMotion ? 1 : 3400 + 400 * Math.log10(1 + len(sub(sys.center, cam.eye)) / height),
+  };
   const wait = () => (autopilot ? requestAnimationFrame(wait) : openSystemCard(sys));
   requestAnimationFrame(wait);
+}
+
+/** One of a system's planets: the camera goes to it, and its card is shown. */
+function flyToExoPlanet(sys, pl) {
+  const now = systemNow(sys).find((o) => o.pl === pl);
+  if (!now?.pos || !(pl.r > 0)) {
+    flyToSystem(sys);
+    return;
+  }
+  closeCard();
+  carried = null;
+  const rp = pl.r * R_EARTH_PC;
+  // Lit from its star: approached from the star's side, a little off it, so its day side shows with a phase.
+  const fromStar = norm(sub(now.pos, sys.center));
+  const { up } = systemFrame(sys);
+  const dir = norm(add(add(fromStar.map((c) => -c), up, 0.6), now.side ?? [0, 0, 1], 0.5));
+  const to = add(now.pos, dir, rp * 7);
+  autopilot = {
+    from: cam.eye, to, look: now.pos, stop: rp * 7, t0: performance.now(), body: -1,
+    ms: reduceMotion ? 1 : 3000 + 400 * Math.log10(1 + len(sub(now.pos, cam.eye)) / (rp * 7)),
+    follow: () => systemNow(sys).find((o) => o.pl === pl)?.pos,
+  };
+  const wait = () => (autopilot ? requestAnimationFrame(wait) : openPlanetCard(sys, pl));
+  requestAnimationFrame(wait);
+}
+
+/** A planet of another star: what is known of it. */
+function openPlanetCard(sys, pl) {
+  closeCard();
+  $('card-title').textContent = pl.name;
+  $('card-note').textContent = t('exo.planetNote', { host: sys.host });
+  const rows = [];
+  if (pl.r) rows.push([t('fly.cardRadius'), t('exo.radiusLong', { r: fmt(pl.r, pl.r < 10 ? 2 : 1), j: fmt(pl.r / 11.21, 2) })]);
+  if (pl.a) rows.push([t('exo.orbitH'), t('exo.orbitLong', { a: fmt(pl.a, 3) })]);
+  if (pl.p) rows.push([t('exo.periodH'), t('exo.periodLong', { p: fmt(pl.p, pl.p < 10 ? 3 : 1) })]);
+  if (pl.e != null) rows.push([t('exo.eccH'), fmt(pl.e, 2)]);
+  if (pl.t) rows.push([t('exo.teqH'), t('fly.kelvin', { n: fmt(pl.t, 0) })]);
+  const hz = habitableZone(sys.starR, sys.teff);
+  if (hz && pl.a) rows.push([t('exo.hzH'), t(pl.a < hz.inner ? 'exo.hzIn' : pl.a > hz.outer ? 'exo.hzOut' : 'exo.hzYes')]);
+  rows.push([t('exo.foundH'), t('exo.found', { method: pl.method ?? '—', year: pl.year ?? '—' })]);
+  $('card-rows').replaceChildren(...rows.map(([k, v]) => cardRow(k, v)));
+  $('card-frames').hidden = true;
+  const ev = $('card-exo');
+  ev.hidden = false;
+  ev.href = systemUrl([sys.ra, sys.dec, sys.planets.length, sys.host], sys.host, getLanguage());
+  card = { s: { key: `sys:${sys.host}`, sys, index: sys.index } };
+  $('card').hidden = false;
 }
 
 /* ---- language and start ----------------------------------------------- */

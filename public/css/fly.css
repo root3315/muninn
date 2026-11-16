@@ -123,3 +123,11 @@
 .fly-system__planet { fill: oklch(92% 0.04 165); stroke: oklch(20% 0.02 250); stroke-width: 0.8; }
 .fly-system__note { margin: var(--space-2xs) 0 0; font-size: var(--text-2xs); color: var(--color-neutral); text-align: center; }
 .fly-card { max-block-size: calc(100% - 2 * var(--edge) - 12rem); overflow-y: auto; }
+
+/* A planet's way in, beside its name in its system's card. */
+.fly-planet-go {
+  margin-inline-start: var(--space-2xs); padding: 0 var(--space-xs); min-block-size: 1.4rem;
+  border: 0; border-radius: var(--radius-round); cursor: pointer;
+  color: var(--color-accent-ink); background: oklch(82% 0.11 165); font: inherit; font-size: var(--text-2xs); font-weight: 600;
+}
+.fly-planet-go:hover { filter: brightness(1.1); }
