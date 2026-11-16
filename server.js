@@ -1197,6 +1197,74 @@ async function cutWise({ ra, dec }, band, size, file) {
 /** Longest side of the picture sent on: more than the plate ever shows. */
 const WISE_MAX_SIDE = 640;
 
+/* ------------------------------------------------------- the whole-sky cube */
+
+/**
+ * The SPHEREx DR1 all-sky cube's HiPS tiles and Allsky images, passed on from
+ * IRSA and kept on disk. IRSA's tile server has slow spells — an Allsky image
+ * that usually comes in a second can take minutes — and the cube does not
+ * change, so a tile once fetched is served from here for weeks after.
+ * Only the cube's own file names are passed on: nothing else at IRSA can be
+ * asked for through this.
+ */
+const HIPS_ORIGIN = 'https://irsa.ipac.caltech.edu/data/hips/SPHEREx/spherex_allsky_cube/';
+const HIPS_PATH = /^Norder([0-5])\/(?:Dir(\d{1,6})\/Npix(\d{1,6})|Allsky)(?:_(\d{1,3}))?\.png$/;
+const HIPS_FRAMES = 102;
+const HIPS_TIMEOUT_MS = 90_000;
+/** A tile of a released cube does not change: the browser and Cloudflare may keep it a week. */
+const HIPS_KEEP = { 'content-type': 'image/png', 'cache-control': 'public, max-age=604800' };
+/** Its own ceiling on the disk, apart from the answers', so a sweep through the spectrum cannot push out frame lists. */
+const HIPS_MAX_BYTES = 200 * 1024 * 1024;
+const HIPS_PER_MINUTE = 1500;
+const hipsAsked = new Map();
+const hipsPending = new Map();
+
+/** Whether a path names a file the cube has: the order, directory and index agree, the frame exists. */
+function hipsPathOk(path) {
+  const m = HIPS_PATH.exec(path);
+  if (!m) return false;
+  const order = Number(m[1]);
+  if (m[3] !== undefined) {
+    const npix = Number(m[3]);
+    if (npix >= 12 * 4 ** order) return false;
+    if (Number(m[2]) !== Math.floor(npix / 10000) * 10000) return false;
+  } else if (order !== 3) {
+    return false;
+  }
+  return m[4] === undefined || (Number(m[4]) >= 1 && Number(m[4]) < HIPS_FRAMES);
+}
+
+async function handleHips(url, res) {
+  const path = url.pathname.slice('/api/hips/'.length);
+  if (!hipsPathOk(path)) return send(res, 404, 'Not a file of the SPHEREx all-sky cube');
+  const file = join(CACHE, `hips_${path.replace(/[^\w]/g, '_')}`);
+  try {
+    return send(res, 200, await readFile(file), HIPS_KEEP);
+  } catch { /* not kept yet */ }
+  let pending = hipsPending.get(path);
+  if (!pending) {
+    pending = (async () => {
+      const answer = await retryOnGateway(() => withTimeout(HIPS_ORIGIN + path, HIPS_TIMEOUT_MS));
+      if (answer.status === 404) return null;
+      if (!answer.ok) throw new Error(`IRSA HiPS: HTTP ${answer.status}`);
+      const body = Buffer.from(await answer.arrayBuffer());
+      if (body.subarray(1, 4).toString('latin1') !== 'PNG') throw new Error('IRSA HiPS: not a PNG');
+      try {
+        await mkdir(CACHE, { recursive: true });
+        await writeFile(file, body);
+      } catch { /* served all the same */ }
+      return body;
+    })().finally(() => hipsPending.delete(path));
+    hipsPending.set(path, pending);
+  }
+  try {
+    const body = await pending;
+    return body ? send(res, 200, body, HIPS_KEEP) : send(res, 404, 'No such tile');
+  } catch (err) {
+    return send(res, 502, err.message);
+  }
+}
+
 /**
  * Average a float FITS image down by a whole factor until its longer side
  * fits `maxSide`, and rewrite the scale cards to match. An Atlas pixel is
@@ -1629,10 +1697,13 @@ const server = createServer(async (req, res) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     return send(res, 405, 'Method not allowed', { allow: 'GET, HEAD' });
   }
-  if (url.pathname.startsWith('/api/') && overLimit(req)) {
+  // The sky's tiles come by the hundred as the view moves: they have a limit of their own.
+  const tiles = url.pathname.startsWith('/api/hips/');
+  if (url.pathname.startsWith('/api/') && (tiles ? overLimit(req, hipsAsked, HIPS_PER_MINUTE) : overLimit(req))) {
     return json(res, 429, { ok: false, error: 'Too many questions from here; wait a minute.' });
   }
   try {
+    if (tiles) return await handleHips(url, res);
     if (url.pathname === '/api/search') return await handleSearch(url, res);
     if (url.pathname === '/api/tap') return await handleTap(url, res);
     if (url.pathname === '/api/depth') return await handleDepth(url, res);
@@ -1667,6 +1738,7 @@ async function sweepCache() {
   try { names = await readdir(CACHE); } catch { return; }
   const now = Date.now();
   const kept = [];
+  const keptTiles = [];
   for (const name of names) {
     const file = join(CACHE, name);
     try {
@@ -1675,16 +1747,19 @@ async function sweepCache() {
       // A frame list, and the depth view's catalogues, are kept for weeks, as
       // the answer to fall back on while the archives are down; everything
       // else for as long as it is trusted.
-      const keep = name.startsWith('frames_') ? SEARCH_KEEP_MS : name.startsWith('depth_') ? DEPTH_KEEP_MS : CACHE_TTL_MS;
+      // The cube's tiles, for as long as the frame lists: a release does not change.
+      const keep = name.startsWith('frames_') || name.startsWith('hips_') ? SEARCH_KEEP_MS : name.startsWith('depth_') ? DEPTH_KEEP_MS : CACHE_TTL_MS;
       if (now - info.mtimeMs > keep) await unlink(file);
-      else kept.push({ file, at: info.mtimeMs, size: info.size });
+      else (name.startsWith('hips_') ? keptTiles : kept).push({ file, at: info.mtimeMs, size: info.size });
     } catch { /* gone already, or busy: the next sweep has it */ }
   }
-  // And a ceiling on what is kept, oldest out first.
-  let total = kept.reduce((sum, f) => sum + f.size, 0);
-  for (const f of kept.sort((a, b) => a.at - b.at)) {
-    if (total <= CACHE_MAX_BYTES) break;
-    try { await unlink(f.file); total -= f.size; } catch { /* next sweep */ }
+  // And a ceiling on what is kept, oldest out first: one for the answers, one for the tiles.
+  for (const [list, ceiling] of [[kept, CACHE_MAX_BYTES], [keptTiles, HIPS_MAX_BYTES]]) {
+    let total = list.reduce((sum, f) => sum + f.size, 0);
+    for (const f of list.sort((a, b) => a.at - b.at)) {
+      if (total <= ceiling) break;
+      try { await unlink(f.file); total -= f.size; } catch { /* next sweep */ }
+    }
   }
 }
 sweepCache();
