@@ -33,6 +33,10 @@ uniform vec3 uF;
 uniform vec2 uFocal;
 uniform float uLimit;
 uniform float uPx;
+// The catalogue's stars, below this index, are dimmed by uStarGain while the
+// survey's own picture of them is shown; the Sun's bodies, above it, are not.
+uniform int uStored;
+uniform float uStarGain;
 out vec3 vCol;
 out float vAlpha;
 out float vDisk;
@@ -64,7 +68,12 @@ void main() {
   // Apparent magnitude from here, and the light that gets through.
   float m = (uIR ? aIr : aMag) + 5.0 * log(d / 10.0) / log(10.0);
   float flux = pow(10.0, -0.4 * (m - uLimit));
-  vAlpha = clamp(flux, 0.0, 1.0);
+  vAlpha = clamp(flux, 0.0, 1.0) * (gl_VertexID < uStored ? uStarGain : 1.0);
+  if (vAlpha <= 0.0) {
+    gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+    gl_PointSize = 0.0;
+    return;
+  }
   // The star's own disc, at its real size: its radius over its distance.
   float disc = aRad * R_SUN_PC / c.z * uFocalPx;
   float glow = clamp(uPx * (1.2 + 1.6 * log(1.0 + flux)), uPx, 48.0 * uPx);
@@ -88,13 +97,14 @@ void main() {
     // Inside the disc: limb darkening, the edge of a star dimmer than its
     // middle because the eye sees cooler, higher layers there.
     float mu = sqrt(1.0 - r2 / (vDisk * vDisk));
-    outColour = vec4(vCol * (0.4 + 0.6 * mu), 1.0);
+    outColour = vec4(vCol * (0.4 + 0.6 * mu) * vAlpha, vAlpha);
     return;
   }
-  // A bright core and a soft halo, as a star looks through any optics.
+  // A bright core and a soft halo, as a star looks through any optics:
+  // light added, covering nothing behind it.
   float core = exp(-r2 * 9.0);
   float halo = exp(-r2 * 2.5) * 0.25;
-  outColour = vec4(vCol * (core + halo) * vAlpha, 1.0);
+  outColour = vec4(vCol * (core + halo) * vAlpha, 0.0);
 }`;
 
 const SKY_VS = `#version 300 es
@@ -331,8 +341,9 @@ function compile(gl, vs, fs, attributes = []) {
  * col: Float32Array (r, g, b in 0–1) }; `sky` an image of the Milky Way in
  * equirectangular layout, or null.
  */
-export function createSpace(canvas, { stars, sky }) {
-  const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false });
+export function createSpace(canvas, { stars, sky, stored = Infinity }) {
+  // Alpha: where the SPHEREx sky under this canvas shows through (see draw's survey).
+  const gl = canvas.getContext('webgl2', { antialias: false, alpha: true, premultipliedAlpha: true, depth: false });
   if (!gl) return null;
   const starProg = compile(gl, STAR_VS, STAR_FS, ['aPos', 'aMag', 'aCol', 'aRad', 'aIr']);
   const lineProg = compile(gl, LINE3_VS, LINE3_FS, ['aPos']);
@@ -445,15 +456,25 @@ export function createSpace(canvas, { stars, sky }) {
         return { vao, count: g.data.length / 3, ink: g.ink, key: g.key };
       });
     },
-    draw({ eye, R, U, F, fov, limit = 8.5, near = null, ir = false, show = () => true }) {
+    /**
+     * survey: how much of the SPHEREx sky under this canvas shows, 0 to 1.
+     * Where it shows, this canvas is clear, its own band is left out, and
+     * the catalogue's stars are dimmed to the same degree: the survey is the
+     * picture of them seen from the Sun, the stars in 3-D the picture from
+     * anywhere else.
+     */
+    draw({ eye, R, U, F, fov, limit = 8.5, near = null, ir = false, show = () => true, survey = 0 }) {
       const { w, h, dpr } = fit();
       const fy = 1 / Math.tan((fov * Math.PI) / 360);
       const focal = [fy * (h / w), fy];
       gl.viewport(0, 0, w, h);
-      gl.clearColor(0, 0, 0, 1);
+      gl.clearColor(0, 0, 0, 1 - survey);
       gl.clear(gl.COLOR_BUFFER_BIT);
 
-      if (skyTex) {
+      if (skyTex && survey < 0.999) {
+        gl.enable(gl.BLEND);
+        // Its light added; the cover the clear left, kept.
+        gl.blendFuncSeparate(gl.ONE, gl.ONE, gl.ZERO, gl.ONE);
         gl.useProgram(skyProg.program);
         gl.uniform3fv(skyProg.u.R, R);
         gl.uniform3fv(skyProg.u.U, U);
@@ -461,7 +482,7 @@ export function createSpace(canvas, { stars, sky }) {
         gl.uniform2fv(skyProg.u.Focal, focal);
         gl.uniform2f(skyProg.u.Size, w, h);
         // The band behind, quieter than the stars in front of it.
-        gl.uniform1f(skyProg.u.Dim, 0.45);
+        gl.uniform1f(skyProg.u.Dim, 0.45 * (1 - survey));
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, skyTex);
         gl.uniform1i(skyProg.u.Sky, 0);
@@ -472,6 +493,8 @@ export function createSpace(canvas, { stars, sky }) {
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.ONE, gl.ONE);
       gl.useProgram(starProg.program);
+      gl.uniform1i(starProg.u.Stored, Math.min(stored, 2147483647));
+      gl.uniform1f(starProg.u.StarGain, 1 - survey);
       gl.uniform3fv(starProg.u.Eye, eye);
       gl.uniform3fv(starProg.u.R, R);
       gl.uniform3fv(starProg.u.U, U);

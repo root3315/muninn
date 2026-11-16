@@ -17,6 +17,8 @@ import { embedded, goTo } from './embed.js';
 import { systemUrl } from './exovision.js';
 import { radecOf } from './allsky/healpix.js';
 import { createSpace, screenOf } from './fly/space.js';
+import { createSkyView } from './allsky/view.js';
+import { HIPS_BASE, COLOUR_FRAMES } from './allsky/hips.js';
 import { temperatureOf, luminosityOf, radiusOf, vMinusW2, R_SUN_PC, T_SUN } from './fly/stars.js';
 import { solarSystem, orbits as solarOrbits, bodyAxes, FACTS, AU_PC } from './fly/solar.js';
 import { shells, planetNineShortfall, WISE0855_AB, WISE0855_PC, D6_ONE_VISIT_AB, PLANET_NINE_V, PLANET_NINE_AU, PLANET_NINE_MAX_BETA } from './fly/reach.js';
@@ -28,7 +30,7 @@ const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 /** The field of view, vertical, degrees: the front page's opening width. */
 /** The field of view, vertical, degrees: the wheel narrows and widens it. */
 let FOV = 70;
-const FOV_RANGE = [4, 100];
+const FOV_RANGE = [2, 108];
 /** Speed bounds, parsecs a second: from a few AU a second to a kiloparsec in ten seconds. */
 const SPEED_MIN = 0.00005;
 const SPEED_MAX = 100;
@@ -171,6 +173,66 @@ async function loadStars() {
   }));
   bodies.forEach((b, k) => named.push({ key: b.key, en: b.en, ru: b.ru, planet: true, km: b.km, index: stored + 2 + k }));
   return { stars, named, count: info.count, sun: stored };
+}
+
+/* ---- the SPHEREx sky behind ----------------------------------------------- */
+
+/*
+ * The front page's sky is SPHEREx's all-sky cube; flown out of, this page
+ * starts with the same sky, drawn by the same renderer from the same camera,
+ * so leaving the sky changes nothing on screen. The survey is the sky seen
+ * from the Sun: within the Solar System it is the sky, the stars being far
+ * enough not to have moved. Further out the nearer stars shift against it,
+ * so it gives way to the catalogue's stars in 3-D, which come up as it goes:
+ * all of it inside 2,000 AU, none of it past a light-year.
+ */
+const SURVEY_FULL_PC = 0.01;
+const SURVEY_NONE_PC = 0.3;
+let survey = null;
+let surveyLayer = null;
+
+function makeSurvey() {
+  surveyLayer = document.createElement('canvas');
+  surveyLayer.className = 'as-sky__canvas fly-survey';
+  surveyLayer.setAttribute('aria-hidden', 'true');
+  canvas.before(surveyLayer);
+  const ramp = getComputedStyle(document.documentElement).getPropertyValue('--cmap-deep')
+    .split(/,(?![^(]*\))/).map((x) => x.trim()).filter(Boolean);
+  survey = createSkyView(surveyLayer, {
+    ramp,
+    ink: { grid: [0, 0, 0, 0], ecliptic: [0, 0, 0, 0] },
+    relay: (url) => url.replace(`${HIPS_BASE}/`, 'api/hips/'),
+  });
+  if (!survey) {
+    surveyLayer.remove();
+    surveyLayer = null;
+    return;
+  }
+  survey.setFrames(COLOUR_FRAMES);
+}
+
+/** How much of the survey shows from here: 1 near the Sun, 0 a light-year out; none in the 4.6 µm view. */
+function surveyShare() {
+  if (!survey || view.ir) return 0;
+  const d = len(cam.eye);
+  if (d <= SURVEY_FULL_PC) return 1;
+  if (d >= SURVEY_NONE_PC) return 0;
+  const x = Math.log(d / SURVEY_FULL_PC) / Math.log(SURVEY_NONE_PC / SURVEY_FULL_PC);
+  return 1 - x * x * (3 - 2 * x);
+}
+
+/** The survey from the flight's camera, now, so it and the stars over it agree in this frame. */
+function drawSurvey(share) {
+  if (!survey) return;
+  surveyLayer.style.visibility = share > 0 ? '' : 'hidden';
+  if (share <= 0) return;
+  const R = cross(cam.F, cam.U);
+  // Vertical field here; across the shorter side there.
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  const across = (2 * Math.atan(Math.tan((FOV * Math.PI) / 360) * (Math.min(w, h) / h)) * 180) / Math.PI;
+  survey.set({ basis: { C: cam.F, E: R.map((c) => -c), N: cam.U }, fov: across });
+  survey.drawNow();
 }
 
 async function loadSky() {
@@ -656,7 +718,9 @@ function frame(now) {
   lastNear = nearestStar();
   const extra = drawSystem();
   const near = view.ir ? null : [...extra, ...lastNear].slice(0, 12);
-  proj = space.draw({ ...basis(), fov: FOV, near, ir: view.ir, show: () => view.reach });
+  const share = surveyShare();
+  drawSurvey(share);
+  proj = space.draw({ ...basis(), fov: FOV, near, ir: view.ir, show: () => view.reach, survey: share });
   placeLabels();
   placeExoLabels();
   placeSystemLabels();
@@ -1047,7 +1111,9 @@ addEventListener('message', (e) => {
 let pendingLook = null;
 addEventListener('message', (e) => {
   if (e.origin !== location.origin || e.data?.type !== 'muninn:look') return;
-  const { ra, dec, key } = e.data;
+  const { ra, dec, key, fov } = e.data;
+  // The front page's field, so the sky stays as it was on screen.
+  if (Number.isFinite(fov)) FOV = Math.max(FOV_RANGE[0], Math.min(FOV_RANGE[1], fov));
   if (![ra, dec].every(Number.isFinite)) return;
   // A key pressed on the sky goes on flying here until it is let go: here,
   // or on the page around, which says so; and if neither is heard, a moment.
@@ -1691,7 +1757,9 @@ $('lang').addEventListener('click', () => {
 applyLanguage();
 readHash();
 const [data, skyImage] = await Promise.all([loadStars(), loadSky()]);
-space = createSpace(canvas, { stars: data.stars, sky: skyImage });
+makeSurvey();
+// The catalogue's stars come first; the Sun, WISE 0855 and the planets after.
+space = createSpace(canvas, { stars: data.stars, sky: skyImage, stored: data.sun });
 if (!space) {
   $('nogl').hidden = false;
 } else {

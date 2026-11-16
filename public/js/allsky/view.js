@@ -668,7 +668,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
       canvas.height = h;
     }
     const short = Math.min(w, h);
-    return { ...basisOf(state.ra, state.dec), k: scaleFor(state.fov), sx: short / w, sy: short / h, w, h, short, dpr };
+    return { ...(state.basis ?? basisOf(state.ra, state.dec)), k: scaleFor(state.fov), sx: short / w, sy: short / h, w, h, short, dpr };
   }
 
   /** Where the ellipse sits: centred in the room between the search and the dock, device pixels, y up. */
@@ -1069,7 +1069,23 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
 
   return {
     get state() { return { ...state, frames: [...state.frames] }; },
-    set({ ra = state.ra, dec = state.dec, fov = state.fov, map: mix = state.map } = {}) {
+    set({ ra = state.ra, dec = state.dec, fov = state.fov, map: mix = state.map, basis = null } = {}) {
+      // A camera given whole, as the flight's is, which may turn about its
+      // own axis: C ahead, E to the screen's left, N up. Its centre stands in
+      // for RA and Dec wherever those are read.
+      if (basis) {
+        const [x, y, z] = basis.C;
+        ra = Math.atan2(y, x) / DEG;
+        dec = Math.asin(Math.max(-1, Math.min(1, z))) / DEG;
+        const same = state.basis && ['C', 'E', 'N'].every((k) => basis[k].every((c, i) => c === state.basis[k][i]));
+        if (!same) {
+          state.basis = { C: [...basis.C], E: [...basis.E], N: [...basis.N] };
+          state.ra = NaN;
+        }
+      } else if (state.basis) {
+        state.basis = null;
+        state.ra = NaN;
+      }
       const next = {
         ra: ((ra % 360) + 360) % 360,
         dec: Math.max(-89.999, Math.min(89.999, dec)),
