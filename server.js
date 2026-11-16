@@ -1212,7 +1212,13 @@ const HIPS_PATH = /^Norder([0-5])\/(?:Dir(\d{1,6})\/Npix(\d{1,6})|Allsky)(?:_(\d
 const HIPS_FRAMES = 102;
 const HIPS_TIMEOUT_MS = 90_000;
 /** A tile of a released cube does not change: the browser and Cloudflare may keep it a week. */
-const HIPS_KEEP = { 'content-type': 'image/png', 'cache-control': 'public, max-age=604800' };
+const HIPS_KEEP = { 'content-type': 'image/png', 'cache-control': 'public, max-age=604800', 'x-muninn-hips': '1' };
+/** Said on every answer of the relay, so the page can tell its 404 from a host that has no relay. */
+const HIPS_SAYS = { 'x-muninn-hips': '1' };
+/** At most this many asked of IRSA at once; past it, the page asks IRSA itself. */
+const HIPS_UPSTREAM_MAX = 12;
+/** Bytes of tiles on disk: counted by the sweep and added to on every write, so the ceiling holds between sweeps. */
+let hipsOnDisk = 0;
 /** Its own ceiling on the disk, apart from the answers', so a sweep through the spectrum cannot push out frame lists. */
 const HIPS_MAX_BYTES = 200 * 1024 * 1024;
 const HIPS_PER_MINUTE = 1500;
@@ -1236,12 +1242,15 @@ function hipsPathOk(path) {
 
 async function handleHips(url, res) {
   const path = url.pathname.slice('/api/hips/'.length);
-  if (!hipsPathOk(path)) return send(res, 404, 'Not a file of the SPHEREx all-sky cube');
+  if (!hipsPathOk(path)) return send(res, 404, 'Not a file of the SPHEREx all-sky cube', HIPS_SAYS);
   const file = join(CACHE, `hips_${path.replace(/[^\w]/g, '_')}`);
   try {
     return send(res, 200, await readFile(file), HIPS_KEEP);
   } catch { /* not kept yet */ }
   let pending = hipsPending.get(path);
+  if (!pending && hipsPending.size >= HIPS_UPSTREAM_MAX) {
+    return send(res, 503, 'Busy: ask IRSA directly', { ...HIPS_SAYS, 'retry-after': '5' });
+  }
   if (!pending) {
     pending = (async () => {
       const answer = await retryOnGateway(() => withTimeout(HIPS_ORIGIN + path, HIPS_TIMEOUT_MS));
@@ -1249,19 +1258,23 @@ async function handleHips(url, res) {
       if (!answer.ok) throw new Error(`IRSA HiPS: HTTP ${answer.status}`);
       const body = Buffer.from(await answer.arrayBuffer());
       if (body.subarray(1, 4).toString('latin1') !== 'PNG') throw new Error('IRSA HiPS: not a PNG');
-      try {
-        await mkdir(CACHE, { recursive: true });
-        await writeFile(file, body);
-      } catch { /* served all the same */ }
+      // Past the ceiling a tile is passed on but not kept, until a sweep makes room.
+      if (hipsOnDisk + body.length <= HIPS_MAX_BYTES) {
+        try {
+          await mkdir(CACHE, { recursive: true });
+          await writeFile(file, body);
+          hipsOnDisk += body.length;
+        } catch { /* served all the same */ }
+      }
       return body;
     })().finally(() => hipsPending.delete(path));
     hipsPending.set(path, pending);
   }
   try {
     const body = await pending;
-    return body ? send(res, 200, body, HIPS_KEEP) : send(res, 404, 'No such tile');
+    return body ? send(res, 200, body, HIPS_KEEP) : send(res, 404, 'No such tile', HIPS_SAYS);
   } catch (err) {
-    return send(res, 502, err.message);
+    return send(res, 502, err.message, HIPS_SAYS);
   }
 }
 
@@ -1760,6 +1773,7 @@ async function sweepCache() {
       if (total <= ceiling) break;
       try { await unlink(f.file); total -= f.size; } catch { /* next sweep */ }
     }
+    if (list === keptTiles) hipsOnDisk = total;
   }
 }
 sweepCache();
