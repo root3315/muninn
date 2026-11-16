@@ -99,6 +99,8 @@ test('tile addresses follow the HiPS layout IRSA serves', () => {
   assert.equal(tileUrl(3, 300, 0), `${base}/Norder3/Dir0/Npix300.png`);
   assert.equal(tileUrl(5, 12345, 20), `${base}/Norder5/Dir10000/Npix12345_20.png`);
   assert.equal(allskyUrl(101), `${base}/Norder3/Allsky_101.png`);
+  // The frames the page opens with come averaged, from the site itself.
+  for (const f of [...COLOUR_FRAMES, ...[1, 2, 3, 4, 5, 6].map(bandFrame)]) assert.equal(allskyUrl(f), `data/allsky/Allsky_${f}.png`);
   assert.deepEqual(allskySlot(0), { x: 0, y: 0 });
   assert.deepEqual(allskySlot(28), { x: 64, y: 64 });
 });

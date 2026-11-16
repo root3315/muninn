@@ -58,7 +58,23 @@ export function tileUrl(order, npix, frame) {
   return `${HIPS_BASE}/Norder${order}/Dir${dir}/Npix${npix}${suffix(frame)}.png`;
 }
 
-export const allskyUrl = (frame) => `${HIPS_BASE}/Norder${ALLSKY_ORDER}/Allsky${suffix(frame)}.png`;
+/**
+ * Frames whose Allsky image the site makes itself (tools/build-allsky.mjs):
+ * the mean of each 8 × 8 block of the tiles instead of one pixel of it, so a
+ * wide field is not grain. These are the frames the page opens with — the
+ * colour view's three and each band's own.
+ */
+export const AVERAGED_FRAMES = new Set([8, 25, 42, 59, 76, 93]);
+
+const irsaAllsky = (frame) => `${HIPS_BASE}/Norder${ALLSKY_ORDER}/Allsky${suffix(frame)}.png`;
+
+export const allskyUrl = (frame) => (AVERAGED_FRAMES.has(frame) ? `data/allsky/Allsky_${frame}.png` : irsaAllsky(frame));
+
+/** Where to look when the site's own Allsky is not there: IRSA's, for the same frame; null for any other address. */
+export function allskyFallback(url) {
+  const m = /^data\/allsky\/Allsky_(\d+)\.png$/.exec(url);
+  return m ? irsaAllsky(Number(m[1])) : null;
+}
 
 /** Where tile k sits in the Allsky mosaic, as a pixel offset. */
 export const allskySlot = (k) => ({ x: (k % ALLSKY_COLUMNS) * ALLSKY_TILE, y: Math.floor(k / ALLSKY_COLUMNS) * ALLSKY_TILE });
