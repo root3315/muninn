@@ -14,6 +14,7 @@ import { setLanguage, getLanguage, t, applyTranslations, fmt } from './i18n.js';
 import { starColour, direction } from './gate.js';
 import { encodeHash } from './hash.js';
 import { embedded, goTo } from './embed.js';
+import { systemUrl } from './exovision.js';
 import { radecOf } from './allsky/healpix.js';
 import { createSpace, screenOf } from './fly/space.js';
 import { temperatureOf, luminosityOf, radiusOf, vMinusW2, R_SUN_PC, T_SUN } from './fly/stars.js';
@@ -491,6 +492,8 @@ function placeLabels() {
     el.hidden = !at || big || far || behind;
     if (!at) continue;
     el.style.transform = `translate(${at.x.toFixed(1)}px, ${at.y.toFixed(1)}px)`;
+    el.dataset.x = at.x;
+    el.dataset.y = at.y;
     el.querySelector('.fly-label__far').textContent = distanceText(len(sub(placeOf(s), cam.eye)));
     kept.push({ el, at, d: len(sub(placeOf(s), cam.eye)) });
   }
@@ -562,8 +565,12 @@ function frame(now) {
   }
   steer(dt);
   lastNear = nearestStar();
-  proj = space.draw({ ...basis(), fov: FOV, near: view.ir ? null : lastNear, ir: view.ir, show: () => view.reach });
+  const extra = drawSystem();
+  const near = view.ir ? null : [...extra, ...lastNear].slice(0, 12);
+  proj = space.draw({ ...basis(), fov: FOV, near, ir: view.ir, show: () => view.reach });
   placeLabels();
+  placeExoLabels();
+  placeSystemLabels();
   placeMarks();
   readout();
   requestAnimationFrame(frame);
@@ -666,6 +673,14 @@ function openCard(entry) {
     url.hash = encodeHash({ ra: sky.ra, dec: sky.dec, fov: 0.3, band: s.key === 'wise0855' ? 'D6' : 'D2', lang: getLanguage(), name: title });
     frames.href = url.href;
   }
+  const host = i >= 0 ? exo.find((x) => x.index === i) : null;
+  const ev = $('card-exo');
+  ev.hidden = !host;
+  if (host) {
+    rows.push([t('exo.has'), host.planets.map((pl) => pl.name).join(', ')]);
+    $('card-rows').replaceChildren(...rows.map(([k, v]) => cardRow(k, v)));
+    ev.href = systemUrl([host.ra, host.dec, host.planets.length, host.host], host.host, getLanguage());
+  }
   card = { s: { ...s, index: i } };
   $('card').hidden = false;
 }
@@ -678,10 +693,11 @@ function openCardLater(entry) {
 
 function closeCard() {
   card = null;
+  $('card-exo').hidden = true;
   $('card').hidden = true;
 }
 
-$('card-fly').addEventListener('click', () => card && flyTo(card.s));
+$('card-fly').addEventListener('click', () => card && (card.s.sys ? flyToSystem(card.s.sys) : flyTo(card.s)));
 $('card-close').addEventListener('click', closeCard);
 
 /* ---- input ------------------------------------------------------------- */
@@ -930,6 +946,279 @@ function landOnEarth() {
   goTo('sky', { ra, dec });
 }
 
+/* ---- other stars' planets --------------------------------------------- */
+
+/*
+ * Every confirmed exoplanet system with a known distance (NASA Exoplanet
+ * Archive, pscomppars), native here: the stars that have planets are marked,
+ * and near one its planets are drawn at their real sizes on their real
+ * orbits. Where a transit time was measured the planet is where it is now
+ * (circular orbit, edge-on to the Sun, as a transit requires); elsewhere only
+ * the orbit is drawn, with no planet put at a guessed place.
+ */
+const R_EARTH_PC = 6371 / 3.0856775814913673e13;
+let exo = [];
+/** The system the camera is in, and what was drawn for it this frame. */
+let inSystem = null;
+
+async function loadSystems() {
+  try {
+    const res = await fetch('data/fly/exoplanets.json');
+    if (!res.ok) return;
+    const body = await res.json();
+    exo = body.systems ?? [];
+    // A host that is a Hipparcos star is centred on the catalogue's star, so
+    // its planets circle the disc drawn for it.
+    for (const sys of exo) {
+      sys.index = matchHost(sys);
+      sys.center = sys.index >= 0 ? posOf(sys.index) : sys.pos;
+    }
+    buildExoLabels();
+  } catch { /* the flight goes on without them */ }
+}
+
+/**
+ * The Hipparcos stars by whole degree of RA and Dec, built once: matching
+ * five thousand hosts against sixty thousand stars one by one was three
+ * hundred million tests.
+ */
+let starCells = null;
+function cellKey(ra, dec) { return `${Math.floor(ra)}:${Math.floor(dec + 90)}`; }
+function buildCells() {
+  starCells = new Map();
+  const p = stars.pos;
+  for (let i = 0; i < stars.firstBody - 2; i++) {
+    const x = p[i * 3];
+    const y = p[i * 3 + 1];
+    const z = p[i * 3 + 2];
+    const d = Math.hypot(x, y, z);
+    if (!(d > 0)) continue;
+    let ra = Math.atan2(y, x) * 180 / Math.PI;
+    if (ra < 0) ra += 360;
+    const dec = Math.asin(z / d) * 180 / Math.PI;
+    const key = cellKey(ra, dec);
+    if (!starCells.has(key)) starCells.set(key, []);
+    starCells.get(key).push(i);
+  }
+}
+
+/**
+ * The Hipparcos star that is this host: within three arcminutes on the sky
+ * (Hipparcos positions are for 1991, and the nearest stars have moved that
+ * far since) and a fifth in distance.
+ */
+function matchHost(sys) {
+  if (!starCells) buildCells();
+  const u = norm(sys.pos);
+  let best = -1;
+  let bestCos = Math.cos((180 / 3600) * Math.PI / 180);
+  const p = stars.pos;
+  for (const dra of [-1, 0, 1]) {
+    for (const ddec of [-1, 0, 1]) {
+      const list = starCells.get(cellKey(((sys.ra + dra) % 360 + 360) % 360, sys.dec + ddec));
+      if (!list) continue;
+      for (const i of list) {
+        const x = p[i * 3];
+        const y = p[i * 3 + 1];
+        const z = p[i * 3 + 2];
+        const d = Math.hypot(x, y, z);
+        if (Math.abs(d - sys.pc) > 0.2 * sys.pc) continue;
+        const c = (x * u[0] + y * u[1] + z * u[2]) / d;
+        if (c > bestCos) { bestCos = c; best = i; }
+      }
+    }
+  }
+  return best;
+}
+
+let exoLabels = [];
+function buildExoLabels() {
+  // Rings for the nearest few systems in view; placed each frame.
+  exoLabels = Array.from({ length: 10 }, () => {
+    const el = document.createElement('button');
+    el.type = 'button';
+    el.className = 'fly-label fly-label--exo';
+    el.hidden = true;
+    el.innerHTML = '<span class="fly-label__dot"></span><span class="fly-label__name"></span><span class="fly-label__far num"></span>';
+    el.addEventListener('click', () => { if (el.sys) openSystemCard(el.sys); });
+    $('labels').append(el);
+    return el;
+  });
+}
+
+function placeExoLabels() {
+  if (!exo.length) return;
+  const b = basis();
+  const near = [];
+  for (const sys of exo) {
+    const d = len(sub(sys.center, cam.eye));
+    if (d > 60) continue;
+    const at = screenOf(sys.center, b, proj);
+    if (!at) continue;
+    near.push({ sys, d, at });
+  }
+  near.sort((x, y) => x.d - y.d);
+  const shown = [];
+  let k = 0;
+  for (const n of near) {
+    if (k >= exoLabels.length) break;
+    if (shown.some((o) => Math.abs(o.x - n.at.x) < 150 && Math.abs(o.y - n.at.y) < 16)) continue;
+    if (labels.some(({ el }) => !el.hidden && Math.abs(parseFloat(el.dataset.x) - n.at.x) < 60 && Math.abs(parseFloat(el.dataset.y) - n.at.y) < 14)) continue;
+    const el = exoLabels[k++];
+    el.sys = n.sys;
+    el.hidden = false;
+    el.querySelector('.fly-label__name').textContent = t('exo.label', { host: n.sys.host, n: n.sys.planets.length });
+    el.querySelector('.fly-label__far').textContent = distanceText(n.d);
+    el.style.transform = `translate(${n.at.x.toFixed(1)}px, ${n.at.y.toFixed(1)}px)`;
+    shown.push(n.at);
+  }
+  for (; k < exoLabels.length; k++) exoLabels[k].hidden = true;
+}
+
+const JD = () => Date.now() / 86400000 + 2440587.5;
+
+/**
+ * The system's planets now: on a circle of their semi-major axis, in the
+ * plane that holds the line of sight from the Sun (a transit needs it edge-on)
+ * and the celestial north as near as it can, at the phase of their measured
+ * transit time; [] places for those without one.
+ */
+function systemNow(sys) {
+  const c = sys.center;
+  const toSun = norm(sub([0, 0, 0], c));
+  let side = cross(toSun, [0, 0, 1]);
+  if (len(side) < 1e-6) side = cross(toSun, [1, 0, 0]);
+  side = norm(side);
+  const jd = JD();
+  return sys.planets.map((pl) => {
+    if (!(pl.a > 0)) return { pl, pos: null };
+    const r = pl.a * AU;
+    let pos = null;
+    if (pl.tc && pl.p > 0) {
+      // At transit the planet is between its star and the Sun.
+      const phase = (((jd - pl.tc) / pl.p) % 1 + 1) % 1;
+      const ang = 2 * Math.PI * phase;
+      pos = add(add(c, toSun, r * Math.cos(ang)), side, r * Math.sin(ang));
+    }
+    return { pl, pos, r, toSun, side };
+  });
+}
+
+/** The system the camera is in: the nearest within a thousand AU of its star. */
+function systemHere() {
+  let best = null;
+  let bestD = 1000 * AU;
+  for (const sys of exo) {
+    const d = len(sub(sys.center, cam.eye));
+    if (d < bestD) { bestD = d; best = sys; }
+  }
+  return best;
+}
+
+/** Orbits and planets of the system the camera is in, every frame. */
+function drawSystem() {
+  const sys = exo.length ? systemHere() : null;
+  inSystem = null;
+  if (!sys) {
+    space.setLiveLines(null);
+    return [];
+  }
+  const now = systemNow(sys);
+  const segs = [];
+  for (const o of now) {
+    if (!o.r) continue;
+    for (let k = 0; k < 96; k++) {
+      const a0 = (k / 96) * 2 * Math.PI;
+      const a1 = ((k + 1) / 96) * 2 * Math.PI;
+      segs.push(...add(add(sys.center, o.toSun, o.r * Math.cos(a0)), o.side, o.r * Math.sin(a0)));
+      segs.push(...add(add(sys.center, o.toSun, o.r * Math.cos(a1)), o.side, o.r * Math.sin(a1)));
+    }
+  }
+  space.setLiveLines(new Float32Array(segs), [0.55, 0.9, 0.75, 0.45]);
+  const starCol = sys.index >= 0 ? [stars.col[sys.index * 3], stars.col[sys.index * 3 + 1], stars.col[sys.index * 3 + 2]] : starColour(0.65).map((c) => c / 255);
+  const spheres = [];
+  // A host the catalogue lacks is drawn here, at its archive radius.
+  if (sys.index < 0 && sys.starR) {
+    spheres.push({ index: -1, pos: sys.center, rpc: sys.starR * R_SUN_PC, col: starCol, lit: false });
+  }
+  for (const o of now) {
+    if (!o.pos || !(o.pl.r > 0)) continue;
+    spheres.push({
+      index: -1, pos: o.pos, rpc: o.pl.r * R_EARTH_PC, lit: true, light: sys.center,
+      // Grey, tinted by the light of its star: its true colour is not known.
+      col: starCol.map((c) => 0.35 + 0.45 * c),
+      planet: o.pl,
+    });
+  }
+  inSystem = { sys, now, spheres };
+  return spheres;
+}
+
+function placeSystemLabels() {
+  const box = $('sys-labels');
+  if (!inSystem) {
+    if (box.childElementCount) box.replaceChildren();
+    return;
+  }
+  const b = basis();
+  const items = inSystem.now.filter((o) => o.pos);
+  while (box.childElementCount < items.length) {
+    const el = document.createElement('span');
+    el.className = 'fly-mark fly-mark--planet';
+    box.append(el);
+  }
+  [...box.children].forEach((el, k) => {
+    const o = items[k];
+    const at = o ? screenOf(o.pos, b, proj) : null;
+    el.hidden = !at;
+    if (!at) return;
+    el.textContent = o.pl.name;
+    el.style.transform = `translate(${at.x.toFixed(1)}px, ${(at.y + 10).toFixed(1)}px)`;
+  });
+}
+
+/** A system's card: its planets, and the way to ExoVision for the rest. */
+function openSystemCard(sys) {
+  closeCard();
+  $('card-title').textContent = sys.host;
+  $('card-note').textContent = t('exo.note');
+  const rows = [[t('fly.cardSun'), distanceText(sys.pc)]];
+  if (sys.teff) rows.push([t('fly.cardTemp'), t('fly.kelvin', { n: fmt(sys.teff, 0) })]);
+  for (const pl of sys.planets) {
+    const bits = [];
+    if (pl.r) bits.push(t('exo.radius', { r: fmt(pl.r, pl.r < 10 ? 1 : 0) }));
+    if (pl.a) bits.push(t('exo.orbit', { a: fmt(pl.a, pl.a < 1 ? 3 : 2) }));
+    if (pl.p) bits.push(t('exo.period', { p: fmt(pl.p, pl.p < 10 ? 2 : 0) }));
+    if (pl.t) bits.push(t('exo.teq', { t: fmt(pl.t, 0) }));
+    bits.push(t('exo.found', { method: pl.method ?? '—', year: pl.year ?? '—' }));
+    rows.push([pl.name, bits.join(' · ')]);
+  }
+  $('card-rows').replaceChildren(...rows.map(([k, v]) => cardRow(k, v)));
+  const frames = $('card-frames');
+  frames.hidden = false;
+  const url = new URL('./', location.href);
+  url.hash = encodeHash({ ra: sys.ra, dec: sys.dec, fov: 0.3, band: 'D2', lang: getLanguage(), name: sys.host });
+  frames.href = url.href;
+  const ev = $('card-exo');
+  ev.hidden = false;
+  ev.href = systemUrl([sys.ra, sys.dec, sys.planets.length, sys.host], sys.host, getLanguage());
+  card = { s: { key: `sys:${sys.host}`, sys, index: sys.index } };
+  $('card').hidden = false;
+}
+
+/** Fly into a system: far enough out to see its widest orbit whole. */
+function flyToSystem(sys) {
+  closeCard();
+  carried = null;
+  const widest = Math.max(...sys.planets.map((pl) => pl.a || 0), 0.05) * AU;
+  const stop = Math.max(widest * 2.5, (sys.starR || 1) * R_SUN_PC * 8);
+  const dir = norm(sub(sys.center, cam.eye));
+  const to = add(sys.center, dir, -stop);
+  autopilot = { from: cam.eye, to, look: sys.center, stop, t0: performance.now(), ms: reduceMotion ? 1 : 3200 + 400 * Math.log10(1 + len(sub(sys.center, cam.eye)) / stop), body: -1 };
+  const wait = () => (autopilot ? requestAnimationFrame(wait) : openSystemCard(sys));
+  requestAnimationFrame(wait);
+}
+
 /* ---- language and start ----------------------------------------------- */
 
 function applyLanguage() {
@@ -972,6 +1261,7 @@ if (!space) {
   buildLabels();
   buildReach();
   if (pendingLook) lookFromEarth(pendingLook.ra, pendingLook.dec);
+  loadSystems();
   applyLanguage();
   setTimeout(() => { $('hint').dataset.gone = 'true'; }, 9000);
   moveBodies();

@@ -19,6 +19,8 @@
 <link rel="modulepreload" href="js/fly/stars.js">
 <link rel="modulepreload" href="js/fly/reach.js">
 <link rel="modulepreload" href="js/fly/solar.js">
+<link rel="modulepreload" href="js/exovision.js">
+<link rel="modulepreload" href="js/catalog.js">
 <link rel="modulepreload" href="js/ephemeris.js">
 <link rel="modulepreload" href="js/depth.js">
 <link rel="modulepreload" href="js/hash.js">
@@ -44,6 +46,7 @@
   <canvas class="as-sky__canvas" id="canvas" tabindex="0" role="img" data-i18n-label="fly.canvas"></canvas>
   <div class="fly-labels" id="labels"></div>
   <div class="fly-labels" id="marks"></div>
+  <div class="fly-labels" id="sys-labels"></div>
   <p class="as-sky__hint" id="hint"></p>
   <p class="as-sky__nogl" id="nogl" hidden data-i18n="allsky.noGl"></p>
 
@@ -55,6 +58,7 @@
     <div class="fly-card__acts">
       <button type="button" class="as-open" id="card-fly" data-i18n="fly.flyHere"></button>
       <a class="as-toggle fly-card__frames" id="card-frames" data-i18n="fly.frames"></a>
+      <a class="as-toggle fly-card__frames" id="card-exo" hidden target="_blank" rel="noopener" data-i18n="exo.open"></a>
     </div>
   </aside>
 

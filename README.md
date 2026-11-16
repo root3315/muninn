@@ -474,13 +474,16 @@ What is left is a real search:
   gains √n in depth (four visits, about 0.6 mag); between seasons it jumps 13.6′. Shifting each
   visit along a trial distance before adding was measured and is the same pixel or so, so the
   stack does not pretend otherwise.
-- **An upper limit.** The depth panel keeps a count of the fields examined in this browser and
-  the square degrees they cover: a null result at a stated depth over a stated area.
+- **A record of where it looked.** The depth panel keeps a count of the fields examined in this
+  browser and the square degrees they cover, at the depth measured in each. It is not an upper
+  limit: the injection benchmark recovers too few movers for a stated completeness.
 - **A spectrum for anything found.**
 
 What it will not find: **brown dwarfs and nearby stars by their motion**, with a few exceptions.
 Over the ~1.2-year baseline a star needs more than about 5″ a year to cross a pixel: Barnard's
-Star (saturated) and WISE 0855−0714 qualify; a typical nearby brown dwarf (0.1–1″ a year) does not.
+Star (saturated) qualifies; WISE 0855−0714 moves fast enough but at about 17.2 AB is below one
+visit's D6 limit, so its motion could only come from season stacks, which has not been measured;
+a typical nearby brown dwarf (0.1–1″ a year) does not.
 
 ---
 

@@ -221,6 +221,9 @@ export function createSpace(canvas, { stars, sky }) {
   const lineProg = compile(gl, LINE3_VS, LINE3_FS, ['aPos']);
   /** Line groups uploaded once: { vao, count, ink, show }. */
   let lineGroups = [];
+  let live = null;
+  let liveVao = null;
+  let liveBuf = null;
   const skyProg = compile(gl, SKY_VS, SKY_FS);
   const nearProg = compile(gl, SKY_VS, NEAR_FS);
   const maxPoint = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1];
@@ -277,6 +280,22 @@ export function createSpace(canvas, { stars, sky }) {
       gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
       gl.bufferSubData(gl.ARRAY_BUFFER, first * 12, xyz);
     },
+    /** Lines that change: one group, replaced whenever it is given; null for none. */
+    setLiveLines(data, ink) {
+      if (!data || !data.length) { live = null; return; }
+      if (!liveVao) {
+        liveVao = gl.createVertexArray();
+        gl.bindVertexArray(liveVao);
+        liveBuf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, liveBuf);
+        gl.enableVertexAttribArray(0);
+        gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+        gl.bindVertexArray(null);
+      }
+      gl.bindBuffer(gl.ARRAY_BUFFER, liveBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+      live = { vao: liveVao, count: data.length / 3, ink, key: 'live' };
+    },
     /** Lines to draw every frame: [{ data: Float32Array of segment ends, ink: [r, g, b, a], key }]. */
     setLines(groups) {
       lineGroups = groups.map((g) => {
@@ -329,8 +348,11 @@ export function createSpace(canvas, { stars, sky }) {
       gl.uniform1f(starProg.u.MaxPoint, maxPoint);
       const nears = (Array.isArray(near) ? near : near ? [near] : []).slice(0, 12);
       // The spheres are drawn exactly; their points are left out of the star pass.
+      // A planet's point is left out: its sphere is all of it. A star keeps its
+      // glow under its sphere, so a star approached grows into its disc rather
+      // than shrinking from a bright point into a small ball.
       const skip = new Int32Array(12).fill(-1);
-      nears.forEach((n, k) => { skip[k] = n.index; });
+      nears.forEach((n, k) => { if (n.lit) skip[k] = n.index; });
       gl.uniform1iv(starProg.u['Skip[0]'], skip);
       const front = nears[0];
       gl.uniform4fv(starProg.u.Near, front
@@ -346,8 +368,8 @@ export function createSpace(canvas, { stars, sky }) {
         gl.uniform3fv(lineProg.u.U, U);
         gl.uniform3fv(lineProg.u.F, F);
         gl.uniform2fv(lineProg.u.Focal, focal);
-        for (const g of lineGroups) {
-          if (!show(g.key)) continue;
+        for (const g of [...lineGroups, ...(live ? [live] : [])]) {
+          if (g !== live && !show(g.key)) continue;
           gl.uniform4fv(lineProg.u.Ink, g.ink);
           gl.bindVertexArray(g.vao);
           gl.drawArrays(gl.LINES, 0, g.count);
@@ -360,8 +382,11 @@ export function createSpace(canvas, { stars, sky }) {
         gl.uniform3fv(nearProg.u.F, F);
         gl.uniform2fv(nearProg.u.Focal, focal);
         gl.uniform2f(nearProg.u.Size, w, h);
-        // The Sun from here, for the lit bodies.
-        gl.uniform3fv(nearProg.u.Sun, [-eye[0], -eye[1], -eye[2]]);
+        const sunFrom = (n) => {
+          // The star that lights it: the Sun, unless it says otherwise.
+          const l = n.light ?? [0, 0, 0];
+          return [l[0] - eye[0], l[1] - eye[1], l[2] - eye[2]];
+        };
         // A disc covers what is behind it; a star's glow adds to it.
         gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
         gl.bindVertexArray(emptyVao);
@@ -373,6 +398,7 @@ export function createSpace(canvas, { stars, sky }) {
           gl.uniform1f(nearProg.u.Radius, n.rpc);
           gl.uniform3fv(nearProg.u.Col, n.col);
           gl.uniform1i(nearProg.u.Lit, n.lit ? 1 : 0);
+          gl.uniform3fv(nearProg.u.Sun, sunFrom(n));
           gl.drawArrays(gl.TRIANGLES, 0, 3);
         }
         gl.blendFunc(gl.ONE, gl.ONE);

@@ -103,3 +103,9 @@
 .as-dock .as-toggle[aria-pressed="true"] { background: var(--color-accent); color: var(--color-accent-ink); }
 /* The verdict is what the card is for. */
 .fly-card__rows > div:first-child dd { font-weight: 600; }
+
+/* Stars with planets: rings in the colour of the orbits drawn round them. */
+.fly-label--exo .fly-label__dot { border-color: oklch(82% 0.11 165); inline-size: 12px; block-size: 12px; margin: -6px 0 0 -6px; }
+.fly-label--exo .fly-label__name { color: oklch(88% 0.08 165); margin-block-start: -6px; }
+.fly-label--exo .fly-label__far { margin-block-start: -6px; }
+.fly-mark--planet { color: oklch(88% 0.08 165); }
