@@ -584,6 +584,25 @@ export async function knownBodies(field, { signal, magLimit = 20, limit = 40 } =
   return mergeBodies(skybot, fromJpl ?? []).slice(0, limit);
 }
 
+/**
+ * The orbit JPL's Small-Body Database has for a body SkyBoT or JPL named
+ * (orbit.js readOrbit), through the relay: JPL sends no CORS headers. Null
+ * when JPL has no single body by that designation. Asked once a page.
+ */
+const orbits = new Map();
+
+export function smallBodyOrbit(des) {
+  const key = String(des).replace(/\s+/g, ' ').trim();
+  if (!orbits.has(key)) {
+    const asked = fromRelay(`api/sbdb?des=${encodeURIComponent(key)}`, null, CATALOG_DEADLINE_MS)
+      .then((body) => body.orbit ?? null);
+    // A failure is not kept: the next look at the mark asks again.
+    asked.catch(() => orbits.delete(key));
+    orbits.set(key, asked);
+  }
+  return orbits.get(key);
+}
+
 /* ------------------------------------------------------------- fixed sources */
 
 /**
@@ -746,12 +765,19 @@ const brightest = (rows, key) => rows
   .filter((r) => Number.isFinite(r.sep))
   .sort((a, b) => (a[key] ?? 99) - (b[key] ?? 99) || a.sep - b.sep)[0] ?? null;
 
+/**
+ * SIMBAD's nearest bright object, with what a card says it is from: its type,
+ * and where SIMBAD has them its parallax (mas, for a star's distance) and its
+ * redshift (for a galaxy's).
+ */
 async function askSimbad(ra, dec, signal, arcsec = 8) {
-  const body = await simbadTap(`SELECT TOP 8 main_id, otype, ${sepCol('ra', 'dec', ra, dec)}, allfluxes.J AS j, allfluxes.V AS v, allfluxes.G AS g
+  const body = await simbadTap(`SELECT TOP 8 main_id, otype, ${sepCol('ra', 'dec', ra, dec)}, allfluxes.J AS j, allfluxes.V AS v, allfluxes.G AS g,
+    plx_value, plx_err, rvz_redshift
     FROM basic LEFT JOIN allfluxes ON oid = allfluxes.oidref WHERE ${cone('ra', 'dec', ra, dec, arcsec)}`, 'json', signal);
-  const rows = (body.data ?? []).map(([name, otype, sep, j, v, g]) => ({
+  const rows = (body.data ?? []).map(([name, otype, sep, j, v, g, plx, plxErr, z]) => ({
     name: String(name).trim().replace(/\s+/g, ' ').replace(/^NAME /, ''), otype: String(otype ?? '').trim(), sep: Number(sep),
     mag: j ?? v ?? g ?? null, magBand: j != null ? 'J' : v != null ? 'V' : g != null ? 'G' : null,
+    plx: plx ?? null, plxErr: plxErr ?? null, z: z ?? null,
   }));
   const best = brightest(rows, 'mag');
   return best ? { ...best, family: simbadFamily(best.otype) } : null;

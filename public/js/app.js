@@ -48,6 +48,7 @@ import { planetHostNear, systemUrl } from './exovision.js';
 import { drawGaiaSky, psfFor } from './gaiasky.js';
 import { fieldArchives, cadcSearchUrl } from './archives.js';
 import { markFacts } from './markfacts.js';
+import { bodyNodes } from './bodycard.js';
 import {
   searchFrames, searchAhead, askMissingFrames, NoRelayError, UpstreamError, groupVisits, findHeldVisit, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, fieldObjects, toS3, surveySources,
@@ -2599,6 +2600,11 @@ function factsLine(bits, className) {
   return p;
 }
 
+/** The flight, from the Earth, facing a mark: where in space the thing is. */
+function showInSpace(m) {
+  openWorld('fly', { ra: m.ra, dec: m.dec }, getLanguage());
+}
+
 function renderMarks() {
   const ul = $('marks');
   // A spectrum's button outlives the rebuild; so must the focus resting on it.
@@ -2750,7 +2756,16 @@ function renderMarks() {
     // The verdict's own sentence reads as its subtitle: a heading "Verdict"
     // over it only repeated the title.
     for (const node of verdictNodes) node.classList.add('mark__lead');
+    // What the thing is comes first among the groups: what goes round what is
+    // the question a mark answers before any of the evidence for it.
+    const bodyLines = bodyNodes(m, {
+      t, fmt, lang: getLanguage(),
+      live: () => sky.marks.includes(m),
+      onChange: renderMarks,
+      showInSpace,
+    });
     body.append(...verdictNodes, ...[
+      group('mark.kBody', ...bodyLines),
       group('mark.kWho', ...whoNodes),
       group('mark.kLight', ...lightNodes),
       group('mark.kWhere', pos),

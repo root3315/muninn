@@ -16,7 +16,9 @@
  * takes a query from the page: the relay writes it from a fixed template and
  * checked numbers. The search box's asteroid and comet names go to JPL's
  * Small-Body Database and Horizons the same way (/api/smallbody): the relay
- * reads a designation out of the text and asks only for that.
+ * reads a designation out of the text and asks only for that. A marked
+ * body's orbit comes from the same database (/api/sbdb), asked by the
+ * designation SkyBoT or JPL gave it.
  *
  * No dependencies. `node server.js` and open the address it prints.
  */
@@ -37,6 +39,7 @@ import { parseCsv } from './public/js/csv.js';
 import { CATALOGUES, ROW_CAP, coneQuery, renameRow, mastGaiaRows, columnsTag } from './public/js/overlay.js';
 import { sbIdentUrl, parseSbIdent } from './public/js/sbident.js';
 import { smallBodyQuery, SBDB_TEXT, sbdbUrl, readSbdb, horizonsUrl, readHorizons } from './public/js/smallbody.js';
+import { sbdbOrbitUrl, readOrbit } from './public/js/orbit.js';
 import { archivesQuery, neossatQuery, neossatFilesQuery, readNeossat, ARCHIVE_RADIUS } from './public/js/archives.js';
 import {
   ROW, searchIndex, footprintMeetsCone, frameFromIndexRow, indexRowFromObscore, capLikeIrsa,
@@ -1465,6 +1468,36 @@ async function askSmallBody(sstr, day, key) {
   return { ok: true, cached: false, ...payload };
 }
 
+/* ------------------------------------------------- a marked body's orbit */
+
+/**
+ * The orbit JPL's Small-Body Database has for one asteroid or comet, for the
+ * card of a mark it was matched to: its class, a, e, i, period and the
+ * elements the page draws the orbit from (orbit.js readOrbit).
+ *
+ *   des   the designation SkyBoT or JPL named the body by: "152",
+ *         "2000 AG119", "C/2020 F3", "67P". Checked, and only it goes to JPL.
+ *
+ * Answers { orbit }, null when JPL has no single body by that designation.
+ */
+async function handleSbdb(url, req, res) {
+  const des = (url.searchParams.get('des') ?? '').replace(/\s+/g, ' ').trim();
+  if (!SBDB_TEXT.test(des)) {
+    return json(res, 400, { ok: false, error: 'des must be an asteroid or comet designation' });
+  }
+  if (overLimit(req, namesAsked, NAMES_PER_MINUTE)) {
+    return json(res, 429, { ok: false, error: 'Too many names from here; wait a minute.' });
+  }
+  const key = `sbdb_${createHash('sha1').update(des.toLowerCase()).digest('hex').slice(0, 20)}`;
+  return relay(res, key, () => askOrbit(des, key), 'names');
+}
+
+async function askOrbit(des, key) {
+  const payload = { orbit: readOrbit(await jplJson(sbdbOrbitUrl(des), 'SBDB')), via: 'JPL' };
+  await writeCache(key, payload);
+  return { ok: true, cached: false, ...payload };
+}
+
 /** A JPL API's JSON. A busy JPL answers with an HTML page instead: that is an error, not "not found". */
 async function jplJson(target, what) {
   const res = await withTimeout(target, SMALL_BODY_TIMEOUT_MS);
@@ -1722,6 +1755,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/depth') return await handleDepth(url, res);
     if (url.pathname === '/api/sbident') return await handleSbIdent(url, res);
     if (url.pathname === '/api/smallbody') return await handleSmallBody(url, req, res);
+    if (url.pathname === '/api/sbdb') return await handleSbdb(url, req, res);
     if (url.pathname === '/api/wise') return await handleWise(url, res);
     if (url.pathname === '/api/archives') return await handleArchives(url, res);
     if (url.pathname === '/api/targets') {

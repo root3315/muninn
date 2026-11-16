@@ -14,13 +14,16 @@ const HOST_REACH_ARCSEC = 90;
 
 let planetHosts = null;
 
-/** The star with known planets nearest (ra, dec) within reach, as [ra, dec, planets, name], or null. */
-export async function planetHostNear(ra, dec) {
+/**
+ * The star with known planets nearest (ra, dec) within `reach` arcseconds, as
+ * [ra, dec, planets, name, letters], or null.
+ */
+export async function planetHostNear(ra, dec, reach = HOST_REACH_ARCSEC) {
   planetHosts ??= fetch('data/planet-hosts.json', { signal: deadline(null, CATALOG_DEADLINE_MS) })
     .then((r) => (r.ok ? r.json() : { hosts: [] }))
     .then((body) => body.hosts ?? [])
     .catch(() => { planetHosts = null; return []; });
-  return nearestHost(await planetHosts, ra, dec, HOST_REACH_ARCSEC);
+  return nearestHost(await planetHosts, ra, dec, reach);
 }
 
 /** The address of a host's system in ExoVision, named `label`, in language `lang`. */
