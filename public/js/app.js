@@ -2767,6 +2767,8 @@ function renderMarks() {
     body.append(...verdictNodes, ...[
       group('mark.kBody', ...bodyLines),
       group('mark.kWho', ...whoNodes),
+      visits: (sky.visits ?? []).map((v) => v.frame.mjd),
+      current: sky.current?.frame.mjd ?? null,
       group('mark.kLight', ...lightNodes),
       group('mark.kWhere', pos),
     ].filter(Boolean));

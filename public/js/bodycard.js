@@ -108,8 +108,16 @@ function classWords({ code, name }, t) {
   return words === key ? name : words;
 }
 
-/** The orbit seen from above the planets' plane, with the Sun, the planets for scale, and today's places. */
-function orbitSketch(k, { t, now, near = [] }) {
+/** Days from a Modified Julian Date to a Julian one. */
+const MJD_TO_JD = 2400000.5;
+
+/**
+ * The sketch from above: the Sun, the planets for scale, the body's orbit
+ * (and its neighbours' faintly), where the body was on each date SPHEREx
+ * looked at this field, and the body and the Earth at `jd`. Returns the
+ * picture and a function that moves both to another date.
+ */
+function orbitSketch(k, { t, now, near = [], visits = [], current = null }) {
   const reach = sketchReach(k) * 1.08;
   const s = HALF / reach;
   const svg = document.createElementNS(SVG_NS, 'svg');
@@ -140,18 +148,67 @@ function orbitSketch(k, { t, now, near = [] }) {
   for (const other of near) pathOf(other, 120, 'body-sketch__near');
   pathOf(k, 180, 'body-sketch__orbit');
   add('circle', { cx: 0, cy: 0, r: 3.2, class: 'body-sketch__sun' });
-  const [ex, ey] = xy(earthAt(now));
-  add('circle', { cx: ex, cy: ey, r: 2.6, class: 'body-sketch__earth' });
-  const here = positionAt(k, now);
-  if (here) {
-    const [bx, by] = xy(here);
-    add('circle', { cx: bx, cy: by, r: 3.4, class: 'body-sketch__now' });
+  // Where it was on each visit to this field, worked out from the same
+  // elements: the field stays put on the sky, the body does not, so it is in
+  // the frame on some of these dates and far from it on the rest.
+  for (const mjd of visits) {
+    const p = positionAt(k, mjd + MJD_TO_JD);
+    if (!p) continue;
+    const [vx, vy] = xy(p);
+    add('circle', { cx: vx, cy: vy, r: mjd === current ? 2.4 : 1.5, class: mjd === current ? 'body-sketch__visit body-sketch__visit--shown' : 'body-sketch__visit' });
   }
-  return svg;
+  const earth = add('circle', { cx: 0, cy: 0, r: 2.6, class: 'body-sketch__earth' });
+  const body = add('circle', { cx: 0, cy: 0, r: 3.4, class: 'body-sketch__now' });
+  const moveTo = (jd) => {
+    const [ex, ey] = xy(earthAt(jd));
+    earth.setAttribute('cx', ex.toFixed(2));
+    earth.setAttribute('cy', ey.toFixed(2));
+    const here = positionAt(k, jd);
+    body.style.display = here ? '' : 'none';
+    if (here) {
+      const [bx, by] = xy(here);
+      body.setAttribute('cx', bx.toFixed(2));
+      body.setAttribute('cy', by.toFixed(2));
+    }
+  };
+  moveTo(now);
+  return { svg, moveTo };
+}
+
+/**
+ * A slider over one turn of the orbit from today (at most ten years, so a
+ * slow body still moves visibly), moving the body and the Earth together,
+ * with the date it stands at.
+ */
+function timeSlider(k, { t, fmt, lang, now, moveTo }) {
+  const span = Math.min(k.years, 10) * 365.25;
+  const box = document.createElement('div');
+  box.className = 'body__time';
+  const input = document.createElement('input');
+  input.type = 'range';
+  input.min = '0';
+  input.max = String(Math.round(span));
+  input.step = '1';
+  input.value = '0';
+  input.setAttribute('aria-label', t('body.timeLabel'));
+  const read = document.createElement('span');
+  read.className = 'body__time-read num';
+  const dateOf = (jd) => new Date((jd - 2440587.5) * 86_400_000)
+    .toLocaleDateString(lang === 'ru' ? 'ru-RU' : 'en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+  const show = () => {
+    const days = Number(input.value);
+    const jd = now + days;
+    moveTo(jd);
+    read.textContent = days === 0 ? t('body.timeToday') : `${dateOf(jd)} · +${fmt(days / 365.25, days < 365.25 ? 2 : 1)} ${t('body.timeYears')}`;
+  };
+  input.addEventListener('input', show);
+  show();
+  box.append(input, read);
+  return box;
 }
 
 /** A small body's lines: what it goes round, its class, its orbit in figures and drawn. */
-function smallBodyNodes(m, des, { t, fmt, live, onChange }) {
+function smallBodyNodes(m, des, { t, fmt, lang, live, onChange, visits = [], current = null }) {
   const ask = askOrbit(m, des, { live, onChange });
   if (ask.state === 'asking') return [line(t('body.roundSun'))];
   if (ask.state === 'failed' || !ask.orbit) return [line(t('body.roundSun')), line(t('body.orbitFailed'), 'body__line body__line--dim')];
@@ -174,8 +231,12 @@ function smallBodyNodes(m, des, { t, fmt, live, onChange }) {
   const figureBox = document.createElement('figure');
   figureBox.className = 'body__sketch';
   const caption = document.createElement('figcaption');
-  caption.textContent = near.closest.length ? `${t('body.sketchNote')}; ${t('body.sketchNear')}` : t('body.sketchNote');
-  figureBox.append(orbitSketch(k, { t, now, near: near.closest }), caption);
+  const notes = [t('body.sketchNote')];
+  if (visits.length) notes.push(t('body.sketchVisits', { n: visits.length }));
+  if (near.closest.length) notes.push(t('body.sketchNear'));
+  caption.textContent = notes.join('; ');
+  const sketch = orbitSketch(k, { t, now, near: near.closest, visits, current });
+  figureBox.append(sketch.svg, timeSlider(k, { t, fmt, lang, now, moveTo: sketch.moveTo }), caption);
   nodes.push(figureBox, ...nearNodes(near, { t, fmt }));
   return nodes;
 }
@@ -273,10 +334,10 @@ function fixedNodes(m, { t, fmt, lang, live, onChange }) {
  * yet. `live()` says whether the mark is still kept, `onChange` redraws the
  * marks when an answer comes, `showInSpace` opens the flight facing the mark.
  */
-export function bodyNodes(m, { t, fmt, lang, live, onChange, showInSpace }) {
+export function bodyNodes(m, { t, fmt, lang, live, onChange, showInSpace, visits = [], current = null }) {
   const des = designationOf(m.catalog);
   const nodes = des
-    ? smallBodyNodes(m, des, { t, fmt, live, onChange })
+    ? smallBodyNodes(m, des, { t, fmt, lang, live, onChange, visits, current })
     : (m.analysis ? fixedNodes(m, { t, fmt, lang, live, onChange }) : []);
   if (!nodes.length) return [];
   const go = document.createElement('button');
