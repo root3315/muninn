@@ -115,7 +115,9 @@ function showControls() {
   const colour = current === 'colour';
   const frame = colour ? COLOUR_FRAMES[1] : current;
   const band = bandOf(frame);
-  document.documentElement.dataset.band = `D${band}`;
+  // The colour view wears the front page's own chrome; a single band, its band's hue.
+  if (colour) delete document.documentElement.dataset.band;
+  else document.documentElement.dataset.band = `D${band}`;
   for (const input of document.querySelectorAll('input[name="view"]')) {
     input.checked = colour ? input.value === 'colour' : Number(input.value) === band;
   }
