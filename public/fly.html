@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en" data-band="D2">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Muninn — a flight through the Sun's neighbourhood</title>
+<meta name="description" content="Fly among 60 000 real stars, each where its Hipparcos parallax puts it: to Proxima Centauri, to Barnard's Star, to WISE 0855, the coldest brown dwarf known.">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#171721">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23171721'/%3E%3Ccircle cx='11' cy='13' r='2.5' fill='%23e6f0f7'/%3E%3Ccircle cx='21' cy='19' r='2.5' fill='%2356c1f5'/%3E%3C/svg%3E">
+<link rel="preload" href="data/fly/stars.bin" as="fetch" crossorigin>
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/redesign.css">
+<link rel="stylesheet" href="css/allsky.css">
+<link rel="stylesheet" href="css/fly.css">
+<link rel="modulepreload" href="js/fly.js">
+<link rel="modulepreload" href="js/fly/space.js">
+<link rel="modulepreload" href="js/gate.js">
+<link rel="modulepreload" href="js/gate-band.js">
+<link rel="modulepreload" href="js/i18n.js">
+</head>
+<body>
+
+<header class="bar">
+  <a class="bar__brand" href="./">Muninn</a>
+  <h1 class="bar__title" data-i18n="fly.title"></h1>
+  <nav class="bar__acts">
+    <a class="bar__link" href="allsky.html" data-i18n="gate.allsky"></a>
+    <a class="bar__link" href="./" data-i18n="allsky.tool"></a>
+    <button type="button" class="bar__lang" id="lang" data-i18n-label="lang.switch" data-i18n-title="lang.switch"></button>
+  </nav>
+</header>
+
+<main class="as-sky" id="sky">
+  <canvas class="as-sky__canvas" id="canvas" tabindex="0" role="img" data-i18n-label="fly.canvas"></canvas>
+  <div class="fly-labels" id="labels"></div>
+  <p class="as-sky__hint" id="hint"></p>
+  <p class="as-sky__nogl" id="nogl" hidden data-i18n="allsky.noGl"></p>
+
+  <div class="fly-pad">
+    <button type="button" class="as-zoom__key" id="go-forward" data-i18n-label="fly.forward" data-i18n-title="fly.forward">▲</button>
+    <button type="button" class="as-zoom__key" id="go-back" data-i18n-label="fly.back" data-i18n-title="fly.back">▼</button>
+  </div>
+
+  <section class="as-dock" id="dock">
+    <div class="as-dock__row">
+      <span class="as-wave__name" data-i18n="fly.to"></span>
+      <div class="as-bands fly-dest" id="dest"></div>
+    </div>
+    <div class="as-dock__row">
+      <button type="button" class="as-toggle" id="slower" data-i18n="fly.slower"></button>
+      <button type="button" class="as-toggle" id="faster" data-i18n="fly.faster"></button>
+      <p class="as-read num" id="read" aria-live="off"></p>
+    </div>
+    <div class="as-dock__row as-dock__row--read">
+      <p class="as-read as-read--credit" id="source"></p>
+    </div>
+  </section>
+</main>
+
+<script type="module" src="js/fly.js"></script>
+</body>
+</html>
