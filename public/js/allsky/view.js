@@ -1,41 +1,76 @@
 /**
- * view.js — the whole sky drawn from inside, in WebGL 2.
+ * view.js — the whole sky in WebGL 2, two ways.
  *
- * The observer stands at the centre of the celestial sphere and looks out, so
- * east is on the left with north up, as on any sky chart. The sphere is put on
- * the screen by the stereographic projection: it keeps small shapes true at
- * every width, which is why a constellation looks itself both at 120° and at
- * 1°, and it reaches past a hemisphere without tearing.
+ * The sphere: the observer stands at the centre of the celestial sphere and
+ * looks out, east on the left with north up, as on any sky chart. The
+ * stereographic projection keeps small shapes true at every width, so a
+ * constellation looks itself at 130° and at half a degree.
  *
- * What is drawn, coarse to fine:
- *   1. the cube's Allsky image — the whole sky in one picture of 768 small
- *      tiles, there from the first second;
- *   2. full 512-pixel tiles of orders 3 to 5, as the field narrows, each laid
- *      over its parent once it has arrived, so the picture only ever sharpens.
+ * The map: the whole sky at once on one Mollweide ellipse in galactic
+ * coordinates, the Milky Way along the middle, the way all-sky surveys are
+ * published. It is drawn per screen pixel from the cube's Allsky image, so it
+ * has no seams to hide.
  *
- * One frame of the cube is one wavelength. The colour view samples three
- * frames, one per display channel; the single view runs one frame through a
- * ramp. The data are the cube's PNGs as served — the stretch is IRSA's
- * (asinh, 0–40 MJy/sr) and nothing here alters it.
+ * What the sphere draws, coarse to fine: the Allsky image (768 small tiles in
+ * one picture, there from the first second), then full 512-pixel tiles of
+ * orders 3 to 5 as the field narrows, each faded in over its parent once it
+ * has arrived, so the picture only ever sharpens.
+ *
+ * Brightness: the PNGs carry IRSA's own stretch (asinh, 0–40 MJy/sr). Each
+ * frame is then set between two levels read from its own Allsky histogram —
+ * the sky's floor and its brightest thousandth — so every wavelength fills
+ * the same range on screen. Levels change contrast only; they move no pixel
+ * and add none.
  */
 
 import { vecOf, radecOf, tileMesh, tileCentre } from './healpix.js';
 import {
-  ALLSKY_ORDER, ALLSKY_TILE, TILE_PX, allskySlot, allskyUrl, tileUrl, orderFor, tileDegrees,
+  ALLSKY_ORDER, ALLSKY_TILE, ALLSKY_COLUMNS, TILE_PX, allskySlot, allskyUrl, tileUrl, orderFor, tileDegrees,
 } from './hips.js';
+import { GALACTIC, mollweide, mollweideInverse, toGalactic, fromGalactic } from './maps.js';
 
 const DEG = Math.PI / 180;
 export const FOV_MIN = 0.4;
-export const FOV_MAX = 150;
-/** Tiles are not drawn whose middle is this far behind the observer's ear: stereographic runs to infinity at the antipode. */
-const BEHIND = -0.35;
-/** More tiles than this on screen at one order is more than any screen shows. */
+export const FOV_MAX = 130;
+/** Tiles whose middle is this far behind the observer are not drawn: stereographic runs to infinity at the antipode. */
+const BEHIND = -0.55;
 const WANT_MAX = 140;
 const LOADS_AT_ONCE = 6;
 const KEEP_TILES = 260;
 const RETRY_MS = 8000;
+/** How long a newly arrived image takes to come up, ms. */
+const FADE_MS = 320;
+/** How far down the Allsky's mipmaps the sphere reads it. */
+const ALLSKY_BIAS = 0.75;
+const ALLSKY_COUNT = 12 * 4 ** ALLSKY_ORDER;
+const ATLAS_W = ALLSKY_COLUMNS * ALLSKY_TILE;
+const ATLAS_H = Math.ceil(ALLSKY_COUNT / ALLSKY_COLUMNS) * ALLSKY_TILE;
 
-const VERTEX = `#version 300 es
+/* ---- shaders ------------------------------------------------------------ */
+
+/** One colour from one, or three, frames — shared by the sphere and the map. */
+const SHADE = `
+uniform sampler2D uR;
+uniform sampler2D uG;
+uniform sampler2D uB;
+uniform sampler2D uRamp;
+uniform bool uColour;
+uniform vec3 uLo;
+uniform vec3 uHi;
+vec3 shade(vec3 raw) {
+  vec3 x = clamp((raw - uLo) / max(uHi - uLo, vec3(1e-3)), 0.0, 1.0);
+  if (!uColour) return texture(uRamp, vec2(x.r, 0.5)).rgb;
+  // A star too bright for the detector is blank in the cube at the
+  // wavelengths it saturated, and bright in the rest: drawn as it comes it is
+  // a false colour. Where a channel is empty under a bright neighbour, the
+  // pixel is drawn neutral at the brightness it has.
+  float top = max(x.r, max(x.g, x.b));
+  bvec3 hole = lessThanEqual(raw, vec3(0.5 / 255.0));
+  if (top > 0.2 && any(hole)) x = mix(x, vec3(top), vec3(hole));
+  return x;
+}`;
+
+const SPHERE_VS = `#version 300 es
 in vec3 aPos;
 in vec2 aUv;
 uniform vec3 uC;
@@ -50,37 +85,104 @@ void main() {
   vUv = aUv;
 }`;
 
-const FRAGMENT = `#version 300 es
+const SPHERE_FS = `#version 300 es
 precision highp float;
 in vec2 vUv;
-uniform sampler2D uR;
-uniform sampler2D uG;
-uniform sampler2D uB;
-uniform sampler2D uRamp;
-uniform bool uColour;
+uniform float uAlpha;
+uniform float uBias;
 out vec4 outColour;
+${SHADE}
 void main() {
-  float r = texture(uR, vUv).r;
-  if (uColour) {
-    outColour = vec4(r, texture(uG, vUv).r, texture(uB, vUv).r, 1.0);
+  vec3 raw = vec3(texture(uR, vUv, uBias).r, texture(uG, vUv, uBias).r, texture(uB, vUv, uBias).r);
+  outColour = vec4(shade(raw), uAlpha);
+}`;
+
+const MAP_VS = `#version 300 es
+void main() {
+  vec2 p = vec2(float((gl_VertexID << 1) & 2), float(gl_VertexID & 2)) * 2.0 - 1.0;
+  gl_Position = vec4(p, 0.0, 1.0);
+}`;
+
+/*
+ * Per pixel: map → galactic → ICRS → HEALPix face and cell → the cell's place
+ * in the Allsky mosaic. The HEALPix part is healpix.js's xyfOf, line for line.
+ */
+const MAP_FS = `#version 300 es
+precision highp float;
+precision highp int;
+uniform vec2 uCentre;
+uniform float uS;
+uniform mat3 uFromGal;
+uniform float uLod;
+uniform float uAlpha;
+uniform float uEdge;
+out vec4 outColour;
+${SHADE}
+const float PI = 3.141592653589793;
+const float SQ2 = 1.4142135623730951;
+int spread3(int v) { return (v & 1) | ((v & 2) << 1) | ((v & 4) << 2); }
+/* The three frames' values at one point of the map. */
+vec3 skyValue(vec2 m) {
+  float th = asin(clamp(m.y / SQ2, -1.0, 1.0));
+  float b = asin(clamp((2.0 * th + sin(2.0 * th)) / PI, -1.0, 1.0));
+  float L = clamp(-PI * m.x / (2.0 * SQ2 * max(cos(th), 1e-6)), -PI, PI);
+  vec3 v = uFromGal * vec3(cos(b) * cos(L), cos(b) * sin(L), sin(b));
+
+  float z = clamp(v.z, -1.0, 1.0);
+  float za = abs(z);
+  float tt = mod(atan(v.y, v.x) / (PI * 0.5), 4.0);
+  int face;
+  float x;
+  float y;
+  if (za <= 2.0 / 3.0) {
+    float jp = 0.5 + tt - 0.75 * z;
+    float jm = 0.5 + tt + 0.75 * z;
+    float ifp = floor(jp);
+    float ifm = floor(jm);
+    if (ifp == ifm) face = int(mod(ifp, 4.0)) + 4;
+    else if (ifp < ifm) face = int(mod(ifp, 4.0));
+    else face = int(mod(ifm, 4.0)) + 8;
+    x = jm - ifm;
+    y = 1.0 - (jp - ifp);
   } else {
-    outColour = vec4(texture(uRamp, vec2(r, 0.5)).rgb, 1.0);
+    float ntt = min(3.0, floor(tt));
+    float tp = tt - ntt;
+    float tmp = sqrt(3.0 * (1.0 - za));
+    float jp = min(tp * tmp, 0.99999);
+    float jm = min((1.0 - tp) * tmp, 0.99999);
+    if (z > 0.0) { face = int(ntt); x = 1.0 - jm; y = 1.0 - jp; }
+    else { face = int(ntt) + 8; x = jp; y = jm; }
   }
-}`;
-
-const LINE_VERTEX = `#version 300 es
-in vec3 aPos;
-uniform vec3 uC;
-uniform vec3 uE;
-uniform vec3 uN;
-uniform vec2 uScale;
+  int ix = clamp(int(floor(x * 8.0)), 0, 7);
+  int iy = clamp(int(floor(y * 8.0)), 0, 7);
+  float a = x * 8.0 - float(ix);
+  float bb = y * 8.0 - float(iy);
+  int k = face * 64 + spread3(ix) + 2 * spread3(iy);
+  vec2 slot = vec2(float(k % ${ALLSKY_COLUMNS}), float(k / ${ALLSKY_COLUMNS})) * ${ALLSKY_TILE}.0;
+  // A coarser mipmap level's texel is wider: the sample is kept that far
+  // inside its cell, or the filter reaches into the neighbouring cell of the
+  // mosaic, which is another part of the sky, and draws its edge as a seam.
+  float margin = 0.5 * exp2(floor(uLod) + 1.0);
+  vec2 uv = (slot + margin + vec2(bb, a) * (${ALLSKY_TILE}.0 - 2.0 * margin)) / vec2(${ATLAS_W}.0, ${ATLAS_H}.0);
+  return vec3(textureLod(uR, uv, uLod).r, textureLod(uG, uv, uLod).r, textureLod(uB, uv, uLod).r);
+}
 void main() {
-  float d = 1.0 + dot(aPos, uC);
-  vec2 p = vec2(-dot(aPos, uE), dot(aPos, uN)) * 2.0 / max(d, 1e-4);
-  gl_Position = vec4(p * uScale, 0.0, 1.0);
+  vec2 m = (gl_FragCoord.xy - uCentre) / uS;
+  float e = m.x * m.x / 8.0 + m.y * m.y / 2.0;
+  if (e > 1.0 + uEdge) discard;
+  // Four looks a quarter-pixel apart, averaged: a screen pixel of the map
+  // covers several of the mosaic's, and one look would pick one at random.
+  float q = 0.25 / uS;
+  vec3 raw = 0.25 * (skyValue(m + vec2(-q, -q)) + skyValue(m + vec2(q, -q)) + skyValue(m + vec2(-q, q)) + skyValue(m + vec2(q, q)));
+  float rim = 1.0 - smoothstep(1.0 - uEdge, 1.0 + uEdge, e);
+  outColour = vec4(shade(raw), uAlpha * rim);
 }`;
 
-const LINE_FRAGMENT = `#version 300 es
+const LINE_VS = `#version 300 es
+in vec2 aPos;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`;
+
+const LINE_FS = `#version 300 es
 precision mediump float;
 uniform vec4 uInk;
 out vec4 outColour;
@@ -99,85 +201,107 @@ function compile(gl, vs, fs, attributes) {
   }
   gl.linkProgram(program);
   if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program));
-  return program;
+  const names = {};
+  const n = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS);
+  for (let i = 0; i < n; i++) {
+    const { name } = gl.getActiveUniform(program, i);
+    names[name.replace(/^u/, '')] = gl.getUniformLocation(program, name);
+  }
+  return { program, u: names };
 }
+
+/* ---- geometry ----------------------------------------------------------- */
 
 /** The camera's basis: C toward the middle of the screen, E toward east, N toward north. */
 export function basisOf(ra, dec) {
   const a = ra * DEG;
   const d = dec * DEG;
-  const C = [Math.cos(d) * Math.cos(a), Math.cos(d) * Math.sin(a), Math.sin(d)];
-  const E = [-Math.sin(a), Math.cos(a), 0];
-  const N = [-Math.sin(d) * Math.cos(a), -Math.sin(d) * Math.sin(a), Math.cos(d)];
-  return { C, E, N };
+  return {
+    C: [Math.cos(d) * Math.cos(a), Math.cos(d) * Math.sin(a), Math.sin(d)],
+    E: [-Math.sin(a), Math.cos(a), 0],
+    N: [-Math.sin(d) * Math.cos(a), -Math.sin(d) * Math.sin(a), Math.cos(d)],
+  };
 }
 
 const dot = (u, v) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
 
-/**
- * Where a direction lands, as offsets from the middle of the screen in units
- * of the screen's shorter half-side, x right and y up; null behind the
- * observer.
- */
-export function project(v, { C, E, N }, k) {
-  const d = 1 + dot(v, C);
-  if (d < 1 + BEHIND) return null;
-  return { x: (-dot(v, E) * 2 / d) * k, y: (dot(v, N) * 2 / d) * k, cz: d - 1 };
-}
+/** Screen units per stereographic unit, for a field `fov` degrees across the shorter side. */
+export const scaleFor = (fov) => 1 / (2 * Math.tan((fov * DEG) / 4));
 
-/** The direction under a screen offset — the inverse of project. */
+/** The direction under a stereographic screen offset (units of the shorter half-side, y up). */
 export function unproject(x, y, { C, E, N }, k) {
   const X = -x / k;
   const Y = y / k;
   const r2 = X * X + Y * Y;
   const s = 4 / (4 + r2);
-  const cx = X * s;
-  const cy = Y * s;
   const cz = (4 - r2) / (4 + r2);
-  return [0, 1, 2].map((i) => cx * E[i] + cy * N[i] + cz * C[i]);
+  return [0, 1, 2].map((i) => X * s * E[i] + Y * s * N[i] + cz * C[i]);
 }
 
-/** Screen units per stereographic unit, for a field `fov` degrees across the shorter side. */
-export const scaleFor = (fov) => 1 / (2 * Math.tan((fov * DEG) / 4));
+/** Percentiles of the red channel of an image, from its histogram. */
+function levelsOf(bitmap) {
+  const c = new OffscreenCanvas(bitmap.width, bitmap.height);
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bitmap, 0, 0);
+  const { data } = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
+  const hist = new Uint32Array(256);
+  let n = 0;
+  // Only pixels with data: the mosaic's unused cells and the blanked cores are transparent.
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] === 0) continue;
+    hist[data[i]]++;
+    n++;
+  }
+  const pct = (q) => {
+    let s = 0;
+    for (let v = 0; v < 256; v++) {
+      s += hist[v];
+      if (s >= q * n) return v / 255;
+    }
+    return 1;
+  };
+  // The floor: a third of the sky's noise above its median, so empty sky is
+  // dark instead of grain, and anything that stands above the noise shows.
+  // The top: the brightest thousandth, so stars and nebulae are not all
+  // clipped to one white.
+  const sigma = pct(0.5) - pct(0.16);
+  return { lo: pct(0.5) + sigma * 0.3, hi: Math.max(pct(0.999), pct(0.5) + 0.05) };
+}
 
 /**
- * The view itself. `ramp` is a list of CSS colours, dark to light, for the
- * single-wavelength view. Calls `onChange` after every redraw with how many
- * tiles the screen wants and has.
+ * The view. `ramp`: CSS colours, dark to light, for one wavelength. `onChange`
+ * after every redraw, with how many images the screen wants and has.
  */
-export function createSkyView(canvas, { ramp, onChange = () => {} }) {
-  const gl = canvas.getContext('webgl2', { antialias: true, alpha: false, preserveDrawingBuffer: false });
+export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () => {} }) {
+  const gl = canvas.getContext('webgl2', { antialias: true, alpha: false });
   if (!gl) return null;
   gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+  const aniso = gl.getExtension('EXT_texture_filter_anisotropic');
 
-  const program = compile(gl, VERTEX, FRAGMENT, ['aPos', 'aUv']);
-  const lineProgram = compile(gl, LINE_VERTEX, LINE_FRAGMENT, ['aPos']);
-  const at = (p, n) => gl.getUniformLocation(p, n);
-  const U = { C: at(program, 'uC'), E: at(program, 'uE'), N: at(program, 'uN'), scale: at(program, 'uScale'),
-    R: at(program, 'uR'), G: at(program, 'uG'), B: at(program, 'uB'), ramp: at(program, 'uRamp'), colour: at(program, 'uColour') };
-  const L = { C: at(lineProgram, 'uC'), E: at(lineProgram, 'uE'), N: at(lineProgram, 'uN'), scale: at(lineProgram, 'uScale'), ink: at(lineProgram, 'uInk') };
+  const sphere = compile(gl, SPHERE_VS, SPHERE_FS, ['aPos', 'aUv']);
+  const map = compile(gl, MAP_VS, MAP_FS, []);
+  const line = compile(gl, LINE_VS, LINE_FS, ['aPos']);
 
-  const state = { ra: 266.4, dec: -29.0, fov: 120, frames: [], grid: false };
+  const state = { ra: 266.4, dec: -29.0, fov: 120, frames: [], grid: false, map: 0, insets: { top: 0, bottom: 0 } };
+  /** The frames on screen before the last change, drawn under the new ones until those are up. */
+  let previous = [];
+  let previousSince = 0;
+  let prefetch = [];
   let disposed = false;
   let queued = false;
 
-  /* ---- meshes ------------------------------------------------------- */
+  /* ---- meshes ---------------------------------------------------------- */
 
-  /** A mesh in one VAO: positions and texture coordinates, indexed as a grid of quads. */
   function meshVao(positions, uv, steps, count) {
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
-    const pos = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, pos);
-    gl.bufferData(gl.ARRAY_BUFFER, positions, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(0);
-    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
-    const tex = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, tex);
-    gl.bufferData(gl.ARRAY_BUFFER, uv, gl.STATIC_DRAW);
-    gl.enableVertexAttribArray(1);
-    gl.vertexAttribPointer(1, 2, gl.FLOAT, false, 0, 0);
+    for (const [i, data, size] of [[0, positions, 3], [1, uv, 2]]) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+      gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(i);
+      gl.vertexAttribPointer(i, size, gl.FLOAT, false, 0, 0);
+    }
     const side = steps + 1;
     const perTile = steps * steps * 6;
     const idx = new Uint32Array(perTile * count);
@@ -192,25 +316,21 @@ export function createSkyView(canvas, { ramp, onChange = () => {} }) {
         }
       }
     }
-    const ib = gl.createBuffer();
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ib);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
     gl.bindVertexArray(null);
-    return { vao, perTile, buffers: [pos, tex, ib] };
+    return { vao, perTile };
   }
 
-  // The Allsky mosaic: every order-3 tile, its texture coordinates pointing
-  // into its 64-pixel cell of one image, half a texel in from the edge so the
-  // filter never reaches the neighbouring cell.
-  const ALLSKY_COUNT = 12 * 4 ** ALLSKY_ORDER;
+  // The Allsky mosaic: every order-3 tile pointing into its 64-pixel cell of
+  // one image, a texel in from the edge so the filter, one mipmap level down,
+  // never reaches the neighbouring cell.
   const ALLSKY_STEPS = 4;
   const allskyMesh = (() => {
     const side = ALLSKY_STEPS + 1;
     const positions = new Float32Array(ALLSKY_COUNT * side * side * 3);
     const uv = new Float32Array(ALLSKY_COUNT * side * side * 2);
-    const W = 27 * ALLSKY_TILE;
-    const H = Math.ceil(ALLSKY_COUNT / 27) * ALLSKY_TILE;
-    const inset = 0.5 / ALLSKY_TILE;
+    const inset = 1 / ALLSKY_TILE;
     for (let n = 0; n < ALLSKY_COUNT; n++) {
       const m = tileMesh(ALLSKY_ORDER, n, ALLSKY_STEPS);
       positions.set(m.positions, n * side * side * 3);
@@ -218,15 +338,14 @@ export function createSkyView(canvas, { ramp, onChange = () => {} }) {
       for (let v = 0; v < side * side; v++) {
         const u = inset + m.uv[v * 2] * (1 - 2 * inset);
         const w = inset + m.uv[v * 2 + 1] * (1 - 2 * inset);
-        uv[(n * side * side + v) * 2] = (slot.x + u * ALLSKY_TILE) / W;
-        uv[(n * side * side + v) * 2 + 1] = (slot.y + w * ALLSKY_TILE) / H;
+        uv[(n * side * side + v) * 2] = (slot.x + u * ALLSKY_TILE) / ATLAS_W;
+        uv[(n * side * side + v) * 2 + 1] = (slot.y + w * ALLSKY_TILE) / ATLAS_H;
       }
     }
     return meshVao(positions, uv, ALLSKY_STEPS, ALLSKY_COUNT);
   })();
   const allskyCentres = Array.from({ length: ALLSKY_COUNT }, (_, n) => tileCentre(ALLSKY_ORDER, n));
 
-  /** Tile centres by order, made once on first need: 12 288 at order 5. */
   const centres = new Map();
   function centresOf(order) {
     if (!centres.has(order)) {
@@ -238,7 +357,6 @@ export function createSkyView(canvas, { ramp, onChange = () => {} }) {
     return centres.get(order);
   }
 
-  /** One mesh per detail tile, kept with the tile. */
   const meshes = new Map();
   function tileVao(order, npix) {
     const key = `${order}/${npix}`;
@@ -252,22 +370,28 @@ export function createSkyView(canvas, { ramp, onChange = () => {} }) {
     return meshes.get(key);
   }
 
-  /* ---- textures ----------------------------------------------------- */
+  const lineBuffer = gl.createBuffer();
+  const lineVao = gl.createVertexArray();
+  gl.bindVertexArray(lineVao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+  const emptyVao = gl.createVertexArray();
 
-  function makeTexture(source, { mip, maxLevel = 8 }) {
+  /* ---- textures -------------------------------------------------------- */
+
+  function makeTexture(source, maxLevel) {
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, gl.RED, gl.UNSIGNED_BYTE, source);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    if (mip) {
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, maxLevel);
-      gl.generateMipmap(gl.TEXTURE_2D);
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-    } else {
-      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    }
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, maxLevel);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+    if (aniso) gl.texParameterf(gl.TEXTURE_2D, aniso.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
     return tex;
   }
 
@@ -283,35 +407,53 @@ export function createSkyView(canvas, { ramp, onChange = () => {} }) {
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    for (const [p, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, p, v);
     return tex;
   })();
 
-  /**
-   * Every image the view has asked for, by URL: `{ state, tex, used }`, state
-   * one of queued, loading, ready, failed.
-   */
+  /** Every image asked for, by URL: `{ state, tex, used, priority, readyAt, levels }`. */
   const images = new Map();
   const queue = [];
   let loading = 0;
   let use = 0;
 
-  function want(url, priority, mip) {
+  function want(url, priority, { allsky = false } = {}) {
     let img = images.get(url);
     if (!img) {
-      img = { state: 'queued', tex: null, used: use, priority, mip, retryAt: 0 };
+      img = { state: 'queued', tex: null, used: use, priority, readyAt: 0, retryAt: 0, allsky };
       images.set(url, img);
       queue.push(url);
     } else if (img.state === 'failed' && performance.now() > img.retryAt) {
-      // IRSA has its bad minutes; a tile that failed is asked again later, not given up on.
+      // IRSA has its bad minutes; a failed image is asked for again later, not given up on.
       img.state = 'queued';
       queue.push(url);
     }
     img.used = use;
-    img.priority = priority;
+    img.priority = Math.min(img.priority, priority);
     return img;
+  }
+
+  /**
+   * An image through the site's own relay, which keeps the cube's tiles on
+   * disk, and straight from IRSA where there is no relay (a static host) or
+   * the relay cannot help.
+   */
+  let relayWorks = Boolean(relay);
+  async function fetchImage(url) {
+    if (relayWorks) {
+      try {
+        const res = await fetch(relay(url));
+        if (res.ok && (res.headers.get('content-type') ?? '').startsWith('image/')) return res.blob();
+        // A static host answers its own page, or nothing, for a path it does not have.
+        // No such route (a static host's 404, or its own page sent as 200):
+        // there is no relay, and it is not asked again. A 5xx is IRSA's bad
+        // minute behind the relay; this one image goes straight to IRSA.
+        if (res.status === 404 || res.ok) relayWorks = false;
+      } catch { /* the relay is down: IRSA itself */ }
+    }
+    const res = await fetch(url, { mode: 'cors' });
+    if (!res.ok) throw new Error(String(res.status));
+    return res.blob();
   }
 
   async function load(url) {
@@ -319,13 +461,13 @@ export function createSkyView(canvas, { ramp, onChange = () => {} }) {
     img.state = 'loading';
     loading++;
     try {
-      const res = await fetch(url, { mode: 'cors' });
-      if (!res.ok) throw new Error(String(res.status));
-      const bitmap = await createImageBitmap(await res.blob(), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+      const bitmap = await createImageBitmap(await fetchImage(url), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
       if (disposed) return;
-      img.tex = makeTexture(bitmap, { mip: true, maxLevel: img.mip });
+      if (img.allsky) img.levels = levelsOf(bitmap);
+      img.tex = makeTexture(bitmap, img.allsky ? 2 : 9);
       bitmap.close?.();
       img.state = 'ready';
+      img.readyAt = performance.now();
     } catch {
       img.state = 'failed';
       img.retryAt = performance.now() + RETRY_MS;
@@ -336,11 +478,10 @@ export function createSkyView(canvas, { ramp, onChange = () => {} }) {
     }
   }
 
-  /** Start the most wanted loads, nearest the middle of the screen first; forget what is no longer wanted. */
   function pump() {
     for (let i = queue.length - 1; i >= 0; i--) {
       const img = images.get(queue[i]);
-      if (img.used < use - 1) {
+      if (img.used < use - 1 && !img.allsky) {
         images.delete(queue[i]);
         queue.splice(i, 1);
       }
@@ -349,20 +490,25 @@ export function createSkyView(canvas, { ramp, onChange = () => {} }) {
     while (loading < LOADS_AT_ONCE && queue.length) load(queue.shift());
   }
 
-  /** Drop the least recently drawn textures past the budget. */
   function evict() {
-    const ready = [...images.entries()].filter(([, v]) => v.state === 'ready' && !v.pinned);
-    if (ready.length <= KEEP_TILES) return;
-    ready.sort((a, b) => a[1].used - b[1].used);
-    for (const [url, v] of ready.slice(0, ready.length - KEEP_TILES)) {
-      gl.deleteTexture(v.tex);
-      images.delete(url);
+    const ready = [...images.entries()].filter(([, v]) => v.state === 'ready');
+    const allskies = ready.filter(([, v]) => v.allsky);
+    const tiles = ready.filter(([, v]) => !v.allsky);
+    // Allsky images are a megabyte each and a sweep through the spectrum passes
+    // a hundred of them: the last dozen stay.
+    for (const [list, keep] of [[tiles, KEEP_TILES], [allskies, 12]]) {
+      if (list.length <= keep) continue;
+      list.sort((a, b) => a[1].used - b[1].used);
+      for (const [url, v] of list.slice(0, list.length - keep)) {
+        gl.deleteTexture(v.tex);
+        images.delete(url);
+      }
     }
   }
 
-  /* ---- drawing ------------------------------------------------------ */
+  /* ---- drawing --------------------------------------------------------- */
 
-  function size() {
+  function camera() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
     const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
@@ -370,54 +516,81 @@ export function createSkyView(canvas, { ramp, onChange = () => {} }) {
       canvas.width = w;
       canvas.height = h;
     }
-    return { w, h };
-  }
-
-  function camera() {
-    const { w, h } = size();
     const short = Math.min(w, h);
-    const k = scaleFor(state.fov);
-    return { ...basisOf(state.ra, state.dec), k, sx: short / w, sy: short / h, w, h, short };
+    return { ...basisOf(state.ra, state.dec), k: scaleFor(state.fov), sx: short / w, sy: short / h, w, h, short, dpr };
   }
 
-  function useCamera(prog, u, cam) {
-    gl.useProgram(prog);
-    gl.uniform3fv(u.C, cam.C);
-    gl.uniform3fv(u.E, cam.E);
-    gl.uniform3fv(u.N, cam.N);
-    gl.uniform2f(u.scale, cam.k * cam.sx, cam.k * cam.sy);
+  /** Where the ellipse sits: centred in the room between the search and the dock, device pixels, y up. */
+  function mapFrame(cam) {
+    const top = state.insets.top * cam.dpr;
+    const bottom = state.insets.bottom * cam.dpr;
+    const roomW = cam.w * 0.96;
+    const roomH = Math.max(cam.h * 0.3, cam.h - top - bottom);
+    const s = Math.min(roomW / (4 * Math.SQRT2), roomH / (2 * Math.SQRT2)) * 0.97;
+    return { cx: cam.w / 2, cy: bottom + roomH / 2 + Math.max(0, cam.h - top - bottom - roomH) / 2, s };
   }
 
-  function bindFrames(texs) {
-    const colour = texs.length === 3;
+  /** The textures and levels for a set of frames, if all are here; else null. */
+  function layerOf(urls, priority) {
+    const imgs = urls.map((u) => want(u, priority, { allsky: true }));
+    if (!imgs.every((i) => i.state === 'ready')) return { ready: false, imgs };
+    return { ready: true, imgs };
+  }
+
+  function bindLayer(prog, imgs, alpha, levelsFrom = imgs) {
+    const colour = imgs.length === 3;
     for (let i = 0; i < 3; i++) {
       gl.activeTexture(gl.TEXTURE0 + i);
-      gl.bindTexture(gl.TEXTURE_2D, texs[colour ? i : 0]);
+      gl.bindTexture(gl.TEXTURE_2D, imgs[colour ? i : 0].tex);
     }
     gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, rampTexture);
-    gl.uniform1i(U.R, 0);
-    gl.uniform1i(U.G, 1);
-    gl.uniform1i(U.B, 2);
-    gl.uniform1i(U.ramp, 3);
-    gl.uniform1i(U.colour, colour ? 1 : 0);
+    const u = prog.u;
+    gl.uniform1i(u.R, 0);
+    gl.uniform1i(u.G, 1);
+    gl.uniform1i(u.B, 2);
+    gl.uniform1i(u.Ramp, 3);
+    gl.uniform1i(u.Colour, colour ? 1 : 0);
+    const lv = levelsFrom.map((i) => i.levels ?? { lo: 0, hi: 1 });
+    const pick = (key) => (colour ? lv.map((l) => l[key]) : [lv[0][key], lv[0][key], lv[0][key]]);
+    gl.uniform3fv(u.Lo, pick('lo'));
+    gl.uniform3fv(u.Hi, pick('hi'));
+    gl.uniform1f(u.Alpha, alpha);
   }
 
-  /** Whether a tile with this middle and radius can touch the screen. */
+  const fadeOf = (imgs, now) => Math.min(1, ...imgs.map((i) => (now - i.readyAt) / FADE_MS));
+
   function onScreen(centre, radiusDeg, cam) {
     const cz = dot(centre, cam.C);
     if (cz < BEHIND) return false;
     const d = 1 + cz;
     const x = (-dot(centre, cam.E) * 2 / d) * cam.k * cam.sx;
     const y = (dot(centre, cam.N) * 2 / d) * cam.k * cam.sy;
-    // The tile's reach on the screen: its radius, magnified as the stereographic
-    // map magnifies at that distance from the middle.
     const reach = radiusDeg * DEG * (2 / d) * cam.k * Math.max(cam.sx, cam.sy) * 1.15;
     return Math.abs(x) <= 1 + reach && Math.abs(y) <= 1 + reach;
   }
 
-  function drawAllsky(cam, ready) {
-    bindFrames(ready);
+  function visibleTiles(order, cam) {
+    const c = centresOf(order);
+    const radius = tileDegrees(order);
+    const out = [];
+    for (let n = 0; n < c.length / 3; n++) {
+      const v = [c[n * 3], c[n * 3 + 1], c[n * 3 + 2]];
+      if (onScreen(v, radius, cam)) out.push({ n, near: -dot(v, cam.C) });
+    }
+    out.sort((a, b) => a.near - b.near);
+    return out.slice(0, WANT_MAX);
+  }
+
+  function useSphere(cam) {
+    gl.useProgram(sphere.program);
+    gl.uniform3fv(sphere.u.C, cam.C);
+    gl.uniform3fv(sphere.u.E, cam.E);
+    gl.uniform3fv(sphere.u.N, cam.N);
+    gl.uniform2f(sphere.u.Scale, cam.k * cam.sx, cam.k * cam.sy);
+  }
+
+  function drawAllsky(cam) {
     gl.bindVertexArray(allskyMesh.vao);
     let runStart = -1;
     const flush = (end) => {
@@ -436,51 +609,137 @@ export function createSkyView(canvas, { ramp, onChange = () => {} }) {
     flush(ALLSKY_COUNT);
   }
 
-  /** The visible tiles of an order, nearest the middle first. */
-  function visibleTiles(order, cam) {
-    const c = centresOf(order);
-    const radius = tileDegrees(order);
-    const out = [];
-    for (let n = 0; n < c.length / 3; n++) {
-      const v = [c[n * 3], c[n * 3 + 1], c[n * 3 + 2]];
-      if (onScreen(v, radius, cam)) out.push({ n, near: -dot(v, cam.C) });
+  /**
+   * One set of frames on the sphere: Allsky, then the tiles. `fetch` says
+   * whether to ask for what is missing (the current frames) or only draw
+   * what is here (the frames being faded out). Returns the counts and whether
+   * anything is still fading in.
+   */
+  function drawSphereLayer(frames, cam, now, fetch, alpha) {
+    const out = { wanted: 0, have: 0, fading: false, base: false };
+    const sky = fetch ? layerOf(frames.map(allskyUrl), -1) : { imgs: frames.map((f) => images.get(allskyUrl(f))) };
+    const skyReady = sky.imgs.every((i) => i?.state === 'ready');
+    out.wanted += frames.length;
+    if (!skyReady) return out;
+    out.have += frames.length;
+    out.base = true;
+    const f0 = fadeOf(sky.imgs, now) * alpha;
+    if (f0 < 1) out.fading = true;
+    useSphere(cam);
+    bindLayer(sphere, sky.imgs, f0);
+    // The Allsky's pixels each carry their own noise, and spread over a wide
+    // field they show as grain. Read a little down the mipmap, the grain
+    // averages out and the light stays; the sharp tiles above are read as they are.
+    gl.uniform1f(sphere.u.Bias, ALLSKY_BIAS);
+    drawAllsky(cam);
+    gl.uniform1f(sphere.u.Bias, 0);
+
+    const target = orderFor(state.fov / cam.short);
+    if (target === null) return out;
+    for (let order = ALLSKY_ORDER; order <= target; order++) {
+      for (const { n, near } of visibleTiles(order, cam)) {
+        const urls = frames.map((f) => tileUrl(order, n, f));
+        const imgs = urls.map((u) => (fetch && order === target ? want(u, near) : images.get(u)));
+        if (fetch && order === target) out.wanted += imgs.length;
+        if (!imgs.every((i) => i?.state === 'ready')) continue;
+        if (fetch && order === target) out.have += imgs.length;
+        for (const i of imgs) i.used = use;
+        const f = fadeOf(imgs, now) * alpha;
+        if (f < 1) out.fading = true;
+        // Levels always from the Allsky of the same frames, so a tile and the
+        // sky around it are set alike.
+        bindLayer(sphere, imgs, f, sky.imgs);
+        const mesh = tileVao(order, n);
+        gl.bindVertexArray(mesh.vao);
+        gl.drawElements(gl.TRIANGLES, mesh.perTile, gl.UNSIGNED_INT, 0);
+      }
     }
-    out.sort((a, b) => a.near - b.near);
-    return out.slice(0, WANT_MAX);
+    return out;
   }
 
-  /** The grid: lines of RA and Dec at a spacing that suits the field, and the ecliptic. */
-  const lineBuffer = gl.createBuffer();
-  const lineVao = gl.createVertexArray();
-  gl.bindVertexArray(lineVao);
-  gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
-  gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
-  gl.bindVertexArray(null);
+  function drawMapLayer(frames, cam, now, fetch, alpha) {
+    const out = { wanted: frames.length, have: 0, fading: false, base: false };
+    const imgs = frames.map((f) => (fetch ? want(allskyUrl(f), -1, { allsky: true }) : images.get(allskyUrl(f))));
+    if (!imgs.every((i) => i?.state === 'ready')) return out;
+    out.have = frames.length;
+    out.base = true;
+    const f = fadeOf(imgs, now) * alpha;
+    if (f < 1) out.fading = true;
+    const frame = mapFrame(cam);
+    gl.useProgram(map.program);
+    bindLayer(map, imgs, f);
+    gl.uniform2f(map.u.Centre, frame.cx, frame.cy);
+    gl.uniform1f(map.u.S, frame.s);
+    gl.uniformMatrix3fv(map.u.FromGal, false, GALACTIC.flat());
+    // The mosaic's pixel against the screen's, for the right mipmap level.
+    const degPerPx = 360 / (4 * Math.SQRT2 * frame.s);
+    gl.uniform1f(map.u.Lod, Math.max(0, Math.log2(degPerPx / (tileDegrees(ALLSKY_ORDER) / ALLSKY_TILE)) - 1));
+    gl.uniform1f(map.u.Edge, 1.5 / frame.s);
+    gl.bindVertexArray(emptyVao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    return out;
+  }
+
+  /* ---- lines ----------------------------------------------------------- */
 
   function gridStep(fov) {
     for (const s of [0.25, 0.5, 1, 2, 5, 10, 15, 30]) if (fov / s <= 8) return s;
     return 30;
   }
 
-  function drawLines(cam) {
-    const step = gridStep(state.fov);
-    const raStep = state.fov > 60 ? 30 : step;
-    const pts = [];
-    const runs = [];
-    const fine = Math.min(step / 8, 1);
-    const push = (list) => { runs.push([pts.length / 3, list.length]); for (const v of list) pts.push(...v); };
-    for (let dec = -90 + step; dec < 90; dec += step) {
-      const line = [];
-      for (let ra = 0; ra <= 360; ra += fine * 2) line.push(vecOf(ra, dec));
-      push(line);
+  /** Lines on the sky, each a list of ICRS vectors, as screen polylines in clip space. */
+  function strokes(lines, cam, inMap) {
+    const out = [];
+    const frame = inMap ? mapFrame(cam) : null;
+    for (const pts of lines) {
+      let run = [];
+      let last = null;
+      for (const v of pts) {
+        let p = null;
+        if (inMap) {
+          const g = toGalactic(v);
+          const { ra: l, dec: b } = radecOf(g);
+          const m = mollweide(l, b);
+          p = [(frame.cx + m.x * frame.s) / cam.w * 2 - 1, (frame.cy + m.y * frame.s) / cam.h * 2 - 1];
+          // The map's left and right edges are one meridian: a line crossing it breaks there.
+          if (last && Math.abs(p[0] - last[0]) > 0.5) {
+            if (run.length > 1) out.push(run);
+            run = [];
+          }
+        } else if (dot(v, cam.C) > BEHIND + 0.1) {
+          const d = 1 + dot(v, cam.C);
+          p = [(-dot(v, cam.E) * 2 / d) * cam.k * cam.sx, (dot(v, cam.N) * 2 / d) * cam.k * cam.sy];
+        }
+        if (!p) {
+          if (run.length > 1) out.push(run);
+          run = [];
+        } else {
+          run.push(p);
+        }
+        last = p;
+      }
+      if (run.length > 1) out.push(run);
     }
-    for (let ra = 0; ra < 360; ra += raStep) {
-      const line = [];
-      for (let dec = -90; dec <= 90; dec += fine * 2) line.push(vecOf(ra, dec));
-      push(line);
+    return out;
+  }
+
+  function drawLines(cam, inMap, alpha) {
+    const grid = [];
+    if (!inMap) {
+      const step = gridStep(state.fov);
+      const raStep = state.fov > 60 ? 30 : step;
+      const fine = Math.min(step / 8, 1);
+      for (let dec = -90 + step; dec < 90; dec += step) {
+        const pts = [];
+        for (let ra = 0; ra <= 360; ra += fine * 2) pts.push(vecOf(ra, dec));
+        grid.push(pts);
+      }
+      for (let ra = 0; ra < 360; ra += raStep) {
+        const pts = [];
+        for (let dec = -90; dec <= 90; dec += fine * 2) pts.push(vecOf(ra, dec));
+        grid.push(pts);
+      }
     }
-    const gridRuns = runs.length;
     // The ecliptic: the plane the planets keep to, and the first place to look for one.
     const eps = 23.4393 * DEG;
     const ecl = [];
@@ -488,85 +747,58 @@ export function createSkyView(canvas, { ramp, onChange = () => {} }) {
       const lam = l * DEG;
       ecl.push([Math.cos(lam), Math.sin(lam) * Math.cos(eps), Math.sin(lam) * Math.sin(eps)]);
     }
-    push(ecl);
-
-    gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
-    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(pts), gl.STREAM_DRAW);
-    useCamera(lineProgram, L, cam);
+    gl.useProgram(line.program);
     gl.bindVertexArray(lineVao);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    // A segment that crosses behind the observer would be drawn across the
-    // whole screen; such runs are split where they leave the front.
-    runs.forEach(([start, count], i) => {
-      gl.uniform4fv(L.ink, i < gridRuns ? [0.86, 0.88, 1, 0.16] : [1, 0.74, 0.38, 0.55]);
-      let from = -1;
-      for (let p = 0; p <= count; p++) {
-        const ok = p < count && dot(pts.slice((start + p) * 3, (start + p) * 3 + 3), cam.C) > BEHIND;
-        if (ok && from < 0) from = p;
-        if (!ok && from >= 0) {
-          if (p - from > 1) gl.drawArrays(gl.LINE_STRIP, start + from, p - from);
-          from = -1;
-        }
+    gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
+    for (const [set, colour] of [[grid, ink.grid], [[ecl], ink.ecliptic]]) {
+      gl.uniform4fv(line.u.Ink, [colour[0], colour[1], colour[2], colour[3] * alpha]);
+      for (const run of strokes(set, cam, inMap)) {
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(run.flat()), gl.STREAM_DRAW);
+        gl.drawArrays(gl.LINE_STRIP, 0, run.length);
       }
-    });
-    gl.disable(gl.BLEND);
+    }
   }
+
+  /* ---- the frame ------------------------------------------------------- */
 
   function draw() {
     queued = false;
     if (disposed) return;
     use++;
+    const now = performance.now();
     const cam = camera();
     gl.viewport(0, 0, cam.w, cam.h);
-    gl.clearColor(0.03, 0.03, 0.05, 1);
+    gl.clearColor(0.025, 0.025, 0.04, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 
-    const frames = state.frames;
-    let wanted = 0;
-    let have = 0;
-    if (frames.length) {
-      useCamera(program, U, cam);
-      // The whole sky first, at once, as the ground everything sharper is laid on.
-      const skies = frames.map((f) => {
-        const img = want(allskyUrl(f), -1, 2);
-        img.pinned = true;
-        return img;
-      });
-      wanted += skies.length;
-      if (skies.every((s) => s.state === 'ready')) {
-        have += skies.length;
-        drawAllsky(cam, skies.map((s) => s.tex));
-      }
-
-      const degPerPx = state.fov / cam.short;
-      const target = orderFor(degPerPx);
-      if (target !== null) {
-        for (let order = ALLSKY_ORDER; order <= target; order++) {
-          const tiles = visibleTiles(order, cam);
-          for (const { n, near } of tiles) {
-            const urls = frames.map((f) => tileUrl(order, n, f));
-            // Only the target order is fetched; a coarser one is drawn if it is already here.
-            const imgs = urls.map((u) => (order === target ? want(u, near, 9) : images.get(u)));
-            if (order === target) wanted += imgs.length;
-            if (imgs.every((i) => i?.state === 'ready')) {
-              if (order === target) have += imgs.length;
-              for (const i of imgs) i.used = use;
-              bindFrames(imgs.map((i) => i.tex));
-              const mesh = tileVao(order, n);
-              gl.bindVertexArray(mesh.vao);
-              gl.drawElements(gl.TRIANGLES, mesh.perTile, gl.UNSIGNED_INT, 0);
-            }
-          }
-        }
-      }
+    const m = state.map;
+    let result = { wanted: 0, have: 0, fading: false, base: false };
+    const layer = (fn, alpha) => {
+      // Under the new frames, the old ones, until the new are fully up.
+      if (previous.length) fn(previous, cam, now, false, alpha);
+      const r = fn(state.frames, cam, now, true, alpha);
+      result = { wanted: result.wanted + r.wanted, have: result.have + r.have, fading: result.fading || r.fading, base: result.base || r.base };
+    };
+    if (state.frames.length) {
+      if (m < 1) layer(drawSphereLayer, 1);
+      if (m > 0) layer(drawMapLayer, m);
+      // Ask ahead for what comes next in a sweep, after everything on screen.
+      for (const f of prefetch) want(allskyUrl(f), 5, { allsky: true });
       pump();
       evict();
     }
-    if (state.grid) drawLines(cam);
+    if (previous.length && ((result.base && !result.fading && result.have >= result.wanted) || now - previousSince > 4000)) previous = [];
+    if (state.grid) {
+      if (m < 1) drawLines(cam, false, 1 - m);
+      if (m > 0) drawLines(cam, true, m);
+    }
+    gl.disable(gl.BLEND);
     gl.bindVertexArray(null);
+    if (result.fading || previous.length) redraw();
     const failed = [...images.values()].filter((i) => i.state === 'failed' && i.used >= use).length;
-    onChange({ wanted, have, failed, cam });
+    onChange({ wanted: result.wanted, have: result.have, failed, complete: result.base && result.have >= result.wanted && !result.fading });
   }
 
   function redraw() {
@@ -577,38 +809,64 @@ export function createSkyView(canvas, { ramp, onChange = () => {} }) {
 
   new ResizeObserver(redraw).observe(canvas);
 
+  /** The map's device-pixel frame and the camera, for the pointer helpers. */
+  const geometry = () => {
+    const cam = camera();
+    return { cam, frame: mapFrame(cam) };
+  };
+
   return {
-    get state() { return { ...state }; },
-    /** Point the view: any of ra, dec, fov. */
-    set({ ra = state.ra, dec = state.dec, fov = state.fov } = {}) {
+    get state() { return { ...state, frames: [...state.frames] }; },
+    set({ ra = state.ra, dec = state.dec, fov = state.fov, map: mix = state.map } = {}) {
       state.ra = ((ra % 360) + 360) % 360;
       state.dec = Math.max(-89.999, Math.min(89.999, dec));
       state.fov = Math.max(FOV_MIN, Math.min(FOV_MAX, fov));
+      state.map = Math.max(0, Math.min(1, mix));
       redraw();
     },
-    /** One frame for the single view, three (red, green, blue) for colour. */
+    /** One frame for a single wavelength, three (red, green, blue) for colour. */
     setFrames(frames) {
       if (frames.join() === state.frames.join()) return;
-      for (const img of images.values()) img.pinned = false;
+      const sky = state.frames.map((f) => images.get(allskyUrl(f)));
+      if (state.frames.length && sky.every((i) => i?.state === 'ready')) {
+        previous = state.frames;
+        previousSince = performance.now();
+      }
       state.frames = [...frames];
       redraw();
     },
+    /** Frames to have ready before they are asked for. */
+    setPrefetch(frames) { prefetch = frames; redraw(); },
     setGrid(on) { state.grid = on; redraw(); },
-    /** The sky under a point of the canvas, in CSS pixels from its top left. */
+    /** CSS pixels kept clear of the map at the top and bottom. */
+    setInsets(insets) { state.insets = insets; redraw(); },
+    /** The sky under a point of the canvas (CSS pixels), in whichever view is showing; null off the map. */
     skyAt(px, py) {
-      const cam = camera();
-      const dpr = cam.w / canvas.clientWidth;
-      const x = ((px * dpr - cam.w / 2) / (cam.short / 2));
-      const y = -((py * dpr - cam.h / 2) / (cam.short / 2));
+      const { cam, frame } = geometry();
+      if (state.map >= 0.5) {
+        const x = (px * cam.dpr - frame.cx) / frame.s;
+        const y = (cam.h - py * cam.dpr - frame.cy) / frame.s;
+        const g = mollweideInverse(x, y);
+        return g ? radecOf(fromGalactic(vecOf(g.l, g.b))) : null;
+      }
+      const x = (px * cam.dpr - cam.w / 2) / (cam.short / 2);
+      const y = -(py * cam.dpr - cam.h / 2) / (cam.short / 2);
       return radecOf(unproject(x, y, cam, cam.k));
     },
-    /** Where a point of the sky is on the canvas, in CSS pixels; null if behind. */
+    /** Where a point of the sky is on the canvas, CSS pixels; null if behind. */
     screenOf(ra, dec) {
-      const cam = camera();
-      const p = project(vecOf(ra, dec), cam, cam.k);
-      if (!p || p.cz < 0) return null;
-      const dpr = cam.w / canvas.clientWidth;
-      return { x: (cam.w / 2 + p.x * cam.short / 2) / dpr, y: (cam.h / 2 - p.y * cam.short / 2) / dpr };
+      const { cam, frame } = geometry();
+      if (state.map >= 0.5) {
+        const { ra: l, dec: b } = radecOf(toGalactic(vecOf(ra, dec)));
+        const m = mollweide(l, b);
+        return { x: (frame.cx + m.x * frame.s) / cam.dpr, y: (cam.h - frame.cy - m.y * frame.s) / cam.dpr };
+      }
+      const v = vecOf(ra, dec);
+      const d = 1 + dot(v, cam.C);
+      if (d < 1) return null;
+      const x = (-dot(v, cam.E) * 2 / d) * (cam.short / 2);
+      const y = (dot(v, cam.N) * 2 / d) * (cam.short / 2);
+      return { x: (cam.w / 2 + x * cam.k) / cam.dpr, y: (cam.h / 2 - y * cam.k) / cam.dpr };
     },
     redraw,
     dispose() { disposed = true; },

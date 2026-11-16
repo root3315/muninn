@@ -69,11 +69,11 @@ export const tileDegrees = (order) => 58.63 / 2 ** order;
 /**
  * Which tiles the screen needs: null while the one Allsky image is already as
  * sharp as the screen, else the first order whose pixel is no coarser than
- * about two screen pixels, and never beyond what IRSA has. Two, not one: the
- * next order costs four times the tiles for a sharpness hardly seen.
+ * about one and a half screen pixels, and never beyond what IRSA has. Not one:
+ * the next order costs four times the tiles for a sharpness hardly seen.
  */
 export function orderFor(degPerScreenPx) {
-  const slack = degPerScreenPx * 2;
+  const slack = degPerScreenPx * 1.5;
   if (tileDegrees(ALLSKY_ORDER) / ALLSKY_TILE <= slack) return null;
   for (let order = ALLSKY_ORDER; order < MAX_ORDER; order++) {
     if (tileDegrees(order) / TILE_PX <= slack) return order;

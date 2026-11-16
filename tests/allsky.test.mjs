@@ -115,3 +115,32 @@ test('the sharper the screen, the deeper the order, never past the cube', () => 
     last = o;
   }
 });
+
+import { galacticOf, equatorialOf, mollweide, mollweideInverse } from '../public/js/allsky/maps.js';
+
+test('galactic coordinates land where the galaxy is', () => {
+  // Sgr A* sits at l 359.944, b −0.046; the north galactic pole at RA 192.859, Dec 27.128.
+  const sgr = galacticOf(266.41683, -29.00781);
+  assert.ok(Math.abs(((sgr.l + 180) % 360) - 180 - -0.056) < 0.01 && Math.abs(sgr.b - -0.046) < 0.01, JSON.stringify(sgr));
+  assert.ok(galacticOf(192.85948, 27.12825).b > 89.999);
+  for (const [ra, dec] of [[10, 20], [200, -60], [300, 80]]) {
+    const { l, b } = galacticOf(ra, dec);
+    const back = equatorialOf(l, b);
+    assert.ok(Math.abs(back.ra - ra) < 1e-9 && Math.abs(back.dec - dec) < 1e-9);
+  }
+});
+
+test('the Mollweide map is true both ways, centre in the middle and longitude to the left', () => {
+  assert.deepEqual(mollweide(0, 0), { x: -0, y: 0 });
+  const left = mollweide(90, 0);
+  assert.ok(left.x < 0 && Math.abs(left.x - -Math.SQRT2) < 1e-12);
+  assert.ok(Math.abs(mollweide(0, 90).y - Math.SQRT2) < 1e-12);
+  for (const [l, b] of [[10, 5], [123, -45], [250, 60], [359, -89], [180.5, 0.3]]) {
+    const { x, y } = mollweide(l, b);
+    const back = mollweideInverse(x, y);
+    const dl = Math.abs(((back.l - l + 540) % 360) - 180);
+    assert.ok(dl < 1e-6 && Math.abs(back.b - b) < 1e-6, `${l},${b} → ${back.l},${back.b}`);
+  }
+  assert.equal(mollweideInverse(2.9, 0), null);
+  assert.equal(mollweideInverse(0, 1.5), null);
+});

@@ -2,24 +2,32 @@
  * allsky.js — the whole-sky page: the SPHEREx DR1 cube to turn, zoom and read
  * by wavelength, and a way from any point of it into the tool's own frames.
  *
- * The page keeps its place in the address — #ra=…&dec=…&fov=…&view=… — so a
- * link opens the same sky. `view` is `colour` or a frame number of the cube.
+ * It opens on the whole sky at once, the Mollweide map; a click goes in at
+ * that point, onto the sphere, and zooming far enough out comes back.
+ *
+ * The page keeps its place in the address — #ra=…&dec=…&fov=…&view=…, and
+ * map=1 on the map — so a link opens the same sky. `view` is `colour` or a
+ * frame number of the cube.
  */
 
 import { setLanguage, getLanguage, t, applyTranslations, fmt } from './i18n.js';
 import { parseCoordinates, resolveSesame, formatRA, formatDec } from './catalog.js';
 import { encodeHash } from './hash.js';
 import { createSkyView, FOV_MIN, FOV_MAX } from './allsky/view.js';
+import { galacticOf } from './allsky/maps.js';
 import {
-  FRAMES, WAVELENGTHS, COLOUR_FRAMES, bandOf, channelOf, bandFrame,
+  FRAMES, WAVELENGTHS, COLOUR_FRAMES, HIPS_BASE, bandOf, channelOf, bandFrame,
 } from './allsky/hips.js';
 
 const $ = (id) => document.getElementById(id);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const touch = matchMedia('(pointer: coarse)').matches;
 
-/** The galactic centre, wide: the Milky Way across the screen. */
-const OPENING = { ra: 266.4, dec: -29.0, fov: 120 };
-/** The field the tool opens with, in degrees: its own middle size. */
+/** Where the sphere opens when nothing says otherwise: the galactic centre, wide. */
+const OPENING = { ra: 266.4, dec: -29.0, fov: 100 };
+/** The field a click on the map goes in to. */
+const DIVE_FOV = 40;
+/** The field the tool opens with, degrees. */
 const TOOL_FOV = 0.3;
 
 /* ---- language ---------------------------------------------------------- */
@@ -43,11 +51,14 @@ function readHash() {
   const fov = num('fov');
   const view = p.get('view');
   const frame = Number(view);
+  const placed = Number.isFinite(ra) && Number.isFinite(dec) && Math.abs(dec) <= 90;
   return {
-    ra: Number.isFinite(ra) ? ra : OPENING.ra,
-    dec: Number.isFinite(dec) && Math.abs(dec) <= 90 ? dec : OPENING.dec,
+    ra: placed ? ra : OPENING.ra,
+    dec: placed ? dec : OPENING.dec,
     fov: Number.isFinite(fov) ? Math.min(FOV_MAX, Math.max(FOV_MIN, fov)) : OPENING.fov,
     view: view !== null && view !== 'colour' && FRAMES.includes(frame) ? frame : 'colour',
+    // A link to a place opens at the place; a bare link opens on the whole sky.
+    map: p.get('map') === '1' || !placed ? 1 : 0,
   };
 }
 
@@ -57,6 +68,7 @@ function writeHash() {
   hashTimer = setTimeout(() => {
     const s = view.state;
     const p = new URLSearchParams({ ra: s.ra.toFixed(4), dec: s.dec.toFixed(4), fov: s.fov.toPrecision(3), view: String(current) });
+    if (s.map >= 0.5) p.set('map', '1');
     history.replaceState(null, '', `#${p}`);
   }, 250);
 }
@@ -64,9 +76,16 @@ function writeHash() {
 /* ---- the view ---------------------------------------------------------- */
 
 const canvas = $('canvas');
-const ramp = getComputedStyle(document.documentElement).getPropertyValue('--cmap-deep')
-  .split(/,(?![^(]*\))/).map((s) => s.trim()).filter(Boolean);
-const view = createSkyView(canvas, { ramp, onChange: afterDraw });
+const style = getComputedStyle(document.documentElement);
+const ramp = style.getPropertyValue('--cmap-deep').split(/,(?![^(]*\))/).map((s) => s.trim()).filter(Boolean);
+const view = createSkyView(canvas, {
+  ramp,
+  // The grid barely there; the ecliptic in the page's amber.
+  ink: { grid: [0.86, 0.88, 1, 0.14], ecliptic: [1, 0.76, 0.42, 0.7] },
+  // The site's relay keeps the cube's tiles on disk; IRSA has slow spells.
+  relay: (url) => url.replace(`${HIPS_BASE}/`, 'api/hips/'),
+  onChange: afterDraw,
+});
 
 if (!view) {
   $('nogl').hidden = false;
@@ -76,15 +95,20 @@ if (!view) {
 const start = readHash();
 /** `colour`, or the frame on screen. */
 let current = start.view;
+const inMap = () => (view?.state.map ?? 0) >= 0.5;
 
 /* ---- wavelength -------------------------------------------------------- */
 
 const lambda = $('lambda');
 lambda.max = String(FRAMES.length - 1);
-
 const um = (w) => fmt(w, 2);
 
-function showView() {
+function sayFrame(frame) {
+  return t('allsky.lambdaValue', { w: um(WAVELENGTHS[frame]), band: `D${bandOf(frame)}`, ch: channelOf(frame) });
+}
+
+/** Chips, slider and words for the view in `current`, without touching the sky. */
+function showControls() {
   const colour = current === 'colour';
   const frame = colour ? COLOUR_FRAMES[1] : current;
   const band = bandOf(frame);
@@ -96,27 +120,29 @@ function showView() {
   lambda.closest('.as-dock__row').dataset.colour = String(colour);
   $('lambda-value').textContent = colour
     ? t('allsky.colourNote', { b: um(WAVELENGTHS[COLOUR_FRAMES[2]]), g: um(WAVELENGTHS[COLOUR_FRAMES[1]]), r: um(WAVELENGTHS[COLOUR_FRAMES[0]]) })
-    : t('allsky.lambdaValue', { w: um(WAVELENGTHS[frame]), band: `D${band}`, ch: channelOf(frame) });
+    : sayFrame(frame);
   lambda.setAttribute('aria-valuetext', $('lambda-value').textContent);
-  view?.setFrames(colour ? COLOUR_FRAMES : [frame]);
+}
+
+function showView() {
+  showControls();
+  view?.setFrames(current === 'colour' ? COLOUR_FRAMES : [current]);
   writeHash();
 }
 
 let lambdaTimer = 0;
 lambda.addEventListener('input', () => {
+  stopPlay();
   current = FRAMES[Number(lambda.value)];
-  // The words follow the slider at once; the sky only once the hand rests, so
-  // a sweep across the range does not ask IRSA for every frame on the way.
-  const frame = current;
-  $('lambda-value').textContent = t('allsky.lambdaValue', { w: um(WAVELENGTHS[frame]), band: `D${bandOf(frame)}`, ch: channelOf(frame) });
-  document.documentElement.dataset.band = `D${bandOf(frame)}`;
-  for (const input of document.querySelectorAll('input[name="view"]')) input.checked = Number(input.value) === bandOf(frame);
-  lambda.closest('.as-dock__row').dataset.colour = 'false';
+  // The words follow the slider at once; the sky once the hand rests, so a
+  // sweep across the range does not ask IRSA for every frame on the way.
+  showControls();
   clearTimeout(lambdaTimer);
-  lambdaTimer = setTimeout(showView, 220);
+  lambdaTimer = setTimeout(showView, 200);
 });
 
 $('bands').addEventListener('change', (e) => {
+  stopPlay();
   const v = e.target.value;
   current = v === 'colour' ? 'colour' : bandFrame(Number(v));
   showView();
@@ -124,46 +150,129 @@ $('bands').addEventListener('change', (e) => {
 
 $('grid').addEventListener('change', (e) => view?.setGrid(e.target.checked));
 
+/* ---- playing through the spectrum ------------------------------------- */
+
+/*
+ * One frame after another, short to long, each shown once it is fully on
+ * screen and never faster than STEP_MS: the sweep waits for IRSA rather than
+ * skip what it has not drawn. The next two frames are asked for ahead.
+ */
+const STEP_MS = 380;
+let playing = false;
+let lastStep = 0;
+let complete = false;
+
+function setPlay(on) {
+  playing = on;
+  $('play').setAttribute('aria-pressed', String(on));
+  if (on && current === 'colour') {
+    current = FRAMES[0];
+    showView();
+  }
+  lastStep = performance.now();
+  view?.setPrefetch(on ? ahead() : []);
+  if (on) tickPlay();
+}
+
+function stopPlay() {
+  if (playing) setPlay(false);
+}
+
+function ahead() {
+  const i = FRAMES.indexOf(current);
+  return [1, 2].map((d) => FRAMES[(i + d) % FRAMES.length]);
+}
+
+function tickPlay() {
+  if (!playing) return;
+  const now = performance.now();
+  if (complete && now - lastStep >= STEP_MS) {
+    current = FRAMES[(FRAMES.indexOf(current) + 1) % FRAMES.length];
+    lastStep = now;
+    complete = false;
+    showView();
+    view.setPrefetch(ahead());
+  }
+  requestAnimationFrame(tickPlay);
+}
+
+$('play').addEventListener('click', () => setPlay(!playing));
+
 /* ---- moving about ------------------------------------------------------ */
 
-let flight = 0;
+let motion = 0;
+function stopMotion() {
+  cancelAnimationFrame(motion);
+  motion = 0;
+}
 
-/** Glide to a place; a jump where motion is unwelcome. */
-function flyTo({ ra, dec, fov }) {
-  cancelAnimationFrame(flight);
+/** Animate from the view now to `to` (any of ra, dec, fov, map) over `ms`. */
+function animate(to, ms = 1300, { arc = true } = {}) {
+  stopMotion();
   const from = view.state;
+  const goal = { ...from, ...to };
   if (reduceMotion) {
-    view.set({ ra, dec, fov });
+    view.set(goal);
     writeHash();
     return;
   }
-  // The short way round in RA.
-  let dra = ra - from.ra;
+  let dra = goal.ra - from.ra;
   if (dra > 180) dra -= 360;
   if (dra < -180) dra += 360;
   const t0 = performance.now();
-  const ms = 1400;
   const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2);
-  // Out wide and back in, so the eye sees where on the sky it went.
-  const wide = Math.max(from.fov, fov, Math.min(90, Math.abs(dra) + Math.abs(dec - from.dec)));
+  // Out wide and back in on a long trip, so the eye sees where on the sky it went.
+  const trip = Math.abs(dra) * Math.cos((from.dec * Math.PI) / 180) + Math.abs(goal.dec - from.dec);
+  const wide = arc ? Math.min(FOV_MAX, Math.max(from.fov, goal.fov, trip * 0.9)) : 0;
   const step = (now) => {
     const x = Math.min(1, (now - t0) / ms);
     const e = ease(x);
-    const arc = Math.sin(Math.PI * x);
-    const logFov = Math.log(from.fov) * (1 - e) + Math.log(fov) * e;
-    const f = Math.exp(logFov + (Math.log(wide) - logFov) * arc * 0.6);
-    view.set({ ra: from.ra + dra * e, dec: from.dec + (dec - from.dec) * e, fov: f });
-    if (x < 1) flight = requestAnimationFrame(step);
-    else writeHash();
+    const logFov = Math.log(from.fov) * (1 - e) + Math.log(goal.fov) * e;
+    const lift = wide ? (Math.log(wide) - logFov) * Math.sin(Math.PI * x) * 0.7 : 0;
+    view.set({
+      ra: from.ra + dra * e,
+      dec: from.dec + (goal.dec - from.dec) * e,
+      fov: Math.exp(logFov + Math.max(0, lift)),
+      map: from.map + (goal.map - from.map) * e,
+    });
+    if (x < 1) {
+      motion = requestAnimationFrame(step);
+    } else {
+      motion = 0;
+      writeHash();
+    }
   };
-  flight = requestAnimationFrame(step);
+  motion = requestAnimationFrame(step);
 }
+
+/** From the map into the sphere at a point. */
+function dive(at, fov = DIVE_FOV) {
+  // The sphere is set to the point while the map is still in front of it, so
+  // what comes through the map as it fades is the place that was chosen.
+  view.set({ ra: at.ra, dec: at.dec, fov: Math.min(FOV_MAX, fov * 3) });
+  animate({ ra: at.ra, dec: at.dec, fov, map: 0 }, 1100, { arc: false });
+}
+
+/** From the sphere out to the whole sky. */
+function surface() {
+  animate({ fov: FOV_MAX, map: 1 }, 900, { arc: false });
+}
+
+$('whole').addEventListener('click', () => {
+  if (!view) return;
+  if (inMap()) dive(view.state, 60);
+  else surface();
+});
 
 /** Zoom by a factor, keeping the sky under (px, py) where it is. */
 function zoomAt(factor, px, py) {
-  cancelAnimationFrame(flight);
-  const before = view.skyAt(px, py);
+  if (inMap()) return;
   const s = view.state;
+  if (factor > 1 && s.fov >= FOV_MAX - 1e-6) {
+    surface();
+    return;
+  }
+  const before = view.skyAt(px, py);
   view.set({ fov: s.fov * factor });
   const after = view.skyAt(px, py);
   let dra = before.ra - after.ra;
@@ -174,20 +283,59 @@ function zoomAt(factor, px, py) {
   writeHash();
 }
 
+/* The wheel: each notch adds to a zoom still to be made, and a little of it
+   is made every frame, so a spin of the wheel glides instead of jumping. */
+let pendingZoom = 0;
+let zoomAnchor = [0, 0];
+let zoomLoop = 0;
+function glideZoom() {
+  if (inMap()) {
+    pendingZoom = 0;
+    zoomLoop = 0;
+    return;
+  }
+  const part = Math.abs(pendingZoom) < 0.002 ? pendingZoom : pendingZoom * 0.22;
+  pendingZoom -= part;
+  zoomAt(Math.exp(part), ...zoomAnchor);
+  zoomLoop = pendingZoom !== 0 ? requestAnimationFrame(glideZoom) : 0;
+}
+
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  if (!view) return;
+  hideHint();
+  if (inMap()) {
+    const at = view.skyAt(e.offsetX, e.offsetY);
+    if (e.deltaY < 0 && at && !motion) dive(at);
+    return;
+  }
+  if (motion) return;
+  const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1;
+  pendingZoom += (e.deltaY * unit) / 400;
+  zoomAnchor = [e.offsetX, e.offsetY];
+  if (!zoomLoop) zoomLoop = requestAnimationFrame(glideZoom);
+}, { passive: false });
+
+/* Dragging: the point under the finger stays under it, and a flick carries
+   on and slows, as a globe does. */
 const pointers = new Map();
 let dragged = false;
 let pinchFrom = 0;
+let velocity = { ra: 0, dec: 0, at: 0 };
+let coast = 0;
 
 canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
   dragged = false;
+  velocity = { ra: 0, dec: 0, at: performance.now() };
   if (pointers.size === 2) {
     const [a, b] = [...pointers.values()];
     pinchFrom = Math.hypot(a.x - b.x, a.y - b.y);
   }
-  cancelAnimationFrame(flight);
-  $('hint').dataset.gone = 'true';
+  stopMotion();
+  cancelAnimationFrame(coast);
+  hideHint();
 });
 
 canvas.addEventListener('pointermove', (e) => {
@@ -195,6 +343,8 @@ canvas.addEventListener('pointermove', (e) => {
   const last = pointers.get(e.pointerId);
   if (!last || !view) return;
   const now = { x: e.offsetX, y: e.offsetY };
+  if (Math.hypot(now.x - last.x, now.y - last.y) > 3) dragged = true;
+  if (inMap()) return;
   if (pointers.size === 2) {
     pointers.set(e.pointerId, now);
     const [a, b] = [...pointers.values()];
@@ -204,42 +354,65 @@ canvas.addEventListener('pointermove', (e) => {
     dragged = true;
     return;
   }
-  if (Math.hypot(now.x - last.x, now.y - last.y) > 2) dragged = true;
-  // Drag the sky itself: the point under the finger stays under it.
   const before = view.skyAt(last.x, last.y);
   const after = view.skyAt(now.x, now.y);
   let dra = before.ra - after.ra;
   if (dra > 180) dra -= 360;
   if (dra < -180) dra += 360;
+  const ddec = before.dec - after.dec;
   const s = view.state;
-  view.set({ ra: s.ra + dra, dec: s.dec + (before.dec - after.dec) });
+  view.set({ ra: s.ra + dra, dec: s.dec + ddec });
+  const t = performance.now();
+  const dt = Math.max(1, t - velocity.at);
+  // Smoothed, so one jittery sample does not throw the sky.
+  velocity = { ra: velocity.ra * 0.6 + (dra / dt) * 0.4, dec: velocity.dec * 0.6 + (ddec / dt) * 0.4, at: t };
   pointers.set(e.pointerId, now);
   writeHash();
 });
 
-const release = (e) => {
+function release(e) {
+  const wasDrag = dragged && pointers.size === 1;
   pointers.delete(e.pointerId);
   if (pointers.size < 2) pinchFrom = 0;
-};
+  if (!view) return;
+  if (inMap()) {
+    if (!dragged && e.type === 'pointerup') {
+      const at = view.skyAt(e.offsetX, e.offsetY);
+      if (at) dive(at);
+    }
+    return;
+  }
+  if (!wasDrag || reduceMotion || performance.now() - velocity.at > 60) return;
+  let v = { ...velocity };
+  let prev = performance.now();
+  const glide = (now) => {
+    const dt = now - prev;
+    prev = now;
+    const s = view.state;
+    view.set({ ra: s.ra + v.ra * dt, dec: s.dec + v.dec * dt });
+    const k = Math.exp(-dt / 380);
+    v = { ra: v.ra * k, dec: v.dec * k };
+    if (Math.hypot(v.ra, v.dec) * 16 > s.fov / 4000) coast = requestAnimationFrame(glide);
+    else writeHash();
+  };
+  coast = requestAnimationFrame(glide);
+}
 canvas.addEventListener('pointerup', release);
 canvas.addEventListener('pointercancel', release);
 canvas.addEventListener('pointerleave', () => { if (!pointers.size) showRead(null); });
 
-canvas.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  if (!view) return;
-  const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1;
-  zoomAt(Math.exp((e.deltaY * unit) / 500), e.offsetX, e.offsetY);
-}, { passive: false });
-
 canvas.addEventListener('dblclick', (e) => {
-  if (!view) return;
+  if (!view || inMap()) return;
   const at = view.skyAt(e.offsetX, e.offsetY);
-  flyTo({ ra: at.ra, dec: at.dec, fov: view.state.fov / 3 });
+  animate({ ra: at.ra, dec: at.dec, fov: view.state.fov / 3 }, 900, { arc: false });
 });
 
 canvas.addEventListener('keydown', (e) => {
   if (!view) return;
+  if (inMap()) {
+    if (e.key === 'Enter' || e.key === '+' || e.key === '=') dive(view.state, 60);
+    return;
+  }
   const s = view.state;
   const nudge = s.fov / 10;
   const cosd = Math.max(0.1, Math.cos((s.dec * Math.PI) / 180));
@@ -250,23 +423,52 @@ canvas.addEventListener('keydown', (e) => {
   };
   if (!moves[e.key]) return;
   e.preventDefault();
+  if (e.key === '-' && s.fov >= FOV_MAX - 1e-6) {
+    surface();
+    return;
+  }
   view.set(moves[e.key]);
   writeHash();
 });
 
-const zoomCentre = (factor) => zoomAt(factor, canvas.clientWidth / 2, canvas.clientHeight / 2);
-$('zoom-in').addEventListener('click', () => view && zoomCentre(1 / 1.8));
-$('zoom-out').addEventListener('click', () => view && zoomCentre(1.8));
+$('zoom-in').addEventListener('click', () => {
+  if (!view) return;
+  if (inMap()) dive(view.state, 60);
+  else animate({ fov: view.state.fov / 2 }, 450, { arc: false });
+});
+$('zoom-out').addEventListener('click', () => {
+  if (!view || inMap()) return;
+  if (view.state.fov >= FOV_MAX - 1e-6) surface();
+  else animate({ fov: view.state.fov * 2 }, 450, { arc: false });
+});
+
+/* ---- the hint ---------------------------------------------------------- */
+
+function sayHint() {
+  const map = inMap() ? 'Map' : '';
+  $('hint').textContent = t(`allsky.hint${map}${touch ? 'Touch' : ''}`);
+}
+
+function hideHint() {
+  $('hint').dataset.gone = 'true';
+}
 
 /* ---- reading the sky --------------------------------------------------- */
 
 let lastRead = null;
 function showRead(px, py) {
-  if (px !== null) lastRead = [px, py];
+  lastRead = px === null || px === undefined ? null : [px, py];
   if (!view) return;
   const s = view.state;
-  const at = px === null || px === undefined ? { ra: s.ra, dec: s.dec } : view.skyAt(px, py);
-  $('read').textContent = `${formatRA(at.ra)}  ${formatDec(at.dec)}  ·  ${t('allsky.fov')} ${fovText(s.fov)}`;
+  const map = inMap();
+  const at = lastRead ? view.skyAt(px, py) : (map ? null : { ra: s.ra, dec: s.dec });
+  if (!at) {
+    if (map) $('read').textContent = '';
+    return;
+  }
+  const g = galacticOf(at.ra, at.dec);
+  const where = `${formatRA(at.ra)}  ${formatDec(at.dec)}  ·  ${t('allsky.gal', { l: fmt(g.l, 1), b: fmt(g.b, 1) })}`;
+  $('read').textContent = map ? where : `${where}  ·  ${t('allsky.fov')} ${fovText(s.fov)}`;
 }
 
 function fovText(fov) {
@@ -313,7 +515,7 @@ function placeRings() {
 
 /* ---- into the tool ----------------------------------------------------- */
 
-/** The tool's address for a point, in the band now on screen (D2, its home band, for colour). */
+/** The tool's address for a point, in the band on screen (D2, its home band, for colour). */
 function toolUrl({ ra, dec, name = '' }) {
   const band = current === 'colour' ? 'D2' : `D${bandOf(current)}`;
   const url = new URL('./', location.href);
@@ -322,24 +524,50 @@ function toolUrl({ ra, dec, name = '' }) {
 }
 
 $('open').addEventListener('click', () => {
-  const s = view?.state ?? start;
+  if (!view || inMap()) return;
+  const s = view.state;
   location.href = toolUrl({ ra: s.ra, dec: s.dec });
 });
 
 /* ---- after every redraw ------------------------------------------------ */
 
-function afterDraw({ wanted, have, failed }) {
+let wasMap = null;
+function afterDraw({ wanted, have, failed, complete: done }) {
+  complete = done;
   placeRings();
   const s = view.state;
-  $('reticle').dataset.on = String(s.fov <= 20);
+  const map = s.map >= 0.5;
+  $('reticle').dataset.on = String(!map && s.fov <= 20);
+  document.body.dataset.map = String(map);
+  if (map !== wasMap) {
+    wasMap = map;
+    $('whole').setAttribute('aria-pressed', String(map));
+    $('open').disabled = map;
+    sayHint();
+  }
   const status = $('status');
   if (failed) status.textContent = t('allsky.failed', { n: failed });
   else if (have < wanted) status.textContent = t('allsky.loading', { n: have, m: wanted });
   else status.textContent = '';
   status.dataset.bad = String(failed > 0);
   if (lastRead) showRead(...lastRead);
-  else showRead(null);
+  else if (!map) showRead(null);
 }
+
+/* ---- room for the map -------------------------------------------------- */
+
+/** Keep the map's ellipse between the search box and the dock. */
+function fitMap() {
+  if (!view) return;
+  const sky = $('sky').getBoundingClientRect();
+  const top = $('find').getBoundingClientRect().bottom - sky.top + 8;
+  const bottom = sky.bottom - $('dock').getBoundingClientRect().top + 8;
+  view.setInsets({ top, bottom });
+  // The hint stands just above the dock, not over the middle of the sky.
+  $('hint').style.insetBlockEnd = `${bottom + 4}px`;
+}
+new ResizeObserver(fitMap).observe($('dock'));
+window.addEventListener('resize', fitMap);
 
 /* ---- finding a place --------------------------------------------------- */
 
@@ -349,11 +577,14 @@ $('find').addEventListener('submit', async (e) => {
   const text = $('find-input').value.trim();
   const note = $('find-note');
   if (!text || !view) return;
-  const fov = Math.min(view.state.fov, 6);
+  const go = ({ ra, dec }) => {
+    if (inMap()) dive({ ra, dec }, 6);
+    else animate({ ra, dec, fov: Math.min(view.state.fov, 6) }, 1500);
+  };
   const coords = parseCoordinates(text);
   if (coords) {
     note.textContent = '';
-    flyTo({ ra: coords.ra, dec: coords.dec, fov });
+    go(coords);
     return;
   }
   asking?.abort();
@@ -366,7 +597,7 @@ $('find').addEventListener('submit', async (e) => {
       return;
     }
     note.textContent = hit.name;
-    flyTo({ ra: hit.ra, dec: hit.dec, fov });
+    go(hit);
   } catch (err) {
     if (err?.name !== 'AbortError') note.textContent = t('allsky.offline');
   }
@@ -380,6 +611,7 @@ function applyLanguage() {
   $('lang').textContent = getLanguage() === 'ru' ? 'EN' : 'RU';
   $('to-tool').href = `./?lang=${getLanguage()}`;
   nameRings();
+  sayHint();
   showView();
 }
 
@@ -391,13 +623,16 @@ $('lang').addEventListener('click', () => {
 
 /* ---- start ------------------------------------------------------------- */
 
+if (view) {
+  view.set({ ra: start.ra, dec: start.dec, fov: start.map ? FOV_MAX : start.fov, map: start.map });
+  fitMap();
+}
 applyLanguage();
-view?.set(start);
 // The hint says how to hold the sky once; it does not stay in front of it.
-setTimeout(() => { $('hint').dataset.gone = 'true'; }, 8000);
+setTimeout(hideHint, 9000);
 window.addEventListener('hashchange', () => {
   const s = readHash();
-  view?.set(s);
+  view?.set(s.map ? { ...s, fov: FOV_MAX } : s);
   if (s.view !== current) {
     current = s.view;
     showView();
