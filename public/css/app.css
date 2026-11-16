@@ -1364,6 +1364,8 @@ body[data-gate="open"] .shell { visibility: hidden; }
   color: var(--color-ink);
   overflow: hidden;
 }
+/* The GPU-drawn band under the sky's canvas: seen, never touched. */
+.gate__band { pointer-events: none; }
 .gate__sky {
   position: absolute; inset: 0;
   inline-size: 100%; block-size: 100%;

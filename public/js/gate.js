@@ -34,6 +34,8 @@
  * exposure of the motion rather than a blur laid over it.
  */
 
+import { createBandLayer } from './gate-band.js';
+
 const D2R = Math.PI / 180;
 const R2D = 180 / Math.PI;
 
@@ -278,7 +280,10 @@ export class Gate {
    */
   constructor(canvas, { onPick, onName, onSurvey = () => {} }) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d', { alpha: false });
+    // The band on the GPU, under this canvas, where WebGL 2 can be had; then
+    // this canvas is clear between the stars so the band shows through it.
+    this.bandLayer = createBandLayer(canvas);
+    this.ctx = canvas.getContext('2d', { alpha: Boolean(this.bandLayer) });
     this.onPick = onPick;
     this.onName = onName;
     this.onSurvey = onSurvey;
@@ -548,6 +553,7 @@ export class Gate {
     // Kept so the faint field can be sampled from the model already evaluated
     // rather than evaluating it again a million times.
     this.bandPixels = d;
+    this.bandLayer?.setModel(c);
   }
 
   /**
@@ -561,12 +567,18 @@ export class Gate {
       const res = await fetch(url, { cache: 'force-cache', signal: AbortSignal.timeout(30_000) });
       if (!res.ok) return;
       const bitmap = await createImageBitmap(await res.blob());
-      const c = document.createElement('canvas');
-      c.width = bitmap.width;
-      c.height = bitmap.height;
-      const g = c.getContext('2d', { willReadFrequently: true });
-      g.drawImage(bitmap, 0, 0);
-      this.survey = { pixels: g.getImageData(0, 0, c.width, c.height).data, W: c.width, H: c.height };
+      if (this.bandLayer) {
+        // On the GPU the picture is all that is needed; its pixels never come back.
+        this.bandLayer.setSurvey(bitmap);
+        this.survey = { W: bitmap.width, H: bitmap.height };
+      } else {
+        const c = document.createElement('canvas');
+        c.width = bitmap.width;
+        c.height = bitmap.height;
+        const g = c.getContext('2d', { willReadFrequently: true });
+        g.drawImage(bitmap, 0, 0);
+        this.survey = { pixels: g.getImageData(0, 0, c.width, c.height).data, W: c.width, H: c.height };
+      }
       this.surveyAt = performance.now();
       this.onSurvey();
       const step = () => {
@@ -784,13 +796,17 @@ export class Gate {
     this.trailMax = 0.22 * Math.max(width, height);
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = this.paint.well;
-    ctx.fillRect(0, 0, width, height);
-
     // The model, giving way to the survey once it is here.
     const surveyed = this.surveyShare();
-    if (surveyed < 1) this.drawBand(ctx, undefined, 1 - surveyed);
-    if (surveyed > 0) this.drawBand(ctx, this.survey, surveyed);
+    if (this.bandLayer) {
+      ctx.clearRect(0, 0, width, height);
+      this.bandLayer.draw({ basis: this.basis, focal, width, height, well: this.paint.wellRgb, mix: surveyed });
+    } else {
+      ctx.fillStyle = this.paint.well;
+      ctx.fillRect(0, 0, width, height);
+      if (surveyed < 1) this.drawBand(ctx, undefined, 1 - surveyed);
+      if (surveyed > 0) this.drawBand(ctx, this.survey, surveyed);
+    }
     if (!this.stars) return;
 
     // The faint field: the ground the catalogue sits on. It is drawn from the
@@ -1254,6 +1270,13 @@ export class Gate {
       ink: get('--color-ink', '#e9f1f7'),
       body: get('--font-body', 'sans-serif'),
     };
+    // The night as numbers, for the band's shader: whatever colour syntax the
+    // token is written in, a canvas reads it back as RGB.
+    const probe = document.createElement('canvas').getContext('2d');
+    probe.fillStyle = this.paint.well;
+    probe.fillRect(0, 0, 1, 1);
+    const [r, g, b] = probe.getImageData(0, 0, 1, 1).data;
+    this.paint.wellRgb = [r / 255, g / 255, b / 255];
   }
 
   /* ---------------------------------------------------------- pointing */
