@@ -265,15 +265,26 @@ body[data-map="true"] .as-ring__name {
 /* Inside the front page: no bar of its own, a way back to the sky instead. */
 :root[data-embed="1"] body { grid-template-rows: 1fr; }
 :root[data-embed="1"] .bar { display: none; }
-.embed-back {
-  position: absolute; z-index: 5;
-  inset-inline-end: var(--edge); inset-block-start: calc(var(--edge) + 6rem);
+
+
+/* One control for the scale you are at — the sky, the whole sky in
+   SPHEREx, space — the same in each, on the sky itself. */
+.scale {
+  position: absolute; z-index: 6;
+  inset-inline: 0; margin-inline: auto; inline-size: fit-content;
+  inset-block-start: calc(var(--edge, 1rem) + 3.5rem);
+  display: flex; gap: var(--space-3xs); padding: var(--space-3xs);
+  border-radius: var(--radius-round);
+  background: var(--gate-veil-deep);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.scale__key {
   min-block-size: var(--hit); padding-inline: var(--space-md);
   border: 0; border-radius: var(--radius-round); cursor: pointer;
-  color: var(--color-ink); background: var(--gate-veil-deep);
-  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-  font: inherit; font-size: var(--text-sm); font-weight: 600;
-  transition: background-color var(--dur-micro) var(--ease-out);
+  color: var(--color-muted); background: transparent;
+  font: inherit; font-size: var(--text-sm); font-weight: 600; white-space: nowrap;
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-micro) var(--ease-out);
 }
-.embed-back:hover { background: var(--color-paper-3); }
-:root:not([data-embed="1"]) .embed-back { display: none; }
+.scale__key:hover { color: var(--color-ink); background: var(--color-paper-3); }
+.scale__key[aria-pressed="true"] { color: var(--color-accent-ink); background: var(--color-accent); cursor: default; }
+@media (max-width: 640px) { .scale__key { padding-inline: var(--space-sm); font-size: var(--text-xs); } }

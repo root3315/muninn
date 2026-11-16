@@ -1922,3 +1922,25 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .world[hidden] { display: none; }
 .world--on { opacity: 1; }
 .world__frame { inline-size: 100%; block-size: 100%; border: 0; display: block; }
+
+/* One control for the scale you are at — the sky, the whole sky in
+   SPHEREx, space — the same in each, on the sky itself. */
+.scale {
+  position: absolute; z-index: 6;
+  inset-inline: 0; margin-inline: auto; inline-size: fit-content;
+  inset-block-start: calc(var(--gate-bar, 3.5rem) + 0.75rem);
+  display: flex; gap: var(--space-3xs); padding: var(--space-3xs);
+  border-radius: var(--radius-round);
+  background: var(--gate-veil-deep);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.scale__key {
+  min-block-size: var(--hit); padding-inline: var(--space-md);
+  border: 0; border-radius: var(--radius-round); cursor: pointer;
+  color: var(--color-muted); background: transparent;
+  font: inherit; font-size: var(--text-sm); font-weight: 600; white-space: nowrap;
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-micro) var(--ease-out);
+}
+.scale__key:hover { color: var(--color-ink); background: var(--color-paper-3); }
+.scale__key[aria-pressed="true"] { color: var(--color-accent-ink); background: var(--color-accent); cursor: default; }
+@media (max-width: 640px) { .scale__key { padding-inline: var(--space-sm); font-size: var(--text-xs); } }

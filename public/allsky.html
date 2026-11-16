@@ -46,7 +46,11 @@
 </header>
 
 <main class="as-sky" id="sky">
-  <button type="button" class="embed-back" id="embed-back" data-i18n="world.back"></button>
+  <nav class="scale" id="scale" data-i18n-label="scale.label">
+    <button type="button" class="scale__key" data-scale="sky" data-i18n="scale.sky"></button>
+    <button type="button" class="scale__key" data-scale="allsky" data-i18n="scale.allsky"></button>
+    <button type="button" class="scale__key" data-scale="fly" data-i18n="scale.fly"></button>
+  </nav>
   <canvas class="as-sky__canvas" id="canvas" tabindex="0" role="img" data-i18n-label="allsky.canvas"></canvas>
   <!-- The ready fields, as rings on the sky; placed by allsky.js on every redraw. -->
   <div class="as-sky__rings" id="rings"></div>

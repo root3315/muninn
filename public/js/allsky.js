@@ -14,7 +14,7 @@
 import { setLanguage, getLanguage, t, applyTranslations, fmt } from './i18n.js';
 import { parseCoordinates, resolveSesame, formatRA, formatDec } from './catalog.js';
 import { encodeHash } from './hash.js';
-import { openInTool, close as closeEmbed } from './embed.js';
+import { openInTool, wireScale } from './embed.js';
 import { createSkyView, FOV_MIN, FOV_MAX } from './allsky/view.js';
 import { galacticOf } from './allsky/maps.js';
 import {
@@ -579,4 +579,4 @@ window.addEventListener('hashchange', () => {
   }
 });
 
-$('embed-back').addEventListener('click', closeEmbed);
+wireScale('allsky');

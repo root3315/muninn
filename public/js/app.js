@@ -13,7 +13,7 @@
  * the mission was built around is something you should be able to see.
  */
 
-import { openWorld } from './world.js';
+import { openWorld, wireScale } from './world.js';
 import { t, tIn, setLanguage, getLanguage, applyTranslations, fmt, fmtDate, fmtDay, fmtTime } from './i18n.js';
 import { skySigma, stackDepth, shortfall, limitAB, PLANET_NINE_V } from './depth.js';
 import { scoreSectors, standouts, SECTOR_COUNT } from './sectors.js';
@@ -4774,12 +4774,7 @@ function showSkyCredit() {
 const gateLook = () => ({ ra: gate?.cam?.ra ?? 266, dec: gate?.cam?.dec ?? -12, fov: gate?.cam?.fov ?? 78 });
 
 // The whole sky and the flight open over this page, not as pages of their own.
-document.addEventListener('click', (e) => {
-  const a = e.target.closest?.('a[href="allsky.html"], a[href="fly.html"]');
-  if (!a || e.ctrlKey || e.metaKey || e.shiftKey) return;
-  e.preventDefault();
-  openWorld(a.getAttribute('href') === 'fly.html' ? 'fly' : 'allsky', gateLook(), getLanguage());
-});
+wireScale({ look: gateLook, lang: getLanguage });
 
 async function buildGate() {
   gate = new Gate($('gate-sky'), {

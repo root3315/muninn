@@ -24,6 +24,23 @@ export function close() {
   parent.postMessage({ type: 'muninn:close' }, location.origin);
 }
 
+/** Another scale of the front page: 'sky', 'allsky' or 'fly'. */
+export function goTo(scale) {
+  parent.postMessage({ type: 'muninn:scale', scale }, location.origin);
+}
+
+/** Wire the scale keys of a page shown at `here`. */
+export function wireScale(here) {
+  for (const key of document.querySelectorAll('.scale__key')) {
+    key.setAttribute('aria-pressed', String(key.dataset.scale === here));
+    key.addEventListener('click', () => {
+      if (key.dataset.scale === here) return;
+      if (embedded) goTo(key.dataset.scale);
+      else location.href = key.dataset.scale === 'sky' ? './' : `${key.dataset.scale === 'fly' ? 'fly' : 'allsky'}.html`;
+    });
+  }
+}
+
 if (embedded) {
   document.documentElement.dataset.embed = '1';
   // Links into the tool become messages to the page this sits in.

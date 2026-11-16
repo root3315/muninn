@@ -13,7 +13,7 @@
 import { setLanguage, getLanguage, t, applyTranslations, fmt } from './i18n.js';
 import { starColour, direction } from './gate.js';
 import { encodeHash } from './hash.js';
-import { close as closeEmbed } from './embed.js';
+import { wireScale } from './embed.js';
 import { radecOf } from './allsky/healpix.js';
 import { createSpace, screenOf } from './fly/space.js';
 import { temperatureOf, luminosityOf, radiusOf, vMinusW2, R_SUN_PC, T_SUN } from './fly/stars.js';
@@ -766,4 +766,4 @@ if (!space) {
   requestAnimationFrame(frame);
 }
 
-$('embed-back').addEventListener('click', closeEmbed);
+wireScale('fly');
