@@ -54,6 +54,9 @@ export function moonGeocentric(date) {
   return [au * Math.cos(lat) * Math.cos(lon), au * Math.cos(lat) * Math.sin(lon), au * Math.sin(lat)];
 }
 
+/** The Moon's mass over the Earth's (IAU 2015): the barycentre lies 1/82.3 of the way to the Moon. */
+const MOON_EARTH_MASS = 0.0123000371;
+
 /**
  * Every body for a date: { key, en, ru, pos (pc, ICRS), radius (R☉), absMag
  * (the magnitude that gives its typical brightness at its typical distance),
@@ -61,12 +64,18 @@ export function moonGeocentric(date) {
  */
 export function solarSystem(date = new Date()) {
   const T = (julian(date) - 2451545.0) / 36525;
-  const earth = heliocentric('earth', T);
+  // JPL's "earth" row is the Earth–Moon barycentre: the Earth is 4,670 km
+  // from it, on the side away from the Moon, and the Moon the rest of the way.
+  const bary = heliocentric('earth', T);
+  const g = moonGeocentric(date);
+  const k = MOON_EARTH_MASS / (1 + MOON_EARTH_MASS);
+  const earth = [bary[0] - g[0] * k, bary[1] - g[1] * k, bary[2] - g[2] * k];
   return BODIES.map((b) => {
     let au;
     if (b.key === 'moon') {
-      const g = moonGeocentric(date);
       au = [earth[0] + g[0], earth[1] + g[1], earth[2] + g[2]];
+    } else if (b.key === 'earth') {
+      au = earth;
     } else {
       au = heliocentric(b.key, T);
     }
@@ -79,3 +88,44 @@ export function solarSystem(date = new Date()) {
     };
   });
 }
+
+/** Orbital periods, years (sidereal): for tracing each orbit once. */
+const PERIOD_YEARS = { mercury: 0.2408, venus: 0.6152, earth: 1.0000, mars: 1.8808, jupiter: 11.862, saturn: 29.457, uranus: 84.011, neptune: 164.79 };
+
+/**
+ * Each planet's orbit as points, parsecs from the Sun on ICRS axes, traced
+ * through one period from the same elements that place the planet; and the
+ * Moon's round the Earth, through one sidereal month, relative to the Earth.
+ */
+export function orbits(date = new Date(), steps = 180) {
+  const T0 = (julian(date) - 2451545.0) / 36525;
+  const out = {};
+  for (const [key, years] of Object.entries(PERIOD_YEARS)) {
+    const pts = [];
+    for (let k = 0; k <= steps; k++) {
+      const T = T0 + (years / 100) * (k / steps);
+      pts.push(toEquatorial(heliocentric(key, T)).map((c) => c * AU_PC));
+    }
+    out[key] = pts;
+  }
+  const moon = [];
+  for (let k = 0; k <= steps; k++) {
+    const d = new Date(date.getTime() + (27.3217 * 86400000 * k) / steps);
+    moon.push(toEquatorial(moonGeocentric(d)).map((c) => c * AU_PC));
+  }
+  out.moon = moon;
+  return out;
+}
+
+/** What is known of each planet, for its card and the Sun's: a (AU), year (days), moons known (IAU/JPL, 2025). */
+export const FACTS = {
+  mercury: { a: 0.387, year: 87.97, day: 58.65, moons: 0, g: 3.7, t: '−173…427 °C' },
+  venus: { a: 0.723, year: 224.70, day: -243.02, moons: 0, g: 8.87, t: '464 °C' },
+  earth: { a: 1.000, year: 365.26, day: 0.9973, moons: 1, g: 9.81, t: '−89…57 °C' },
+  moon: { a: 0.00257, year: 27.32, day: 27.32, moons: 0, g: 1.62, t: '−173…127 °C' },
+  mars: { a: 1.524, year: 686.98, day: 1.026, moons: 2, g: 3.71, t: '−140…20 °C' },
+  jupiter: { a: 5.203, year: 4332.6, day: 0.4135, moons: 97, g: 24.79, t: '−145 °C' },
+  saturn: { a: 9.537, year: 10759, day: 0.444, moons: 274, g: 10.44, t: '−178 °C' },
+  uranus: { a: 19.19, year: 30687, day: -0.718, moons: 28, g: 8.87, t: '−224 °C' },
+  neptune: { a: 30.07, year: 60190, day: 0.671, moons: 16, g: 11.15, t: '−214 °C' },
+};

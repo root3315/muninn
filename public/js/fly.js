@@ -18,7 +18,7 @@ import { systemUrl } from './exovision.js';
 import { radecOf } from './allsky/healpix.js';
 import { createSpace, screenOf } from './fly/space.js';
 import { temperatureOf, luminosityOf, radiusOf, vMinusW2, R_SUN_PC, T_SUN } from './fly/stars.js';
-import { solarSystem, AU_PC } from './fly/solar.js';
+import { solarSystem, orbits as solarOrbits, FACTS, AU_PC } from './fly/solar.js';
 import { shells, planetNineShortfall, WISE0855_AB, WISE0855_PC, D6_ONE_VISIT_AB, PLANET_NINE_V, PLANET_NINE_AU, PLANET_NINE_MAX_BETA } from './fly/reach.js';
 
 const $ = (id) => document.getElementById(id);
@@ -26,7 +26,9 @@ const LY_PER_PC = 3.26156;
 const AU_PER_PC = 206264.806;
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 /** The field of view, vertical, degrees: the front page's opening width. */
-const FOV = 70;
+/** The field of view, vertical, degrees: the wheel narrows and widens it. */
+let FOV = 70;
+const FOV_RANGE = [4, 100];
 /** Speed bounds, parsecs a second: from a few AU a second to a kiloparsec in ten seconds. */
 const SPEED_MIN = 0.00005;
 const SPEED_MAX = 100;
@@ -615,6 +617,8 @@ function frame(now) {
   placeLabels();
   placeExoLabels();
   placeSystemLabels();
+  drawScale(near);
+  drawSolarOrbits();
   placeMarks();
   readout();
   requestAnimationFrame(frame);
@@ -683,13 +687,29 @@ function openCard(entry) {
     rows.push([t('fly.cardP9Bright'), t('fly.p9Bright', { lo: fmt(PLANET_NINE_V.bright, 1), hi: fmt(PLANET_NINE_V.faint, 1) })]);
     rows.push([t('fly.cardP9Gap'), t('fly.p9Gap', { x: fmt(planetNineShortfall(17.6), 0) })]);
   } else if (s.planet) {
+    rows.push([t('fly.cardHeld'), t(s.key === 'moon' ? 'fly.heldEarth' : 'fly.heldSun')]);
     rows.push([t('fly.cardRadius'), t('fly.planetRadius', { km: fmt(s.km, 0), e: sig(s.km / 6371.0) })]);
+    const f = FACTS[s.key];
+    if (f) {
+      rows.push([t('exo.periodH'), t('exo.periodLong', { p: fmt(f.year, f.year < 1000 ? 2 : 0) })]);
+      rows.push([t('fly.cardDay'), t(f.day < 0 ? 'fly.dayRetro' : 'fly.dayLen', { d: fmt(Math.abs(f.day), Math.abs(f.day) < 2 ? 3 : 1) })]);
+      rows.push([t('fly.cardGravity'), t('fly.gravity', { g: fmt(f.g, 2) })]);
+      rows.push([t('fly.cardSurfaceT'), f.t]);
+      if (s.key !== 'moon') rows.push([t('fly.cardMoons'), String(f.moons)]);
+    }
     rows.push([t('fly.cardSunAU'), t('fly.au', { n: fmt(fromSun / AU_PC, 2) })]);
   } else if (i >= 0) {
     const m = stars.mag[i];
     const bv = stars.bv[i];
     rows.push([t('fly.cardTemp'), t('fly.kelvin', { n: fmt(Math.round(temperatureOf(bv) / 10) * 10, 0) })]);
     rows.push([t('fly.cardRadius'), t(stars.measured[i] ? 'fly.radiusMeasured' : 'fly.radiusEstimated', { n: sig(stars.rad[i]) })]);
+    // In the Sun's place: how far out its surface would reach.
+    const reachAU = stars.rad[i] * R_SUN_PC / AU;
+    if (i !== sunIndex && reachAU > 0.3) {
+      const past = [['fly.pastMercury', 0.387], ['fly.pastVenus', 0.723], ['fly.pastEarth', 1], ['fly.pastMars', 1.524], ['fly.pastJupiter', 5.203], ['fly.pastSaturn', 9.537]]
+        .filter(([, au]) => reachAU > au).pop();
+      rows.push([t('fly.cardInPlace'), past ? t(past[0], { au: fmt(reachAU, 2) }) : t('fly.inPlaceShort', { au: fmt(reachAU, 2) })]);
+    }
     // With a measured radius, the luminosity follows from it and the
     // temperature; the magnitude's bolometric correction is weakest for the
     // coolest stars, which are the largest.
@@ -721,6 +741,10 @@ function openCard(entry) {
   // A star with planets is shown as the system it is.
   if (host && !entry.starOnly) {
     openSystemCard(host);
+    return;
+  }
+  if (i === sunIndex && !entry.starOnly) {
+    openSolarCard();
     return;
   }
   const ev = $('card-exo');
@@ -786,9 +810,10 @@ canvas.addEventListener('pointerup', (e) => {
 });
 canvas.addEventListener('pointercancel', (e) => pointers.delete(e.pointerId));
 
+// The wheel zooms, as everywhere on the site; speed is − and +, or Shift.
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
-  setFactor(factor * Math.exp(-e.deltaY / 500));
+  FOV = Math.max(FOV_RANGE[0], Math.min(FOV_RANGE[1], FOV * Math.exp(e.deltaY / 600)));
 }, { passive: false });
 
 /** Parsecs a second, now. */
@@ -808,12 +833,16 @@ addEventListener('keydown', (e) => {
   if (e.target.closest?.('input')) return;
   if (e.code === 'Escape') closeCard();
   keys.add(e.code);
+  if (heldFromSky === e.code) heldFromSky = null;
   if (e.code === 'Equal' || e.code === 'NumpadAdd') setFactor(factor * 2);
   if (e.code === 'Minus' || e.code === 'NumpadSubtract') setFactor(factor / 2);
   if (e.code.startsWith('Arrow')) e.preventDefault();
   if (['KeyW', 'KeyS', 'KeyA', 'KeyD'].includes(e.code) || e.code.startsWith('Arrow')) autopilot = null;
 });
-addEventListener('keyup', (e) => keys.delete(e.code));
+addEventListener('keyup', (e) => {
+  keys.delete(e.code);
+  if (heldFromSky === e.code) heldFromSky = null;
+});
 addEventListener('blur', () => keys.clear());
 
 for (const [id, k] of [['go-forward', 'forward'], ['go-back', 'back']]) {
@@ -961,12 +990,27 @@ $('ir').addEventListener('click', () => {
 });
 
 // Inside the front page: out from the Earth, facing where its sky faced.
+/** A key pressed on the front page's sky, held into the flight. */
+let heldFromSky = null;
+addEventListener('message', (e) => {
+  if (e.origin !== location.origin || e.data?.type !== 'muninn:keyup') return;
+  keys.delete(e.data.key);
+  if (heldFromSky === e.data.key) heldFromSky = null;
+});
+
 /** A direction asked for before the stars had loaded: applied once they have. */
 let pendingLook = null;
 addEventListener('message', (e) => {
   if (e.origin !== location.origin || e.data?.type !== 'muninn:look') return;
-  const { ra, dec } = e.data;
+  const { ra, dec, key } = e.data;
   if (![ra, dec].every(Number.isFinite)) return;
+  // A key pressed on the sky goes on flying here until it is let go: here,
+  // or on the page around, which says so; and if neither is heard, a moment.
+  if (key) {
+    keys.add(key);
+    heldFromSky = key;
+    setTimeout(() => { if (heldFromSky === key) { keys.delete(key); heldFromSky = null; } }, 1500);
+  }
   if (!stars) {
     pendingLook = { ra, dec };
     return;
@@ -989,7 +1033,7 @@ function lookFromEarth(ra, dec) {
     // Leaving the Earth's sky: the camera backs away along the way it was
     // looking and turns round, so the Earth it left comes into view, with the
     // Moon if it is near that side, and the flight starts from there.
-    if (!reduceMotion) pullOut = { earth: earth.index, r, F0: cam.F, t0: performance.now(), ms: 3200 };
+    if (!reduceMotion && !keys.size) pullOut = { earth: earth.index, r, F0: cam.F, t0: performance.now(), ms: 3200 };
   }
   factor = 0.5;
 }
@@ -1024,6 +1068,138 @@ function landOnEarth() {
   goTo('sky', { ra, dec });
 }
 
+/* ---- the Sun's own system ----------------------------------------------- */
+
+let solarPaths = null;
+let solarPathsAt = 0;
+
+/** The planets' orbits within a few hundred AU of the Sun, the Moon's near the Earth: relative to the eye. */
+function drawSolarOrbits() {
+  const fromSun = len(cam.eye);
+  if (fromSun > 400 * AU) {
+    space.setLiveLines(null, null, 'solar');
+    space.setLiveLines(null, null, 'moon');
+    return;
+  }
+  // The orbits barely change in an hour: traced again then.
+  if (!solarPaths || performance.now() - solarPathsAt > 3600000) {
+    solarPaths = solarOrbits();
+    solarPathsAt = performance.now();
+  }
+  const segs = [];
+  for (const [key, pts] of Object.entries(solarPaths)) {
+    if (key === 'moon') continue;
+    for (let k = 0; k + 1 < pts.length; k++) segs.push(...sub(pts[k], cam.eye), ...sub(pts[k + 1], cam.eye));
+  }
+  space.setLiveLines(new Float32Array(segs), [0.75, 0.82, 1, 0.28], 'solar');
+  const earth = named.find((x) => x.key === 'earth');
+  const earthPos = earth ? posOf(earth.index) : null;
+  if (earthPos && len(sub(cam.eye, earthPos)) < 0.05 * AU) {
+    const m = [];
+    const pts = solarPaths.moon;
+    for (let k = 0; k + 1 < pts.length; k++) m.push(...sub(add(earthPos, pts[k]), cam.eye), ...sub(add(earthPos, pts[k + 1]), cam.eye));
+    space.setLiveLines(new Float32Array(m), [0.75, 0.82, 1, 0.35], 'moon');
+  } else {
+    space.setLiveLines(null, null, 'moon');
+  }
+}
+
+/** The Sun's card as a system: its planets from above, and a way to each. */
+function openSolarCard() {
+  const planets = ['mercury', 'venus', 'earth', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune'].map((key) => {
+    const s = named.find((x) => x.key === key);
+    const p = posOf(s.index);
+    // The angle in the drawing: the planet's place on its orbit now, seen from the ecliptic's north.
+    const ecl = [p[0], p[1] * Math.cos(23.4393 * Math.PI / 180) + p[2] * Math.sin(23.4393 * Math.PI / 180)];
+    return { s, f: FACTS[key], angle: Math.atan2(ecl[1], ecl[0]) };
+  });
+  const sys = {
+    host: nameOf(named.find((x) => x.key === 'sun')), starR: 1, teff: 5772,
+    planets: planets.map(({ s, f, angle }) => ({ name: nameOf(s), a: f.a, r: s.km / 6371, angle })),
+  };
+  closeCard();
+  $('card-title').textContent = sys.host;
+  $('card-note').textContent = t('fly.solarNote');
+  const rows = [
+    [t('fly.cardTemp'), t('fly.kelvin', { n: fmt(5772, 0) })],
+    [t('fly.cardRadius'), t('fly.radiusMeasured', { n: '1,00' })],
+  ];
+  const planetRow = ({ s, f }) => {
+    const text = t('fly.planetLine', { a: fmt(f.a, f.a < 1 ? 3 : 2), y: fmt(f.year, f.year < 1000 ? 1 : 0), m: f.moons });
+    const row = cardRow(nameOf(s), text);
+    const go = document.createElement('button');
+    go.type = 'button';
+    go.className = 'fly-planet-go';
+    go.textContent = t('exo.goPlanet');
+    go.addEventListener('click', () => { flyTo(s); openCardLater(s); });
+    row.querySelector('dt').append(' ', go);
+    return row;
+  };
+  $('card-rows').replaceChildren(systemDiagram(sys), ...rows.map(([k, v]) => cardRow(k, v)), ...planets.map(planetRow));
+  $('card-frames').hidden = true;
+  $('card-exo').hidden = true;
+  card = { s: { key: 'sun', index: sunIndex } };
+  $('card').hidden = false;
+}
+
+/* ---- the Sun's planets for scale ---------------------------------------- */
+
+/*
+ * A star seen close is a sphere filling the view, and one sphere looks much
+ * like another: Betelgeuse from ten AU and the Sun from a thousandth of that
+ * fill the screen alike. Round a star seen large, the orbits of the Earth and
+ * of Jupiter are drawn as if the Sun's planets went round it, in the plane
+ * facing the camera: inside Betelgeuse, the Earth's orbit is lost in the star.
+ */
+const SCALE_ORBITS = [[1, 'fly.orbitEarth'], [5.203, 'fly.orbitJupiter'], [30.07, 'fly.orbitNeptune']];
+
+function drawScale(nears) {
+  const box = $('scale-labels');
+  const star = (nears ?? []).find((n) => !n.lit && n.index >= 0);
+  const d = star ? len(sub(star.pos, cam.eye)) : Infinity;
+  // Only for a star filling a good part of the view, and an orbit that would show.
+  const discFrac = star ? (star.rpc / d) / Math.tan((FOV * Math.PI) / 360) : 0;
+  if (!star || discFrac < 0.08) {
+    space.setLiveLines(null, null, 'scale');
+    if (box.childElementCount) box.replaceChildren();
+    return;
+  }
+  const toCam = norm(sub(cam.eye, star.pos));
+  let a = cross(toCam, cam.U);
+  if (len(a) < 1e-6) a = cross(toCam, [1, 0, 0]);
+  a = norm(a);
+  const bvec = norm(cross(toCam, a));
+  const segs = [];
+  const marks = [];
+  for (const [au, key] of SCALE_ORBITS) {
+    const r = au * AU;
+    // An orbit far wider than the view, or far smaller than the star, says nothing.
+    if (r / d > 3 || r < star.rpc * 0.05) continue;
+    for (let k = 0; k < 128; k++) {
+      const a0 = (k / 128) * 2 * Math.PI;
+      const a1 = ((k + 1) / 128) * 2 * Math.PI;
+      segs.push(...sub(add(add(star.pos, a, r * Math.cos(a0)), bvec, r * Math.sin(a0)), cam.eye));
+      segs.push(...sub(add(add(star.pos, a, r * Math.cos(a1)), bvec, r * Math.sin(a1)), cam.eye));
+    }
+    marks.push({ pos: add(star.pos, bvec, r * 0.96), text: t(key), inside: r < star.rpc });
+  }
+  space.setLiveLines(segs.length ? new Float32Array(segs) : null, [0.75, 0.85, 1, 0.55], 'scale');
+  while (box.childElementCount < marks.length) {
+    const el = document.createElement('span');
+    el.className = 'fly-mark fly-mark--scale';
+    box.append(el);
+  }
+  const b = basis();
+  [...box.children].forEach((el, k) => {
+    const m = marks[k];
+    const at = m ? screenOf(m.pos, b, proj) : null;
+    el.hidden = !at;
+    if (!at) return;
+    el.textContent = m.inside ? t('fly.orbitInside', { orbit: m.text }) : m.text;
+    el.style.transform = `translate(${at.x.toFixed(1)}px, ${at.y.toFixed(1)}px)`;
+  });
+}
+
 /* ---- other stars' planets --------------------------------------------- */
 
 /*
@@ -1050,6 +1226,12 @@ async function loadSystems() {
     for (const sys of exo) {
       sys.index = matchHost(sys);
       sys.center = sys.index >= 0 ? posOf(sys.index) : sys.pos;
+      // The archive's radius is measured (or modelled from a spectrum); the
+      // catalogue star's was estimated from its colour: the archive's is used.
+      if (sys.index >= 0 && sys.starR > 0 && !stars.measured[sys.index]) {
+        stars.rad[sys.index] = sys.starR;
+        stars.measured[sys.index] = 1;
+      }
     }
     buildExoLabels();
   } catch { /* the flight goes on without them */ }
@@ -1302,9 +1484,10 @@ function systemDiagram(sys) {
     if (!(pl.a > 0)) continue;
     const r = pl.a * scale;
     svg.append(el('circle', { r, class: 'fly-system__orbit' }));
-    if (pl.tc && pl.p > 0) {
-      // At transit the planet is between its star and the Sun: the bottom of the drawing.
-      const ang = 2 * Math.PI * ((((jd - pl.tc) / pl.p) % 1 + 1) % 1);
+    if ((pl.tc && pl.p > 0) || pl.angle != null) {
+      // At transit the planet is between its star and the Sun: the bottom of
+      // the drawing. The Sun's planets come with their own angle.
+      const ang = pl.angle != null ? Math.PI / 2 - pl.angle : 2 * Math.PI * ((((jd - pl.tc) / pl.p) % 1 + 1) % 1);
       const x = r * Math.sin(ang);
       const y = r * Math.cos(ang);
       const dot = el('circle', { cx: x.toFixed(2), cy: y.toFixed(2), r: Math.max(2, Math.min(6, Math.sqrt(pl.r || 1) * 1.5)), class: 'fly-system__planet' });

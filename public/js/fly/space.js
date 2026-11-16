@@ -289,9 +289,8 @@ export function createSpace(canvas, { stars, sky }) {
   const lineProg = compile(gl, LINE3_VS, LINE3_FS, ['aPos']);
   /** Line groups uploaded once: { vao, count, ink, show }. */
   let lineGroups = [];
-  let live = null;
-  let liveVao = null;
-  let liveBuf = null;
+  const live = {};
+  const liveBufs = {};
   const skyProg = compile(gl, SKY_VS, SKY_FS);
   const nearProg = compile(gl, SKY_VS, NEAR_FS);
   const maxPoint = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1];
@@ -348,21 +347,25 @@ export function createSpace(canvas, { stars, sky }) {
       gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
       gl.bufferSubData(gl.ARRAY_BUFFER, first * 12, xyz);
     },
-    /** Lines that change: one group, replaced whenever it is given; null for none. */
-    setLiveLines(data, ink) {
-      if (!data || !data.length) { live = null; return; }
-      if (!liveVao) {
-        liveVao = gl.createVertexArray();
-        gl.bindVertexArray(liveVao);
-        liveBuf = gl.createBuffer();
-        gl.bindBuffer(gl.ARRAY_BUFFER, liveBuf);
+    /**
+     * Lines that change, relative to the eye: named groups, each replaced
+     * whenever it is given; null data for none.
+     */
+    setLiveLines(data, ink, name = 'system') {
+      if (!data || !data.length) { delete live[name]; return; }
+      if (!liveBufs[name]) {
+        const vao = gl.createVertexArray();
+        gl.bindVertexArray(vao);
+        const buf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
         gl.enableVertexAttribArray(0);
         gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
         gl.bindVertexArray(null);
+        liveBufs[name] = { vao, buf };
       }
-      gl.bindBuffer(gl.ARRAY_BUFFER, liveBuf);
+      gl.bindBuffer(gl.ARRAY_BUFFER, liveBufs[name].buf);
       gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
-      live = { vao: liveVao, count: data.length / 3, ink, key: 'live' };
+      live[name] = { vao: liveBufs[name].vao, count: data.length / 3, ink, live: true };
     },
     /** Lines to draw every frame: [{ data: Float32Array of segment ends, ink: [r, g, b, a], key }]. */
     setLines(groups) {
@@ -429,7 +432,7 @@ export function createSpace(canvas, { stars, sky }) {
         : [0, 0, 0, 0]);
       gl.bindVertexArray(vao);
       gl.drawArrays(gl.POINTS, 0, count);
-      if (lineGroups.length) {
+      if (lineGroups.length || Object.keys(live).length) {
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
         gl.useProgram(lineProg.program);
         gl.uniform3fv(lineProg.u.Eye, eye);
@@ -437,12 +440,12 @@ export function createSpace(canvas, { stars, sky }) {
         gl.uniform3fv(lineProg.u.U, U);
         gl.uniform3fv(lineProg.u.F, F);
         gl.uniform2fv(lineProg.u.Focal, focal);
-        for (const g of [...lineGroups, ...(live ? [live] : [])]) {
-          if (g !== live && !show(g.key)) continue;
+        for (const g of [...lineGroups, ...Object.values(live)]) {
+          if (!g.live && !show(g.key)) continue;
           // The changing lines come relative to the eye already, worked out in
           // double precision: a system's orbits are hundred-millionths of a
           // parsec across, finer than single precision holds at its distance.
-          gl.uniform3fv(lineProg.u.Eye, g === live ? [0, 0, 0] : eye);
+          gl.uniform3fv(lineProg.u.Eye, g.live ? [0, 0, 0] : eye);
           gl.uniform4fv(lineProg.u.Ink, g.ink);
           gl.bindVertexArray(g.vao);
           gl.drawArrays(gl.LINES, 0, g.count);
