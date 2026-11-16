@@ -664,6 +664,19 @@ body { font-size: var(--text-base); line-height: 1.5; }
   margin: var(--poster-m);
   margin-block-end: calc(var(--poster-m) + env(safe-area-inset-bottom, 0px));
 }
+/* On a wide screen the way in stands on the same frosted ground as the
+   whole-sky page's dock: the sky shows through it, blurred, and the words
+   keep their contrast wherever the Milky Way is behind them. */
+@media not ((max-width: 48rem) and (min-height: 30.0625rem)) {
+  .gate__poster {
+    /* Wider by its padding, so the chips keep the rows they had. */
+    inline-size: min(37rem, calc(100% - 2 * var(--poster-m)));
+    padding: var(--space-md) var(--space-lg) var(--space-lg);
+    border-radius: var(--radius-lg);
+    background: var(--gate-veil-deep);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  }
+}
 .gate__word {
   font-family: var(--font-display); font-weight: 500;
   font-size: var(--text-word); line-height: 1; letter-spacing: -0.02em;
