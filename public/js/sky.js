@@ -29,6 +29,7 @@ import { coadd } from './stack.js';
 import { epochOfMjd, propagate, markRadius, ARTEFACT_TESTS } from './overlay.js';
 import { QUALITY } from './stamp.js';
 import { sharpness, sharpVerdict } from './sharpness.js';
+import { fitMotion } from './motion-vector.js';
 
 const RAMP_TOKENS = { deep: '--cmap-deep', ice: '--cmap-ice', infrared: '--cmap-infrared' };
 
@@ -146,7 +147,7 @@ export class SkyView {
     this.mode = 'blink';
     this.wipe = 0.5;
     this.render = { stretch: 'asinh', clip: 99.5, palette: 'deep', shared: false };
-    this.overlays = { grid: true, compass: true, catalog: true, skybot: true, marks: true, sectors: false, gaia: false, wise: false };
+    this.overlays = { grid: true, compass: true, catalog: true, skybot: true, marks: true, sectors: false, gaia: false, wise: false, motion: true };
     /* Other missions' catalogues for this field, by survey: { rows, limit }. */
     this.surveys = {};
     /* How many of each landed on the plate in the last frame drawn. */
@@ -174,6 +175,7 @@ export class SkyView {
     this.labels = {
       rate: (r) => `${r.toFixed(r < 10 ? 1 : 0)}″/h`,
       saturated: (name, n) => `${name ? `${name}: ` : ''}saturated — pixels masked by the pipeline (${n} px)`,
+      motion: (factor) => (factor > 1 ? `1 year of motion ×${factor}` : '1 year of motion'),
     };
     /* The catalogue's stars bright enough to saturate (brightstars.js), set by the page. */
     this.brightStars = [];
@@ -636,6 +638,7 @@ export class SkyView {
       // The field's own target and the user's crosses first: the names drawn
       // after them step around them ("(8270) 37″/h" sat on "Atala").
       if (this.overlays.marks && this.target) this.drawTarget(ctx);
+      if (this.overlays.motion && this.target) this.drawMotion(ctx);
       if (this.overlays.marks) this.reserveMarks();
       // SkyBoT's rings are positions at one exposure's moment; on a season's
       // sum they would pin a body to a place it held for one of the visits.
@@ -1085,6 +1088,82 @@ export class SkyView {
         { x: x - r - 6, y, align: 'right' },
       ], this.colors.ink);
     }
+    ctx.restore();
+  }
+
+  /**
+   * The target's catalogued proper motion, magnified (motion-vector.js): a
+   * dashed line from where it was at the first visit to where a year would
+   * take it, times a round factor the label states, with a tick at each
+   * visit's date and the one on screen ringed. Dashed and in the accent, so
+   * it is never read as a star or a measurement.
+   */
+  drawMotion(ctx) {
+    const { scale, offX, offY, gw, gh } = this.view;
+    const want = Math.min(gw * scale, gh * scale) * 0.22;
+    const mv = fitMotion(this.target, this.visits.map((v) => v.frame.mjd), (ra, dec) => this.grid.worldToIndex(ra, dec), scale, want);
+    if (!mv) return;
+    const [ax, ay] = this.toCanvas(mv.anchor[0], mv.anchor[1]);
+    const [hx, hy] = this.toCanvas(mv.head[0], mv.head[1]);
+    const len = Math.hypot(hx - ax, hy - ay);
+    if (len < 4) return;
+    const ux = (hx - ax) / len;
+    const uy = (hy - ay) / len;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(offX, offY, gw * scale, gh * scale);
+    ctx.clip();
+    ctx.strokeStyle = this.colors.accent;
+    ctx.fillStyle = this.colors.accent;
+    ctx.lineWidth = 1.6;
+    ctx.globalAlpha = 0.95;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(ax, ay);
+    ctx.lineTo(hx - ux * 7, hy - uy * 7);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // The head: a filled wedge, so the direction reads at a glance.
+    ctx.beginPath();
+    ctx.moveTo(hx, hy);
+    ctx.lineTo(hx - ux * 9 - uy * 4.5, hy - uy * 9 + ux * 4.5);
+    ctx.lineTo(hx - ux * 9 + uy * 4.5, hy - uy * 9 - ux * 4.5);
+    ctx.closePath();
+    ctx.fill();
+
+    // A tick across the line at each visit, the one on screen ringed.
+    const now = this.current?.frame.mjd;
+    ctx.lineWidth = 1.2;
+    for (const tk of mv.ticks) {
+      const [x, y] = this.toCanvas(tk.at[0], tk.at[1]);
+      ctx.beginPath();
+      ctx.moveTo(x - uy * 4, y + ux * 4);
+      ctx.lineTo(x + uy * 4, y - ux * 4);
+      ctx.stroke();
+      if (tk.mjd === now && this.mode !== 'stack') {
+        ctx.beginPath();
+        ring(ctx, x, y, 4.5);
+        ctx.stroke();
+      }
+    }
+    // Names placed later step round the line: small boxes along it, not one
+    // box round a diagonal that would push them off half the plate.
+    for (let d = 0; d <= len; d += 10) {
+      const x = ax + ux * d;
+      const y = ay + uy * d;
+      this.taken.push({ x0: x - 6, x1: x + 6, y0: y - 6, y1: y + 6 });
+    }
+
+    // The factor is said beyond the head, along the arrow's own direction.
+    ctx.font = this.fonts.compass;
+    ctx.textBaseline = 'middle';
+    const side = ux >= 0 ? 'left' : 'right';
+    this.placeLabel(ctx, this.labels.motion(mv.factor), [
+      { x: hx + ux * 10, y: hy + uy * 10, align: side },
+      { x: hx, y: hy + (uy >= 0 ? 14 : -14), align: 'center' },
+      { x: hx - uy * 14, y: hy + ux * 14, align: side },
+    ], this.colors.accent);
     ctx.restore();
   }
 

@@ -5652,7 +5652,7 @@ function wire() {
 
   const overlays = {
     'ov-grid': 'grid', 'ov-compass': 'compass', 'ov-catalog': 'catalog', 'ov-skybot': 'skybot',
-    'ov-marks': 'marks', 'ov-sectors': 'sectors',
+    'ov-marks': 'marks', 'ov-sectors': 'sectors', 'ov-motion': 'motion',
   };
   for (const [id, key] of Object.entries(overlays)) {
     $(id).addEventListener('change', (e) => {
@@ -5841,6 +5841,7 @@ function wire() {
 /** The words the picture draws itself, in the reader's language. */
 function labelSky() {
   sky.labels.rate = (r) => t('overlay.rate', { rate: fmt(r, r < 10 ? 1 : 0) });
+  sky.labels.motion = (factor) => (factor > 1 ? t('overlay.motionX', { factor }) : t('overlay.motion1'));
   sky.labels.saturated = (name, n) => (name
     ? t('plate.saturated', { name, n: fmt(n, 0) })
     : t('plate.saturatedAnon', { n: fmt(n, 0) }));
