@@ -7,9 +7,9 @@
 import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { createServer } from 'node:http';
+import { createServer, request } from 'node:http';
 import { fileURLToPath } from 'node:url';
-import { mkdir, rm, readdir, stat } from 'node:fs/promises';
+import { mkdir, rm, readdir, stat, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
@@ -17,11 +17,19 @@ import { fetchFrame, relayedUrl, useFrameRelay, S3_HOSTS } from '../public/js/ra
 
 const PORT = (Number(process.env.TEST_PORT) || 5199) + 11;
 const SMALL_PORT = PORT + 1;
+const NARROW_PORT = PORT + 2;
 const NO_INDEX = join(tmpdir(), `muninn-no-index-${process.pid}`);
 const KEY = 'dr1/level2/2025W26_2A/l2b-v27-2026-214/1/level2_2025W26_2A_0530_1D1_spx_l2b-v27-2026-214.fits';
 const OTHER = 'dr1/level2/2025W26_2A/l2b-v27-2026-214/4/level2_2025W26_2A_0530_2D4_spx_l2b-v27-2026-214.fits';
 const BLOCK = 256 * 1024;
 const FILE_BYTES = 5 * BLOCK + 1000;
+/** The longest range the relay passes on. */
+const RANGE_MAX = 6 * 1024 * 1024;
+/** A key of that length: a read of all of it is the longest the relay sends. */
+const LONG = KEY.replace('2025W26_2A_0530', '2025W26_2A_0777');
+const sizeOf = (key) => (key.includes('_0777_') ? RANGE_MAX : FILE_BYTES);
+/** The small relay's ceiling: five blocks, and room for the records of the frames they belong to. */
+const SMALL_CEILING = 5 * BLOCK + 2048;
 const sleep = (ms) => new Promise((done) => { setTimeout(done, ms); });
 
 /** The fake bucket: every key holds FILE_BYTES bytes, which change with its version. */
@@ -35,13 +43,14 @@ function answerBucket(req, res) {
   if (key.includes('_0999_')) { res.writeHead(404); res.end(); return; }
   const m = /^bytes=(\d+)-(\d+)$/.exec(req.headers.range ?? '');
   if (!m) { res.writeHead(400); res.end(); return; }
+  const size = sizeOf(key);
   const from = Number(m[1]);
-  if (from >= FILE_BYTES) { res.writeHead(416); res.end(); return; }
-  const to = Math.min(Number(m[2]), FILE_BYTES - 1);
+  if (from >= size) { res.writeHead(416, { 'content-range': `bytes */${size}` }); res.end(); return; }
+  const to = Math.min(Number(m[2]), size - 1);
   const body = Buffer.alloc(to - from + 1);
   for (let i = 0; i < body.length; i += 1) body[i] = byteOf(key, from + i);
   res.writeHead(206, {
-    'content-range': `bytes ${from}-${to}/${FILE_BYTES}`,
+    'content-range': `bytes ${from}-${to}/${size}`,
     'content-length': String(body.length),
     etag: `"v${versions.get(key) ?? 0}"`,
   });
@@ -83,19 +92,22 @@ describe('the frame relay against a fake bucket', () => {
   let fake;
   let relay;
   let small;
+  let narrow;
 
   before(async () => {
     await mkdir(base, { recursive: true });
     fake = createServer(answerBucket);
     await new Promise((resolve) => { fake.listen(0, '127.0.0.1', resolve); });
     relay = await startServer(PORT, join(base, 'main'), fake.address().port);
-    // A ceiling of five blocks.
-    small = await startServer(SMALL_PORT, join(base, 'small'), fake.address().port, { MUNINN_FRAME_CACHE_BYTES: String(5 * BLOCK) });
+    small = await startServer(SMALL_PORT, join(base, 'small'), fake.address().port, { MUNINN_FRAME_CACHE_BYTES: String(SMALL_CEILING) });
+    // One answer from the disk at a time.
+    narrow = await startServer(NARROW_PORT, join(base, 'narrow'), fake.address().port, { MUNINN_FRAME_DISK_MAX: '1' });
   });
 
   after(async () => {
     relay?.kill();
     small?.kill();
+    narrow?.kill();
     fake?.close();
     await rm(base, { recursive: true, force: true });
   });
@@ -125,7 +137,7 @@ describe('the frame relay against a fake bucket', () => {
   });
 
   test('one bounded range only', async () => {
-    for (const range of [undefined, 'bytes=0-', 'bytes=0-99,200-299', 'bytes=99-0', 'items=0-99', `bytes=0-${16 * 1024 * 1024}`, 'bytes=-0', `bytes=-${16 * 1024 * 1024 + 1}`]) {
+    for (const range of [undefined, 'bytes=0-', 'bytes=0-99,200-299', 'bytes=99-0', 'items=0-99', `bytes=0-${RANGE_MAX}`, `bytes=100-${RANGE_MAX + 100}`, 'bytes=-0', `bytes=-${RANGE_MAX + 1}`]) {
       const res = await read(PORT, KEY, range);
       assert.equal(res.status, 416, String(range));
     }
@@ -160,6 +172,80 @@ describe('the frame relay against a fake bucket', () => {
     const over = await read(PORT, KEY, `bytes=${FILE_BYTES - 10}-${FILE_BYTES + 100}`);
     assert.equal(over.headers.get('content-range'), `bytes ${FILE_BYTES - 10}-${FILE_BYTES - 1}/${FILE_BYTES}`);
     assert.equal((await read(PORT, KEY, `bytes=${FILE_BYTES}-${FILE_BYTES + 10}`)).status, 416);
+  });
+
+  test('a long read from the disk comes whole, a block at a time', async () => {
+    const range = `bytes=0-${RANGE_MAX - 1}`;
+    const want = expected(LONG, 0, RANGE_MAX - 1);
+    const first = await read(PORT, LONG, range);
+    assert.equal(first.headers.get('x-muninn-frame'), 'miss');
+    assert.ok(Buffer.from(await first.arrayBuffer()).equals(want));
+    asked.length = 0;
+    const again = await read(PORT, LONG, range);
+    assert.equal(again.status, 206);
+    assert.equal(again.headers.get('x-muninn-frame'), 'hit');
+    assert.equal(again.headers.get('content-length'), String(RANGE_MAX));
+    assert.ok(Buffer.from(await again.arrayBuffer()).equals(want));
+    // Starting and ending inside blocks, across several of them.
+    const middle = await read(PORT, LONG, `bytes=${BLOCK + 17}-${7 * BLOCK + 5}`);
+    assert.equal(middle.headers.get('content-range'), `bytes ${BLOCK + 17}-${7 * BLOCK + 5}/${RANGE_MAX}`);
+    assert.deepEqual(Buffer.from(await middle.arrayBuffer()), expected(LONG, BLOCK + 17, 7 * BLOCK + 5));
+    assert.equal(asked.length, 0);
+  });
+
+  test('a block cut short on the disk is dropped and read from the bucket again', async () => {
+    const id = createHash('sha256').update(KEY).digest('hex').slice(0, 24);
+    const dir = join(base, 'main');
+    await (await read(PORT, KEY, `bytes=0-${FILE_BYTES - 1}`)).arrayBuffer();
+    const name = (await readdir(dir)).find((n) => n.startsWith(`frame_${id}_`) && n.endsWith('_2.bin'));
+    assert.ok(name, 'block 2 is kept');
+    const whole = await readFile(join(dir, name));
+    await writeFile(join(dir, name), whole.subarray(0, 1000));
+    asked.length = 0;
+    const res = await read(PORT, KEY, `bytes=${2 * BLOCK + 10}-${2 * BLOCK + 2000}`);
+    assert.equal(res.headers.get('x-muninn-frame'), 'miss');
+    assert.deepEqual(Buffer.from(await res.arrayBuffer()), expected(KEY, 2 * BLOCK + 10, 2 * BLOCK + 2000));
+    assert.deepEqual(asked.map((a) => a.range), [`bytes=${2 * BLOCK}-${3 * BLOCK - 1}`]);
+    assert.equal((await stat(join(dir, name))).size, BLOCK);
+    // The file's last block is shorter than the rest, and is kept as it is.
+    const tail = await read(PORT, KEY, `bytes=${5 * BLOCK}-${FILE_BYTES - 1}`);
+    assert.equal(tail.headers.get('x-muninn-frame'), 'hit');
+    assert.deepEqual(Buffer.from(await tail.arrayBuffer()), expected(KEY, 5 * BLOCK, FILE_BYTES - 1));
+  });
+
+  test('a range past the end of a file not kept yet is a 416 with its length', async () => {
+    const key = KEY.replace('2025W26_2A_0530', '2025W26_2A_0531');
+    const res = await read(PORT, key, `bytes=${FILE_BYTES + 10}-${FILE_BYTES + 20}`);
+    assert.equal(res.status, 416);
+    assert.equal(res.headers.get('content-range'), `bytes */${FILE_BYTES}`);
+    assert.equal(res.headers.get('x-muninn-frame'), 'error');
+  });
+
+  test('past its limit of answers from the disk the relay says busy, and the page reads the bucket', async () => {
+    const range = `bytes=0-${RANGE_MAX - 1}`;
+    await (await read(NARROW_PORT, LONG, range)).arrayBuffer();
+    // A visitor that takes nothing of a long answer keeps its place.
+    let slow;
+    const held = await new Promise((resolve) => {
+      slow = request({ host: '127.0.0.1', port: NARROW_PORT, path: `/api/frame?path=${encodeURIComponent(LONG)}`, headers: { range } }, (res) => {
+        res.pause();
+        resolve(res);
+      });
+      slow.on('error', () => {});
+      slow.end();
+    });
+    assert.equal(held.headers['x-muninn-frame'], 'hit');
+    await sleep(200);
+    const busy = await read(NARROW_PORT, LONG, 'bytes=0-99');
+    assert.equal(busy.status, 503);
+    assert.equal(busy.headers.get('x-muninn-frame'), 'error');
+    await busy.arrayBuffer();
+    // Gone, it gives its place back.
+    slow.destroy();
+    await sleep(200);
+    const later = await read(NARROW_PORT, LONG, 'bytes=0-99');
+    assert.equal(later.status, 206);
+    assert.deepEqual(Buffer.from(await later.arrayBuffer()), expected(LONG, 0, 99));
   });
 
   test('a file the bucket answers with another ETag has its kept blocks dropped', async () => {
@@ -206,7 +292,7 @@ describe('the frame relay against a fake bucket', () => {
     const names = (await readdir(dir)).filter((n) => n.startsWith('frame_'));
     let total = 0;
     for (const n of names) total += (await stat(join(dir, n))).size;
-    assert.ok(total <= 5 * BLOCK, `${total} bytes kept`);
+    assert.ok(total <= SMALL_CEILING, `${total} bytes kept`);
     assert.deepEqual(blocksOf(names, keyB), [0]);
     const leftOfA = blocksOf(names, keyA);
     assert.equal(leftOfA[0], 0);
