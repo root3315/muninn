@@ -28,6 +28,9 @@ for (const r of rows) {
   const host = hosts.get(r.hostname);
   if (/^[a-z]$/.test(letter) && !host[4].includes(letter)) host[4] = [...host[4], letter].sort().join('');
 }
+// The count is this star's planets, its letters: sy_pnum counts the whole
+// system's, a companion star's planets included (55 Cnc has 5, not 7).
+for (const host of hosts.values()) if (host[4]) host[2] = host[4].length;
 const list = [...hosts.values()].sort((a, b) => a[0] - b[0]);
 await writeFile(OUT, `${JSON.stringify({
   source: 'NASA Exoplanet Archive, Planetary Systems Composite Parameters (pscomppars)',

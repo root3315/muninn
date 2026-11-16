@@ -153,7 +153,7 @@ const STRINGS = {
     'exo.diagram': 'From above, to scale: the widest orbit {a} AU. Planets are where they are now where a transit time is known.',
     'exo.diagramHz': 'From above, to scale: the widest orbit {a} AU. Green: the habitable zone, {i}–{o} AU (Kopparapu et al. 2013). Planets are where they are now where a transit time is known.',
     'fly.backSky': '← Back to the sky',
-    'exo.label': '{host} · {n:planet|planets}',
+    'exo.label': '{host} · {n} {n:planet|planets}',
     'exo.note': 'Confirmed planets, NASA Exoplanet Archive. Near it, each is drawn at its real size on its orbit; where a transit time is known, where it is now (orbit edge-on to the Sun, as a transit needs).',
     'exo.radius': '{r} R⊕',
     'exo.orbit': '{a} AU',
