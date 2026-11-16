@@ -207,6 +207,16 @@ body { font-size: var(--text-base); line-height: 1.5; }
 }
 .mast, .stage, .run { background: none; border: 0; }
 .side--right { background: var(--rec-panel); border-radius: var(--radius-lg); }
+/* Scrolled, the right column's words pass under a strip of its own ground at
+   its top edge instead of running into it. */
+@media (min-width: 68.0625rem) and (min-height: 34.0625rem) {
+  .side--right::before {
+    content: ""; position: sticky; inset-block-start: 0; z-index: 1;
+    display: block; block-size: var(--space-md); margin-block-end: calc(-1 * var(--space-md));
+    background: linear-gradient(var(--rec-panel) 60%, transparent);
+    pointer-events: none;
+  }
+}
 .run { background: var(--rec-panel); border-radius: var(--radius-lg); }
 .stage { background: var(--rec-panel); border-radius: var(--radius-lg); }
 
@@ -1132,7 +1142,8 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .mark__link[data-tone="wait"], .mark__link[data-tone="quiet"] { color: var(--color-neutral); }
 .mark__link-acts { display: flex; flex-wrap: wrap; gap: var(--space-2xs) var(--space-xs); }
 /* A mark's actions stack in its column: each its own row, never touching the next. */
-.mark > .spectrum { margin-block-start: var(--space-sm); }
+.mark > .spectrum, .mark > .mark__more { margin-block-start: var(--space-sm); }
+.mark__more[open] > .spectrum { margin-block-start: var(--space-2xs); }
 .mark__body > .mark__csv + .mark__csv { margin-block-start: var(--space-2xs); }
 .mark__link-acts > .mark__csv[aria-pressed="false"] { color: var(--color-neutral); }
 
@@ -1457,8 +1468,8 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .mark__kill { grid-column: 3; grid-row: 1; align-self: start; margin-block-start: -6px; display: grid; place-items: center; }
 .mark__kill svg { inline-size: 16px; block-size: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 .mark__body { display: contents; }
-.mark__body > *, .mark > .spectrum { grid-column: 2 / -1; }
-.mark[data-open="false"] > .mark__body, .mark[data-open="false"] > .spectrum { display: none; }
+.mark__body > *, .mark > .spectrum, .mark > .mark__more { grid-column: 2 / -1; }
+.mark[data-open="false"] > .mark__body, .mark[data-open="false"] > .spectrum, .mark[data-open="false"] > .mark__more { display: none; }
 /* Figures in a line keep together; the one the verdict rests on is in ink. */
 .facts-bit { white-space: nowrap; }
 .facts-bit--key { color: var(--color-ink); font-weight: 600; }
@@ -1488,7 +1499,17 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .body__time { display: grid; grid-template-columns: 1fr; gap: 2px; inline-size: min(100%, 220px); margin-block-start: var(--space-3xs); }
 .body__time input { inline-size: 100%; accent-color: var(--color-accent); }
 .body__time-read { font-size: var(--text-2xs); color: var(--color-neutral); font-family: var(--font-mono); }
-.body-sketch__label { fill: var(--color-neutral); font-family: var(--font-mono); font-size: 7px; text-anchor: middle; }
+/* In the drawing's own units: 10 of its 200 across is 11 px at the width it is shown. */
+.body-sketch__label { fill: var(--color-neutral); font-family: var(--font-mono); font-size: 10px; text-anchor: middle; }
+/* On a phone the orbit's drawing and its neighbours, and the spectrum, fold under a line each. */
+.body__more > summary, .mark__more > summary {
+  display: flex; align-items: center; gap: var(--space-2xs); min-block-size: 44px;
+  font-size: var(--text-sm); color: var(--color-accent); cursor: pointer; list-style: none;
+}
+.body__more > summary::-webkit-details-marker, .mark__more > summary::-webkit-details-marker { display: none; }
+.body__more > summary::after, .mark__more > summary::after { content: "+"; font-family: var(--font-mono); color: var(--color-neutral); }
+.body__more[open] > summary::after, .mark__more[open] > summary::after { content: "−"; }
+.body__more[open] { display: grid; gap: var(--space-2xs); }
 .body__sketch figcaption { font-size: var(--text-xs); line-height: 1.45; color: var(--color-muted); max-inline-size: 36ch; }
 .body__near { margin: 0; padding: 0; list-style: none; display: grid; gap: 1px; font-size: var(--text-xs); color: var(--color-ink); }
 .body__near li { display: flex; justify-content: space-between; gap: var(--space-xs); }
@@ -1645,6 +1666,12 @@ body { font-size: var(--text-base); line-height: 1.5; }
 }
 @media (max-width: 22.5rem) {
   .mount > .deck .segment { font-size: var(--text-2xs); }
+}
+/* Six modes since "In depth" came: on a phone one track cut the last of
+   them off at the edge. Two rows of three, each word whole. */
+@media (max-width: 40rem) {
+  .mount > .deck .segments { flex-wrap: wrap; border-radius: var(--radius-lg); }
+  .mount > .deck .segment { flex: 1 1 calc(33.333% - 2px); }
 }
 
 /* In View on a phone a choice that wraps onto its own row still reads as a
@@ -1809,8 +1836,9 @@ body { font-size: var(--text-base); line-height: 1.5; }
     mask-image: linear-gradient(to right, transparent 0, #000 var(--fade-s), #000 calc(100% - var(--fade-e)), transparent 100%);
   }
   .gate__jump-row::-webkit-scrollbar { display: none; }
-  .gate__jump-row[data-more~="start"] { --fade-s: 2rem; }
-  .gate__jump-row[data-more~="end"] { --fade-e: 2.5rem; }
+  /* Wide enough to be seen as a fade, not as a name cut at the edge: the row goes on. */
+  .gate__jump-row[data-more~="start"] { --fade-s: 3rem; }
+  .gate__jump-row[data-more~="end"] { --fade-e: 5rem; }
   .gate__jump-go {
     flex: none; scroll-snap-align: start;
     min-block-size: 44px; padding: 0 var(--space-md);

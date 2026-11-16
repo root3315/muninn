@@ -203,9 +203,9 @@ neighbourhood in 3-D at true scale, drawn with WebGL 2:
   the parallax puts them, as bright as they would be from where the camera is. A star near enough
   to have a disc is a sphere at its radius (measured where the catalogue or the Exoplanet Archive
   has one, else estimated from brightness and colour, and the card says which).
-- **The Sun's planets and the Moon, now:** JPL's Keplerian elements and the Astronomical Almanac's
-  lunar series place them for the present moment; the Earth sits off the Earth–Moon barycentre by
-  its 4 670 km. Their mean radii are the IAU's. Mercury, Venus, the Earth, the Moon, Mars and
+- **The Sun's planets and the Moon, now:** JPL's Keplerian elements place the planets, and the
+  leading terms of Meeus's lunar series (ELP-2000/82; within 0.02° of JPL Horizons) the Moon;
+  the Earth sits off the Earth–Moon barycentre by its 4 670 km. Their mean radii are the IAU's. Mercury, Venus, the Earth, the Moon, Mars and
   Jupiter carry real global spacecraft maps (MESSENGER, Magellan radar, Blue Marble, LRO, Viking,
   Cassini; `public/data/fly/tex/maps.json` holds each source and credit), turned by the IAU's pole
   and prime meridian for today. Saturn's rings are drawn at their real radii with the Cassini

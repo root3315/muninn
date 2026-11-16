@@ -5,8 +5,8 @@
  * Planets: JPL's Keplerian elements (ephemeris.js, "Approximate Positions of
  * the Planets", a few arcminutes to a tenth of a degree). Earth's row is the
  * Earth–Moon barycentre; at these scales that is the Earth. The Moon: the
- * low-precision series of the Astronomical Almanac (about 0.3° and 500 km),
- * plenty for a body a few pixels across until the camera is beside it.
+ * leading terms of Meeus's lunar series (ELP-2000/82, chapter 47 of his
+ * "Astronomical Algorithms"), within 0.02° and 20 km of JPL's ephemeris.
  *
  * Positions come out in parsecs on ICRS axes with the Sun at the origin, the
  * frame of the stars. Radii are the IAU's mean radii. Brightness is
@@ -41,16 +41,70 @@ export const BODIES = [
 /** J2000 ecliptic to ICRS (equatorial) axes. */
 const toEquatorial = ([x, y, z]) => [x, y * Math.cos(OBLIQUITY) - z * Math.sin(OBLIQUITY), y * Math.sin(OBLIQUITY) + z * Math.cos(OBLIQUITY)];
 
-/** The Moon from the Earth, ecliptic, in AU (Astronomical Almanac low-precision formulae). */
+/*
+ * The Moon's periodic terms, Meeus, "Astronomical Algorithms" (2nd ed.,
+ * 1998), chapter 47, from the ELP-2000/82 theory: every term of tables 47.A
+ * and 47.B down to about 0.002° in longitude and latitude and 8 km in
+ * distance. Each row: the multiples of D, M, M′ and F, then the longitude
+ * term (10⁻⁶ degrees) and the distance term (metres) of table A, or the
+ * latitude term (10⁻⁶ degrees) of table B. Against JPL Horizons the Moon
+ * comes out within 0.02° and 20 km of distance (tests/moon.test.mjs).
+ */
+const MOON_LR = [
+  [0, 0, 1, 0, 6288774, -20905355], [2, 0, -1, 0, 1274027, -3699111], [2, 0, 0, 0, 658314, -2955968],
+  [0, 0, 2, 0, 213618, -569925], [0, 1, 0, 0, -185116, 48888], [0, 0, 0, 2, -114332, -3149],
+  [2, 0, -2, 0, 58793, 246158], [2, -1, -1, 0, 57066, -152138], [2, 0, 1, 0, 53322, -170733],
+  [2, -1, 0, 0, 45758, -204586], [0, 1, -1, 0, -40923, -129620], [1, 0, 0, 0, -34720, 108743],
+  [0, 1, 1, 0, -30383, 104755], [2, 0, 0, -2, 15327, 10321], [0, 0, 1, 2, -12528, 0],
+  [0, 0, 1, -2, 10980, 79661], [4, 0, -1, 0, 10675, -34782], [0, 0, 3, 0, 10034, -23210],
+  [4, 0, -2, 0, 8548, -21636], [2, 1, -1, 0, -7888, 24208], [2, 1, 0, 0, -6766, 30824],
+  [1, 0, -1, 0, -5163, -8379], [1, 1, 0, 0, 4987, -16675], [2, -1, 1, 0, 4036, -12831],
+  [2, 0, 2, 0, 3994, -10445], [4, 0, 0, 0, 3861, -11650], [2, 0, -3, 0, 3665, 14403],
+  [0, 1, -2, 0, -2689, -7003], [2, 0, -1, 2, -2602, 0], [2, -1, -2, 0, 2390, 10056],
+  [1, 0, 1, 0, -2348, 6322], [2, -2, 0, 0, 2236, -9884],
+];
+const MOON_B = [
+  [0, 0, 0, 1, 5128122], [0, 0, 1, 1, 280602], [0, 0, 1, -1, 277693], [2, 0, 0, -1, 173237],
+  [2, 0, -1, 1, 55413], [2, 0, -1, -1, 46271], [2, 0, 0, 1, 32573], [0, 0, 2, 1, 17198],
+  [2, 0, 1, -1, 9266], [0, 0, 2, -1, 8822], [2, -1, 0, -1, 8216], [2, 0, -2, -1, 4324],
+  [2, 0, 1, 1, 4200], [2, 1, 0, -1, -3359], [2, -1, -1, 1, 2463], [2, -1, 0, 1, 2211],
+  [2, -1, -1, -1, 2065], [0, 1, -1, -1, -1870], [4, 0, -1, -1, 1828], [0, 1, 0, 1, -1794],
+];
+
+/**
+ * The Moon from the Earth, in AU, on the ecliptic and equinox of J2000 (the
+ * frame of the planets' elements). Meeus's series gives it on the equinox of
+ * the date; the equinox drifts 1.397° a century, taken off the longitude.
+ */
 export function moonGeocentric(date) {
-  const d = julian(date) - 2451545.0;
-  const L = (218.316 + 13.176396 * d) * D2R;
-  const M = (134.963 + 13.064993 * d) * D2R;
-  const F = (93.272 + 13.22935 * d) * D2R;
-  const lon = L + 6.289 * D2R * Math.sin(M);
-  const lat = 5.128 * D2R * Math.sin(F);
-  const km = 385001 - 20905 * Math.cos(M);
-  const au = km / 149597870.7;
+  const T = (julian(date) - 2451545.0) / 36525;
+  const Lp = 218.3164477 + 481267.88123421 * T;
+  const D = (297.8501921 + 445267.1114034 * T) * D2R;
+  const M = (357.5291092 + 35999.0502909 * T) * D2R;
+  const Mp = (134.9633964 + 477198.8675055 * T) * D2R;
+  const F = (93.272095 + 483202.0175233 * T) * D2R;
+  // The Earth's orbit grows rounder: terms in the Sun's anomaly shrink with it.
+  const E = 1 - 0.002516 * T;
+  const A1 = (119.75 + 131.849 * T) * D2R;
+  const A2 = (53.09 + 479264.29 * T) * D2R;
+  const A3 = (313.45 + 481266.484 * T) * D2R;
+  let l = 3958 * Math.sin(A1) + 1962 * Math.sin(Lp * D2R - F) + 318 * Math.sin(A2);
+  let r = 0;
+  for (const [d, m, mp, f, sl, sr] of MOON_LR) {
+    const arg = d * D + m * M + mp * Mp + f * F;
+    const e = m === 0 ? 1 : Math.abs(m) === 1 ? E : E * E;
+    l += sl * e * Math.sin(arg);
+    r += sr * e * Math.cos(arg);
+  }
+  let b = -2235 * Math.sin(Lp * D2R) + 382 * Math.sin(A3) + 175 * Math.sin(A1 - F) + 175 * Math.sin(A1 + F)
+    + 127 * Math.sin(Lp * D2R - Mp) - 115 * Math.sin(Lp * D2R + Mp);
+  for (const [d, m, mp, f, sb] of MOON_B) {
+    const e = m === 0 ? 1 : Math.abs(m) === 1 ? E : E * E;
+    b += sb * e * Math.sin(d * D + m * M + mp * Mp + f * F);
+  }
+  const lon = (Lp + l / 1e6 - 1.396971 * T) * D2R;
+  const lat = (b / 1e6) * D2R;
+  const au = (385000.56 + r / 1000) / 149597870.7;
   return [au * Math.cos(lat) * Math.cos(lon), au * Math.cos(lat) * Math.sin(lon), au * Math.sin(lat)];
 }
 

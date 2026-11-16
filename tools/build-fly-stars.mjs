@@ -17,7 +17,15 @@
  *                               parsec of rounding put the star beside its
  *                               own label.
  *   public/data/fly/named.json  the stars and targets the page names, each
- *                               with its position in parsecs
+ *                               with its position in parsecs, its absolute
+ *                               Hipparcos magnitude (absHp) and, where the
+ *                               Hipparcos main catalogue has a ground-based
+ *                               V, that V as seen from the Earth (v)
+ *
+ * The magnitudes are Hipparcos's own band, Hp, not Johnson V: the page turns
+ * them into V by the star's colour (fly/stars.js, vFromHp). The brightest
+ * stars saturated Hipparcos's detector — Sirius is Hp −1.09, V −1.44 — so the
+ * stars the page names carry their measured V as well.
  *
  *   node tools/build-fly-stars.mjs
  *
@@ -32,6 +40,9 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = join(ROOT, 'public', 'data', 'fly');
 const ASU = 'https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=I/311/hip2'
   + '&-out=HIP&-out=RArad&-out=DErad&-out=Plx&-out=e_Plx&-out=Hpmag&-out=B-V&-out.max=unlimited&Plx=%3E0';
+/** The Hipparcos main catalogue (ESA 1997, I/239): V and where it came from, G for ground-based. */
+const MAIN = 'https://vizier.cfa.harvard.edu/viz-bin/asu-tsv?-source=I/239/hip_main'
+  + '&-out=HIP&-out=Vmag&-out=r_Vmag&-out.max=unlimited';
 /** A parallax good to 20 %: its distance is a distance. */
 const MIN_PLX_SNR = 5;
 const DEG = Math.PI / 180;
@@ -82,11 +93,23 @@ for (const [hip, ra, dec, plx, ePlx, hp, bv] of rows) {
   byHip.set(Number(hip), { xyz, absMag, colour });
 }
 
-const named = [{ key: 'sun', en: 'Sun', ru: 'Солнце', pos: [0, 0, 0], absMag: 4.83, bv: 0.65, radius: 1, ref: 'IAU 2015' }];
+const mainRes = await fetch(MAIN, { signal: AbortSignal.timeout(300_000) });
+if (!mainRes.ok) throw new Error(`VizieR I/239: HTTP ${mainRes.status}`);
+const groundV = new Map();
+for (const l of (await mainRes.text()).split('\n')) {
+  const [hip, v, from] = l.split('\t').map((x) => x.trim());
+  if (/^\d+$/.test(hip ?? '') && from === 'G' && v !== '') groundV.set(Number(hip), Number(v));
+}
+
+const named = [{ key: 'sun', en: 'Sun', ru: 'Солнце', pos: [0, 0, 0], absV: 4.83, bv: 0.65, radius: 1, ref: 'IAU 2015' }];
 for (const [hip, en, ru, radius] of NAMED) {
   const s = byHip.get(hip);
   if (!s) continue;
-  named.push({ key: `hip${hip}`, hip, en, ru, radius, pos: s.xyz.map((c) => +c.toFixed(4)), absMag: +s.absMag.toFixed(2), bv: s.colour, ref: `HIP ${hip}` });
+  const v = groundV.get(hip);
+  named.push({
+    key: `hip${hip}`, hip, en, ru, radius, pos: s.xyz.map((c) => +c.toFixed(4)), absHp: +s.absMag.toFixed(2),
+    ...(Number.isFinite(v) ? { v } : {}), bv: s.colour, ref: `HIP ${hip}`,
+  });
 }
 // The challenge's own targets, at the parallaxes the site already cites.
 const { targets } = JSON.parse(await readFile(join(ROOT, 'public', 'data', 'targets.json'), 'utf8'));

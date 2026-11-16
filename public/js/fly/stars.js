@@ -4,13 +4,15 @@
  * Hipparcos gives a star's distance, its brightness and its colour. Its size
  * follows from those, as estimates and said to be estimates:
  *
+ *   V             from Hipparcos's own magnitude, Hp, by the colour (vFromHp)
  *   temperature   from B−V (Ballesteros 2012)
- *   luminosity    from the absolute magnitude, with the bolometric correction
- *                 for that temperature (Torres 2010)
+ *   luminosity    from the absolute V, with the bolometric correction for
+ *                 that temperature (Torres 2010)
  *   radius        from luminosity and temperature (Stefan–Boltzmann)
  *
  * Checked against stars with measured radii: the Sun comes out 0.99 R☉,
- * Sirius 1.69 (measured 1.71), Arcturus 27 (25.4), Rigel 79 (79). The
+ * Sirius 1.69 from its measured V (measured radius 1.71; from its saturated
+ * Hp it would be 1.44), Arcturus 28 (25.4), Rigel 77 (79). The
  * coolest stars are where it is weakest — B−V saturates — so the stars the
  * page names carry their measured radii instead.
  */
@@ -21,6 +23,19 @@ export const T_SUN = 5772;
 export const MBOL_SUN = 4.74;
 /** The Sun's radius in parsecs. */
 export const R_SUN_PC = 695700 / 3.0856775814913673e13;
+
+/**
+ * V from a Hipparcos magnitude Hp and B−V. Hipparcos measured in its own
+ * broad band, Hp, redder than Johnson V; V − Hp as a cubic in B−V, fitted
+ * here to the 14 679 stars of the Hipparcos main catalogue (ESA 1997, I/239)
+ * with a ground-based V, Hp 2–9 and B−V −0.3 to 2.0: scatter 0.06 mag. It
+ * holds for the stars Hipparcos did not saturate; Sirius (Hp −1.09, V −1.44)
+ * and the other brightest named stars carry their measured V instead.
+ */
+export function vFromHp(hp, bv) {
+  const x = Math.max(-0.3, Math.min(2.0, Number.isFinite(bv) ? bv : 0.65));
+  return hp - 0.0002 - 0.2682 * x + 0.0911 * x * x + 0.0229 * x * x * x;
+}
 
 /** Effective temperature from B−V, K (Ballesteros 2012). */
 export const temperatureOf = (bv) => 4600 * (1 / (0.92 * bv + 1.7) + 1 / (0.92 * bv + 0.62));

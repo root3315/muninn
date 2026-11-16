@@ -232,10 +232,10 @@ export function mountInDepth(plate, { sky, field }) {
   reset.type = 'button';
   const how = el('p', 'indepth__how');
   how.setAttribute('aria-hidden', 'true');
-  // How many of the rays are drawn, when not all of them are.
+  // How many of the rays are drawn, when not all of them are: at the end of the switches along the foot.
   const raysNote = el('p', 'indepth__rays num');
   raysNote.hidden = true;
-  corner.append(reset, how, raysNote);
+  corner.append(reset, how);
   // Along the foot: a switch for each kind, with its count.
   const kinds = el('div', 'indepth__kinds');
   const tip = el('div', 'tip indepth__tip');
@@ -246,7 +246,6 @@ export function mountInDepth(plate, { sky, field }) {
   plate.append(root);
   // The corridor is the picture: the account of what is placed by what opens by itself only on a large plate.
   legend.open = plate.clientWidth >= 720 && plate.clientHeight >= 560;
-  legend.addEventListener('toggle', invalidate);
 
   let renderer;
   try {
@@ -304,6 +303,9 @@ export function mountInDepth(plate, { sky, field }) {
     if (visible && dirty) invalidate();
   });
   seen.observe(root);
+  // Listened to only now: with no WebGL the view returned above, before the
+  // state invalidate() reads, and an opened legend would have thrown.
+  legend.addEventListener('toggle', invalidate);
   const onVisibility = () => { if (!document.hidden && dirty) invalidate(); };
   document.addEventListener('visibilitychange', onVisibility);
   const sized = new ResizeObserver(() => {
@@ -985,7 +987,7 @@ export function mountInDepth(plate, { sky, field }) {
         refocus();
       });
       return chip;
-    }));
+    }), raysNote);
 
     // The account behind them: the scale, and where every distance comes from.
     summary.textContent = t('indepth.title');

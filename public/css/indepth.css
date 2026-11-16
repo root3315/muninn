@@ -36,10 +36,10 @@
 .indepth__tag--accent .indepth__tag-t { color: var(--color-accent); }
 .indepth__tag--counter .indepth__tag-t { color: var(--color-counter); }
 .indepth__tag--neutral .indepth__tag-t { color: var(--color-neutral); }
-/* A thing's name sits on a little of the well, so the lines behind it do not run through the letters. */
-.indepth__tag:not(.indepth__tag--tick) {
+/* Every name, the scale's ticks too, sits on a little of the well, so the lines behind it do not run through the letters. */
+.indepth__tag {
   padding: 1px var(--space-2xs);
-  background: color-mix(in oklch, var(--color-well) 72%, transparent);
+  background: color-mix(in oklch, var(--color-well) 78%, transparent);
   border-radius: var(--radius-xs);
 }
 .indepth__tag--tick .indepth__tag-t { font-family: var(--font-mono); font-size: var(--text-2xs); font-weight: 400; }
@@ -90,15 +90,17 @@
 }
 .indepth__how {
   margin: 0; max-inline-size: 22ch; text-align: end;
+  padding: 2px var(--space-2xs); border-radius: var(--radius-xs);
+  background: color-mix(in oklch, var(--color-well) 82%, transparent);
   font-size: var(--text-2xs); line-height: 1.35; color: var(--color-neutral);
-  text-shadow: var(--shade-text);
 }
-/* How many rays are drawn, when not all are: quieter than the how. */
+/* How many rays are drawn, when not all are: a quiet word at the end of the switches. */
 .indepth__rays {
-  margin: 0; text-align: end;
-  font-size: var(--text-2xs); line-height: 1.35; color: var(--color-muted);
-  text-shadow: var(--shade-text);
+  align-self: center; margin: 0; padding: 0 var(--space-2xs); border-radius: var(--radius-xs);
+  background: color-mix(in oklch, var(--color-well) 82%, transparent);
+  font-size: var(--text-2xs); line-height: 1.6; color: var(--color-muted);
 }
+.indepth__rays[hidden] { display: none; }
 /* On a narrow plate the panel carries the how, and the corner keeps only the button. */
 .indepth { container-type: size; }
 @container (max-width: 479px) { .indepth__how { display: none; } }

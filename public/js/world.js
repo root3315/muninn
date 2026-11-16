@@ -40,12 +40,14 @@ export function preloadWorld(kind, lang) {
 function aim(kind, look) {
   const { frame } = layers[kind];
   if (!look || !frame.contentWindow) return;
-  frame.contentWindow.postMessage({ type: 'muninn:look', ra: look.ra, dec: look.dec, fov: look.fov, key: look.key }, location.origin);
+  frame.contentWindow.postMessage({ type: 'muninn:look', ra: look.ra, dec: look.dec, fov: look.fov, key: look.key, mark: look.mark }, location.origin);
 }
 
 /**
  * Open a layer: `kind` is 'allsky' or 'fly'; `look` the direction the front
- * page faces, { ra, dec, fov }; `lang` the page's language.
+ * page faces, { ra, dec, fov }, and for the flight from a mark `mark`, what
+ * it is ({ name, body }: body a small body's orbital elements); `lang` the
+ * page's language.
  */
 export function openWorld(kind, look, lang) {
   const layer = layerOf(kind, lang);

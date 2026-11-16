@@ -463,6 +463,15 @@ li { list-style: none; }
 /* An empty span has no width of its own: `auto` left the ramp at zero and the
    two words either side of it read as unrelated labels. */
 .run__scale .matrix__ramp { flex: 0 0 4rem; }
+/* Where the page is one screen high, the line under the run is one line in
+   every mode: a longer hint wrapped it to two, the run grew, and the plate
+   above shrank by a line's height on each change of mode. The hint gives way
+   at its end instead, and says all of itself on hover. */
+@media (min-width: 68.0625rem) and (min-height: 34.0625rem) {
+  .run__scale { flex-wrap: nowrap; }
+  .run__hint { flex: 1 1 0; min-inline-size: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .run__axes { flex: none; }
+}
 
 /* =================================================================== centre */
 

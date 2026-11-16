@@ -207,6 +207,26 @@ function timeSlider(k, { t, fmt, lang, now, moveTo }) {
   return box;
 }
 
+/** A phone's width: there the long parts of a card fold until asked for. */
+const NARROW = globalThis.matchMedia?.('(max-width: 40rem)') ?? null;
+
+/**
+ * On a phone, `nodes` folded under one line, closed until opened; the mark
+ * keeps whether it was opened (`m[key]`), so a redraw leaves it as it was.
+ * On a wider screen the nodes as they are.
+ */
+export function foldOnPhone(m, key, label, nodes) {
+  if (!NARROW?.matches || !nodes.length) return nodes;
+  const box = document.createElement('details');
+  box.className = 'body__more';
+  box.open = Boolean(m[key]);
+  box.addEventListener('toggle', () => { m[key] = box.open; });
+  const summary = document.createElement('summary');
+  summary.textContent = label;
+  box.append(summary, ...nodes);
+  return [box];
+}
+
 /** A small body's lines: what it goes round, its class, its orbit in figures and drawn. */
 function smallBodyNodes(m, des, { t, fmt, lang, live, onChange, visits = [], current = null }) {
   const ask = askOrbit(m, des, { live, onChange });
@@ -237,7 +257,7 @@ function smallBodyNodes(m, des, { t, fmt, lang, live, onChange, visits = [], cur
   caption.textContent = notes.join('; ');
   const sketch = orbitSketch(k, { t, now, near: near.closest, visits, current });
   figureBox.append(sketch.svg, timeSlider(k, { t, fmt, lang, now, moveTo: sketch.moveTo }), caption);
-  nodes.push(figureBox, ...nearNodes(near, { t, fmt }));
+  nodes.push(...foldOnPhone(m, 'orbitOpen', t('body.moreOrbit'), [figureBox, ...nearNodes(near, { t, fmt })]));
   return nodes;
 }
 

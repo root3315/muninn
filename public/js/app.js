@@ -48,7 +48,7 @@ import { planetHostNear, systemUrl, detectorUrl } from './exovision.js';
 import { drawGaiaSky, psfFor } from './gaiasky.js';
 import { fieldArchives, cadcSearchUrl } from './archives.js';
 import { markFacts } from './markfacts.js';
-import { bodyNodes } from './bodycard.js';
+import { bodyNodes, foldOnPhone } from './bodycard.js';
 import {
   searchFrames, searchAhead, askMissingFrames, NoRelayError, UpstreamError, groupVisits, findHeldVisit, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, fieldObjects, toS3, surveySources,
@@ -2609,9 +2609,18 @@ function factsLine(bits, className) {
   return p;
 }
 
-/** The flight, from the Earth, facing a mark: where in space the thing is. */
+/**
+ * The flight, from the Earth, facing a mark: where in space the thing is. An
+ * asteroid or comet goes with the orbit JPL gave its card, so the flight can
+ * draw it and fly to it; anything else goes as a direction and a name.
+ */
 function showInSpace(m) {
-  openWorld('fly', { ra: m.ra, dec: m.dec }, getLanguage());
+  const k = m.orbitAsk?.state === 'done' ? m.orbitAsk.orbit : null;
+  const body = k && {
+    name: k.name, a: k.a, e: k.e, i: k.i, om: k.om, w: k.w, ma: k.ma, n: k.n, epoch: k.epoch, tp: k.tp, years: k.years,
+  };
+  const name = (k && (m.catalog?.name || k.name)) || tagOf(m) || null;
+  openWorld('fly', { ra: m.ra, dec: m.dec, mark: { name, body } }, getLanguage());
 }
 
 function renderMarks() {
@@ -2841,7 +2850,11 @@ function renderMarks() {
       body.append(csv);
     }
     if (sky.visits.length) body.append(...linkLines(m));
-    if (sky.visits.length) li.append(spectrumBlock(m, () => readSpectrum(m)));
+    if (sky.visits.length) {
+      const spectrum = foldOnPhone(m, 'spectrumOpen', t('mark.moreSpectrum'), [spectrumBlock(m, () => readSpectrum(m))]);
+      if (spectrum[0].tagName === 'DETAILS') spectrum[0].className = 'mark__more';
+      li.append(...spectrum);
+    }
     ul.append(li);
   });
   if (held?.isConnected) held.focus({ preventScroll: true });
@@ -4917,7 +4930,9 @@ function renderGateJump() {
     row.addEventListener('scroll', () => edgeRow(row), { passive: true });
     line.append(head, row);
     box.append(line);
-    requestAnimationFrame(() => edgeRow(row));
+    // Measured when the row has a size: built while the gate was still out of
+    // sight, the row had none, and its far end never faded.
+    new ResizeObserver(() => edgeRow(row)).observe(row);
   }
 }
 
@@ -5032,6 +5047,10 @@ const MODE_HINT = { blink: 'mode.blinkHint', wipe: 'mode.wipeHint', difference: 
  * up to: how many visits, and roughly how deep — the per-visit depth of the
  * band plus what averaging those visits buys.
  */
+// On a wide screen the hint gives way at its end rather than wrap (app.css): its title says all of it.
+new MutationObserver(() => { $('mode-hint').title = $('mode-hint').textContent; })
+  .observe($('mode-hint'), { childList: true, characterData: true, subtree: true });
+
 function modeHint(mode) {
   // The depth view leaves the plate on one visit: the sky says "single", the line says depth.
   if (mode === 'single' && inDepthChosen()) return t(MODE_HINT.depth);
