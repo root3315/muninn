@@ -26,7 +26,7 @@
 
 import { vecOf, radecOf, tileMesh, tileCentre } from './healpix.js';
 import {
-  ALLSKY_ORDER, ALLSKY_TILE, ALLSKY_COLUMNS, TILE_PX, HIPS_BASE, allskySlot, allskyUrl, allskyFallback, tileUrl, orderFor, tileDegrees,
+  ALLSKY_ORDER, ALLSKY_TILE, ALLSKY_COLUMNS, TILE_PX, HIPS_BASE, allskySlot, allskyUrl, irsaAllsky, allskyFallback, tileUrl, orderFor, tileDegrees,
 } from './hips.js';
 import { GALACTIC, mollweide, mollweideInverse, toGalactic, fromGalactic } from './maps.js';
 
@@ -43,6 +43,8 @@ const WANT_MAX = 140;
 const LOADS_AT_ONCE = 6;
 const KEEP_TILES = 260;
 const RETRY_MS = 8000;
+/** Detail-tile meshes kept: a few screens' worth. */
+const MESHES_KEPT = 600;
 /** How long a newly arrived image takes to come up, ms. */
 const FADE_MS = 320;
 /**
@@ -52,6 +54,8 @@ const FADE_MS = 320;
  */
 const ALLSKY_BIAS = { picked: 1.25, averaged: 0.35 };
 const ALLSKY_COUNT = 12 * 4 ** ALLSKY_ORDER;
+/** The floor sits this many noise sigmas above the median sky. */
+const FLOOR_SIGMAS = 0.8;
 const ATLAS_W = ALLSKY_COLUMNS * ALLSKY_TILE;
 const ATLAS_H = Math.ceil(ALLSKY_COUNT / ALLSKY_COLUMNS) * ALLSKY_TILE;
 
@@ -67,7 +71,10 @@ uniform bool uColour;
 uniform vec3 uLo;
 uniform vec3 uHi;
 vec3 shade(vec3 raw) {
-  vec3 x = clamp((raw - uLo) / max(uHi - uLo, vec3(1e-3)), 0.0, 1.0);
+  vec3 x = max((raw - uLo) / max(uHi - uLo, vec3(1e-3)), 0.0);
+  // Above 0.7 the light is eased toward white instead of cut at it, so the
+  // Milky Way's bright plane keeps its dust lanes and a nucleus keeps its shape.
+  x = mix(x, 0.7 + 0.3 * (1.0 - exp(-(x - 0.7) / 0.3)), step(vec3(0.7), x));
   if (!uColour) return texture(uRamp, vec2(x.r, 0.5)).rgb;
   // A star too bright for the detector is blank in the cube at the
   // wavelengths it saturated, and bright in the rest: drawn as it comes it is
@@ -99,10 +106,41 @@ precision highp float;
 in vec2 vUv;
 uniform float uAlpha;
 uniform float uBias;
+uniform vec2 uTexel;
 out vec4 outColour;
 ${SHADE}
+vec3 readAt(vec2 uv) {
+  return vec3(texture(uR, uv, uBias).r, texture(uG, uv, uBias).r, texture(uB, uv, uBias).r);
+}
 void main() {
-  vec3 raw = vec3(texture(uR, vUv, uBias).r, texture(uG, vUv, uBias).r, texture(uB, vUv, uBias).r);
+  vec3 raw = readAt(vUv);
+  // The core of a star or a nucleus too bright for the detector is blank in
+  // the cube: drawn as it comes it is a black hole, or a ring of false colour
+  // where some wavelengths saturated and others did not. Where a pixel is
+  // blank, the brightest light around it, out to 16 pixels, says how bright
+  // it is at least; the blank wavelengths are drawn at that.
+  // A blank core is a patch: the pixel and its four neighbours all blank in
+  // that wavelength. A lone 0 is the sky's noise dipping below the floor, and
+  // is left as it is.
+  vec3 empty = vec3(0.5 / 255.0);
+  bvec3 hole = lessThanEqual(raw, empty);
+  if (any(hole)) {
+    vec3 around = max(max(readAt(vUv + vec2(uTexel.x, 0.0)), readAt(vUv - vec2(uTexel.x, 0.0))),
+                      max(readAt(vUv + vec2(0.0, uTexel.y)), readAt(vUv - vec2(0.0, uTexel.y))));
+    hole = bvec3(hole.x && around.x <= empty.x, hole.y && around.y <= empty.y, hole.z && around.z <= empty.z);
+  }
+  if (any(hole)) {
+    float top = 0.0;
+    for (int r = 0; r < 3; r++) {
+      float d = r == 0 ? 3.0 : r == 1 ? 8.0 : 16.0;
+      for (int a = 0; a < 4; a++) {
+        vec2 dir = a == 0 ? vec2(1.0, 0.0) : a == 1 ? vec2(-1.0, 0.0) : a == 2 ? vec2(0.0, 1.0) : vec2(0.0, -1.0);
+        vec3 v = readAt(vUv + dir * d * uTexel);
+        top = max(top, max(v.r, max(v.g, v.b)));
+      }
+    }
+    if (top > 0.3) raw = mix(raw, vec3(max(top, max(raw.r, max(raw.g, raw.b)))), vec3(hole));
+  }
   outColour = vec4(shade(raw), uAlpha);
 }`;
 
@@ -247,7 +285,7 @@ export function unproject(x, y, { C, E, N }, k) {
 }
 
 /** Percentiles of the red channel of an image, from its histogram. */
-function levelsOf(bitmap) {
+function levelsOf(bitmap, block) {
   const c = new OffscreenCanvas(bitmap.width, bitmap.height);
   const ctx = c.getContext('2d', { willReadFrequently: true });
   ctx.drawImage(bitmap, 0, 0);
@@ -260,14 +298,19 @@ function levelsOf(bitmap) {
   // Only blocks with data count: the mosaic's unused cells and the blanked
   // cores are transparent.
   const w = bitmap.width;
-  for (let y = 0; y + 1 < bitmap.height; y += 2) {
-    for (let x = 0; x + 1 < w; x += 2) {
-      const i = (y * w + x) * 4;
-      const j = i + w * 4;
-      if (!data[i + 3] || !data[i + 7] || !data[j + 3] || !data[j + 7]) continue;
-      // Blank is 0 in the site's own Allsky, which has no alpha.
-      if (!data[i] && !data[i + 4] && !data[j] && !data[j + 4]) continue;
-      hist[(data[i] + data[i + 4] + data[j] + data[j + 4] + 2) >> 2]++;
+  for (let y = 0; y + block <= bitmap.height; y += block) {
+    for (let x = 0; x + block <= w; x += block) {
+      let sum = 0;
+      let lit = 0;
+      for (let dy = 0; dy < block; dy++) {
+        for (let dx = 0; dx < block; dx++) {
+          const i = ((y + dy) * w + x + dx) * 4;
+          // Blank is transparent in IRSA's images and 0 in the site's own.
+          if (data[i + 3] && data[i]) { sum += data[i]; lit++; }
+        }
+      }
+      if (lit < block * block) continue;
+      hist[Math.round(sum / lit)]++;
       n++;
     }
   }
@@ -281,10 +324,10 @@ function levelsOf(bitmap) {
   };
   // The floor: most of one noise sigma above the median sky, so empty sky is
   // dark instead of grain, and what stands above the noise shows.
-  // The top: the brightest two thousandths, so stars and nebulae are not all
-  // clipped to one white.
+  // The top: the brightest five ten-thousandths, with the shader's shoulder
+  // above 0.7 easing everything brighter toward white rather than clipping it.
   const sigma = pct(0.5) - pct(0.16);
-  return { lo: pct(0.5) + sigma * 0.8, hi: Math.max(pct(0.998), pct(0.5) + 0.05) };
+  return { median: pct(0.5), sigma, lo: pct(0.5) + sigma * FLOOR_SIGMAS, hi: Math.max(pct(0.9995), pct(0.5) + 0.05) };
 }
 
 /**
@@ -302,7 +345,13 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
   const map = compile(gl, MAP_VS, MAP_FS, []);
   const line = compile(gl, LINE_VS, LINE_FS, ['aPos']);
 
-  const state = { ra: 266.4, dec: -29.0, fov: 120, frames: [], grid: false, map: 0, insets: { top: 0, bottom: 0 } };
+  const state = { ra: 266.4, dec: -29.0, fov: 120, frames: [], grid: false, map: 0, insets: { top: 0, bottom: 0 }, picked: false };
+  /**
+   * The Allsky image a frame is drawn from. In a sweep through the spectrum,
+   * IRSA's for every frame: the site's averaged ones exist for six frames
+   * only, and mixed into a sweep they would flicker against the rest.
+   */
+  const skyUrl = (frame) => (state.picked ? irsaAllsky(frame) : allskyUrl(frame));
   /** The frames on screen before the last change, drawn under the new ones until those are up. */
   let previous = [];
   let previousSince = 0;
@@ -315,8 +364,10 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
   function meshVao(positions, uv, steps, count) {
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
+    const buffers = [];
     for (const [i, data, size] of [[0, positions, 3], [1, uv, 2]]) {
-      gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+      buffers.push(gl.createBuffer());
+      gl.bindBuffer(gl.ARRAY_BUFFER, buffers[buffers.length - 1]);
       gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
       gl.enableVertexAttribArray(i);
       gl.vertexAttribPointer(i, size, gl.FLOAT, false, 0, 0);
@@ -335,10 +386,11 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
         }
       }
     }
-    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
+    buffers.push(gl.createBuffer());
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, buffers[2]);
     gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, idx, gl.STATIC_DRAW);
     gl.bindVertexArray(null);
-    return { vao, perTile };
+    return { vao, perTile, buffers, used: 0 };
   }
 
   // The Allsky mosaic: every order-3 tile pointing into its 64-pixel cell of
@@ -447,8 +499,10 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
       img.state = 'queued';
       queue.push(url);
     }
+    // The priority of this draw, not the best one ever asked: a frame passed
+    // over in a sweep must not stay ahead of the one now on screen.
+    img.priority = img.used === use ? Math.min(img.priority, priority) : priority;
     img.used = use;
-    img.priority = Math.min(img.priority, priority);
     return img;
   }
 
@@ -473,11 +527,14 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
       try {
         const res = await fetch(relay(url));
         if (res.ok && (res.headers.get('content-type') ?? '').startsWith('image/')) return res.blob();
-        // A static host answers its own page, or nothing, for a path it does not have.
+        const fromRelay = Boolean(res.headers.get('x-muninn-hips'));
+        // The relay says so when it is the one answering: then a 404 is a
+        // tile the cube does not have, and IRSA would say the same.
+        if (fromRelay && res.status === 404) throw new Error('404');
         // No such route (a static host's 404, or its own page sent as 200):
-        // there is no relay, and it is not asked again. A 5xx is IRSA's bad
-        // minute behind the relay; this one image goes straight to IRSA.
-        if (res.status === 404 || res.ok) relayWorks = false;
+        // there is no relay, and it is not asked again. A 5xx or a busy relay
+        // is IRSA's bad minute; this one image goes straight to IRSA.
+        if (!fromRelay && (res.status === 404 || res.ok)) relayWorks = false;
       } catch { /* the relay is down: IRSA itself */ }
     }
     const res = await fetch(url, { mode: 'cors' });
@@ -493,7 +550,15 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
       const bitmap = await createImageBitmap(await fetchImage(url, img), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
       if (disposed) return;
       if (img.allsky) {
-        img.levels = levelsOf(bitmap);
+        // IRSA's Allsky is single pixels, shown averaged about 4 × 4; the site's
+        // own is averaged already. Each is measured as it is shown.
+        const block = img.averaged && !img.fellBack ? 1 : 4;
+        img.levels = levelsOf(bitmap, block);
+        // The tiles' floor is set against their own grain, which is coarser
+        // than the Allsky's as measured: about four times the averaged image's
+        // spread, twice the spread of IRSA's read in 4 × 4 blocks. Measured by
+        // eye on M31, M42 and the galactic plane against the frames as served.
+        img.levels.tileSigma = img.levels.sigma * (block === 1 ? 4 : 2);
         // Averaged or picked is a property of what came, not of what was asked for.
         img.averaged = img.averaged && !img.fellBack;
       }
@@ -504,6 +569,8 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     } catch {
       img.state = 'failed';
       img.retryAt = performance.now() + RETRY_MS;
+      // Nothing else may move the view before then: the retry comes by itself.
+      setTimeout(redraw, RETRY_MS + 50);
     } finally {
       loading--;
       pump();
@@ -514,7 +581,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
   function pump() {
     for (let i = queue.length - 1; i >= 0; i--) {
       const img = images.get(queue[i]);
-      if (img.used < use - 1 && !img.allsky) {
+      if (img.used < use - 1) {
         images.delete(queue[i]);
         queue.splice(i, 1);
       }
@@ -524,7 +591,10 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
   }
 
   function evict() {
-    const ready = [...images.entries()].filter(([, v]) => v.state === 'ready');
+    // A failed image nobody asks for any more is forgotten, not kept to retry.
+    for (const [url, v] of images) if (v.state === 'failed' && v.used < use - 1) images.delete(url);
+    // What is on screen now, or was a frame ago, is never let go, whatever the budget.
+    const ready = [...images.entries()].filter(([, v]) => v.state === 'ready' && v.used < use - 1);
     const allskies = ready.filter(([, v]) => v.allsky);
     const tiles = ready.filter(([, v]) => !v.allsky);
     // Allsky images are a megabyte each and a sweep through the spectrum passes
@@ -535,6 +605,15 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
       for (const [url, v] of list.slice(0, list.length - keep)) {
         gl.deleteTexture(v.tex);
         images.delete(url);
+      }
+    }
+    // Each detail tile's mesh too, once there are many and it is long off screen.
+    if (meshes.size > MESHES_KEPT) {
+      const old = [...meshes.entries()].filter(([, m]) => m.used < use - 1).sort((a, b) => a[1].used - b[1].used);
+      for (const [key, m] of old.slice(0, meshes.size - MESHES_KEPT)) {
+        gl.deleteVertexArray(m.vao);
+        for (const b of m.buffers) gl.deleteBuffer(b);
+        meshes.delete(key);
       }
     }
   }
@@ -652,7 +731,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
    */
   function drawSphereLayer(frames, cam, now, fetch, alpha) {
     const out = { wanted: 0, have: 0, fading: false, base: false };
-    const sky = fetch ? layerOf(frames.map(allskyUrl), -1) : { imgs: frames.map((f) => images.get(allskyUrl(f))) };
+    const sky = fetch ? layerOf(frames.map(skyUrl), -1) : { imgs: frames.map((f) => images.get(skyUrl(f))) };
     const skyReady = sky.imgs.every((i) => i?.state === 'ready');
     out.wanted += frames.length;
     useSphere(cam);
@@ -666,17 +745,24 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
       // field they show as grain. Read a little down the mipmap, the grain
       // averages out and the light stays; the sharp tiles above are read as they are.
       gl.uniform1f(sphere.u.Bias, sky.imgs.every((i) => i.averaged) ? ALLSKY_BIAS.averaged : ALLSKY_BIAS.picked);
+      gl.uniform2f(sphere.u.Texel, 1 / ATLAS_W, 1 / ATLAS_H);
       drawAllsky(cam);
       gl.uniform1f(sphere.u.Bias, 0);
     } else if (!fetch) {
       return out;
     }
     // Without its Allsky a tile is still drawn, at levels that pass IRSA's stretch through.
-    const levels = skyReady ? sky.imgs : frames.map(() => ({ levels: { lo: 0.06, hi: 0.9 } }));
+    const passThrough = frames.map(() => ({ levels: { lo: 0.06, hi: 0.9 } }));
+    // A tile's floor, from its Allsky's, set against the tiles' own grain.
+    const tileLevels = skyReady
+      ? sky.imgs.map((i) => ({ levels: { lo: Math.min(i.levels.median + i.levels.tileSigma * FLOOR_SIGMAS, i.levels.hi - 0.05), hi: i.levels.hi } }))
+      : passThrough;
 
     const target = orderFor(state.fov / cam.short);
     if (target === null) return out;
+    gl.uniform2f(sphere.u.Texel, 1 / TILE_PX, 1 / TILE_PX);
     for (let order = ALLSKY_ORDER; order <= target; order++) {
+      const levels = tileLevels;
       for (const { n, near } of visibleTiles(order, cam)) {
         const urls = frames.map((f) => tileUrl(order, n, f));
         const imgs = urls.map((u) => (fetch && order === target ? want(u, near) : images.get(u)));
@@ -690,6 +776,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
         // sky around it are set alike.
         bindLayer(sphere, imgs, f, levels);
         const mesh = tileVao(order, n);
+        mesh.used = use;
         gl.bindVertexArray(mesh.vao);
         gl.drawElements(gl.TRIANGLES, mesh.perTile, gl.UNSIGNED_INT, 0);
       }
@@ -699,7 +786,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
 
   function drawMapLayer(frames, cam, now, fetch, alpha) {
     const out = { wanted: frames.length, have: 0, fading: false, base: false };
-    const imgs = frames.map((f) => (fetch ? want(allskyUrl(f), -1, { allsky: true }) : images.get(allskyUrl(f))));
+    const imgs = frames.map((f) => (fetch ? want(skyUrl(f), -1, { allsky: true }) : images.get(skyUrl(f))));
     if (!imgs.every((i) => i?.state === 'ready')) return out;
     out.have = frames.length;
     out.base = true;
@@ -765,7 +852,19 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
 
   function drawLines(cam, inMap, alpha) {
     const grid = [];
-    if (!inMap) {
+    if (inMap) {
+      // On the map, the galaxy's own lines: latitude every 30°, longitude every 60°.
+      for (let b = -60; b <= 60; b += 30) {
+        const pts = [];
+        for (let l = 0; l <= 360; l += 1) pts.push(fromGalactic(vecOf(l, b)));
+        grid.push(pts);
+      }
+      for (let l = 0; l < 360; l += 60) {
+        const pts = [];
+        for (let b = -90; b <= 90; b += 1) pts.push(fromGalactic(vecOf(l, b)));
+        grid.push(pts);
+      }
+    } else {
       const step = gridStep(state.fov);
       const raStep = state.fov > 60 ? 30 : step;
       const fine = Math.min(step / 8, 1);
@@ -825,7 +924,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
       if (m < 1) layer(drawSphereLayer, 1);
       if (m > 0) layer(drawMapLayer, m);
       // Ask ahead for what comes next in a sweep, after everything on screen.
-      for (const f of prefetch) want(allskyUrl(f), 5, { allsky: true });
+      for (const f of prefetch) want(skyUrl(f), 5, { allsky: true });
       pump();
       evict();
     }
@@ -838,7 +937,12 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     gl.bindVertexArray(null);
     if (result.fading || previous.length) redraw();
     const failed = [...images.values()].filter((i) => i.state === 'failed' && i.used >= use).length;
-    onChange({ wanted: result.wanted, have: result.have, failed, complete: result.base && result.have >= result.wanted && !result.fading });
+    onChange({
+      wanted: result.wanted, have: result.have, failed,
+      complete: result.base && result.have >= result.wanted && !result.fading,
+      // The whole sky of the frame is up, whatever detail is still coming.
+      based: result.base && !result.fading,
+    });
   }
 
   function redraw() {
@@ -867,7 +971,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     /** One frame for a single wavelength, three (red, green, blue) for colour. */
     setFrames(frames) {
       if (frames.join() === state.frames.join()) return;
-      const sky = state.frames.map((f) => images.get(allskyUrl(f)));
+      const sky = state.frames.map((f) => images.get(skyUrl(f)));
       if (state.frames.length && sky.every((i) => i?.state === 'ready')) {
         previous = state.frames;
         previousSince = performance.now();
@@ -878,6 +982,8 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     /** Frames to have ready before they are asked for. */
     setPrefetch(frames) { prefetch = frames; redraw(); },
     setGrid(on) { state.grid = on; redraw(); },
+    /** Draw every frame from IRSA's own Allsky (for a sweep), or from the site's where it has one. */
+    setPicked(on) { state.picked = on; redraw(); },
     /** CSS pixels kept clear of the map at the top and bottom. */
     setInsets(insets) { state.insets = insets; redraw(); },
     /** The sky under a point of the canvas (CSS pixels), in whichever view is showing; null off the map. */

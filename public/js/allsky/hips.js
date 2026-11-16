@@ -45,7 +45,7 @@ export const bandFrame = (band) => frameOf(band, 9);
 
 /**
  * The colour view: three real frames, one per display channel, short to long.
- * Blue 0.91 µm (D1), green 1.99 µm (D3), red 4.64 µm (D6). The colours are a
+ * Blue 0.91 µm (D1), green 2.00 µm (D3), red 4.70 µm (D6). The colours are a
  * convention — all three are infrared — but each is a measurement.
  */
 export const COLOUR_FRAMES = [bandFrame(6), bandFrame(3), bandFrame(1)];
@@ -66,7 +66,7 @@ export function tileUrl(order, npix, frame) {
  */
 export const AVERAGED_FRAMES = new Set([8, 25, 42, 59, 76, 93]);
 
-const irsaAllsky = (frame) => `${HIPS_BASE}/Norder${ALLSKY_ORDER}/Allsky${suffix(frame)}.png`;
+export const irsaAllsky = (frame) => `${HIPS_BASE}/Norder${ALLSKY_ORDER}/Allsky${suffix(frame)}.png`;
 
 export const allskyUrl = (frame) => (AVERAGED_FRAMES.has(frame) ? `data/allsky/Allsky_${frame}.png` : irsaAllsky(frame));
 

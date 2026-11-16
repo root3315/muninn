@@ -248,14 +248,20 @@ button.as-toggle:active { transform: scale(0.97); }
 body:not([data-map="true"]) .as-read--map { display: none; }
 /* On the map, a ready field is a point among many: the ring smaller, the name quieter. */
 body[data-map="true"] .as-ring__dot { inline-size: 12px; block-size: 12px; margin: -6px 0 0 -6px; }
-body[data-map="true"] .as-ring__name { margin-block-start: -6px; font-size: var(--text-2xs); opacity: 0.85; }
+body[data-map="true"] .as-ring__name {
+  margin-block-start: -6px; font-size: var(--text-2xs);
+  /* A line of the grid or the ecliptic may run under a name: it gets a ground of its own. */
+  background: var(--gate-veil-deep); text-shadow: none;
+}
 
 @media (max-width: 640px) {
   .bar__title { display: none; }
   .as-dock { padding: var(--space-xs) var(--space-sm); gap: var(--space-2xs); }
   .as-band { padding-inline: var(--space-xs); }
   .as-open { margin-inline-start: 0; flex: 1 1 100%; }
-  .as-read--credit, .as-read--map { display: none !important; }
+  .as-read--map { display: none !important; }
+  /* The credit stays on a phone too: NASA's data, IRSA's survey. */
+  .as-read--credit { margin-inline-start: 0; font-size: var(--text-2xs); }
   .as-zoom { display: none; }
   /* On a phone the map is small: the fields are dots, named on the sphere. */
   body[data-map="true"] .as-ring__name { display: none; }

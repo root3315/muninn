@@ -23,6 +23,7 @@ import {
 const $ = (id) => document.getElementById(id);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const touch = matchMedia('(pointer: coarse)').matches;
+const narrow = matchMedia('(max-width: 640px)');
 
 /** Where the sphere opens when nothing says otherwise: where the front page's sky does. */
 const OPENING = { ra: 266, dec: -12, fov: 78 };
@@ -66,6 +67,7 @@ let hashTimer = 0;
 function writeHash() {
   clearTimeout(hashTimer);
   hashTimer = setTimeout(() => {
+    if (!view) return;
     const s = view.state;
     const p = new URLSearchParams({ ra: s.ra.toFixed(4), dec: s.dec.toFixed(4), fov: s.fov.toPrecision(3), view: String(current) });
     if (s.map >= 0.5) p.set('map', '1');
@@ -160,7 +162,7 @@ $('grid').addEventListener('change', (e) => view?.setGrid(e.target.checked));
 const STEP_MS = 380;
 let playing = false;
 let lastStep = 0;
-let complete = false;
+let based = false;
 
 function setPlay(on) {
   playing = on;
@@ -170,6 +172,7 @@ function setPlay(on) {
     showView();
   }
   lastStep = performance.now();
+  view?.setPicked(on);
   view?.setPrefetch(on ? ahead() : []);
   if (on) tickPlay();
 }
@@ -186,10 +189,10 @@ function ahead() {
 function tickPlay() {
   if (!playing) return;
   const now = performance.now();
-  if (complete && now - lastStep >= STEP_MS) {
+  if (based && now - lastStep >= STEP_MS) {
     current = FRAMES[(FRAMES.indexOf(current) + 1) % FRAMES.length];
     lastStep = now;
-    complete = false;
+    based = false;
     showView();
     view.setPrefetch(ahead());
   }
@@ -201,9 +204,15 @@ $('play').addEventListener('click', () => setPlay(!playing));
 /* ---- moving about ------------------------------------------------------ */
 
 let motion = 0;
+/** Stop whatever is moving the view: an animation, a fling still coasting, a wheel still gliding. */
 function stopMotion() {
   cancelAnimationFrame(motion);
   motion = 0;
+  cancelAnimationFrame(coast);
+  coast = 0;
+  cancelAnimationFrame(zoomLoop);
+  zoomLoop = 0;
+  pendingZoom = 0;
 }
 
 /** Animate from the view now to `to` (any of ra, dec, fov, map) over `ms`. */
@@ -253,15 +262,24 @@ function dive(at, fov = DIVE_FOV) {
   animate({ ra: at.ra, dec: at.dec, fov, map: 0 }, 1100, { arc: false });
 }
 
+/** Where the sphere was before the map, to go back to. */
+let beforeMap = null;
+
 /** From the sphere out to the whole sky. */
 function surface() {
+  const s = view.state;
+  beforeMap = { ra: s.ra, dec: s.dec, fov: s.fov };
   animate({ fov: FOV_MAX, map: 1 }, 900, { arc: false });
 }
 
 $('whole').addEventListener('click', () => {
   if (!view) return;
-  if (inMap()) dive(view.state, 60);
-  else surface();
+  if (!inMap()) {
+    surface();
+    return;
+  }
+  const back = beforeMap ?? { ...view.state, fov: 60 };
+  dive(back, back.fov);
 });
 
 /** Zoom by a factor, keeping the sky under (px, py) where it is. */
@@ -330,7 +348,6 @@ canvas.addEventListener('pointerdown', (e) => {
     pinchFrom = Math.hypot(a.x - b.x, a.y - b.y);
   }
   stopMotion();
-  cancelAnimationFrame(coast);
   hideHint();
 });
 
@@ -458,7 +475,10 @@ function showRead(px, py) {
     return;
   }
   const g = galacticOf(at.ra, at.dec);
-  const where = `${formatRA(at.ra)}  ${formatDec(at.dec)}  ·  ${t('allsky.gal', { l: fmt(g.l, 1), b: fmt(g.b, 1) })}`;
+  // On a phone the line keeps to one row: minutes, not seconds.
+  const where = narrow.matches
+    ? `${formatRA(at.ra).slice(0, 8)} ${formatDec(at.dec).slice(0, 8)} · ${t('allsky.gal', { l: fmt(g.l, 0), b: fmt(g.b, 0) })}`
+    : `${formatRA(at.ra)}  ${formatDec(at.dec)}  ·  ${t('allsky.gal', { l: fmt(g.l, 1), b: fmt(g.b, 1) })}`;
   $('read').textContent = map ? where : `${where}  ·  ${t('allsky.fov')} ${fovText(s.fov)}`;
 }
 
@@ -523,8 +543,8 @@ $('open').addEventListener('click', () => {
 /* ---- after every redraw ------------------------------------------------ */
 
 let wasMap = null;
-function afterDraw({ wanted, have, failed, complete: done }) {
-  complete = done;
+function afterDraw({ wanted, have, failed, based: up }) {
+  based = up;
   placeRings();
   const s = view.state;
   const map = s.map >= 0.5;
@@ -534,6 +554,7 @@ function afterDraw({ wanted, have, failed, complete: done }) {
     wasMap = map;
     $('whole').setAttribute('aria-pressed', String(map));
     $('open').disabled = map;
+    $('open').title = t(map ? 'allsky.openMap' : 'allsky.openWhen');
     sayHint();
   }
   const status = $('status');
@@ -542,7 +563,7 @@ function afterDraw({ wanted, have, failed, complete: done }) {
   else status.textContent = '';
   status.dataset.bad = String(failed > 0);
   if (lastRead) showRead(...lastRead);
-  else if (!map) showRead(null);
+  else showRead(null);
 }
 
 /* ---- room for the map -------------------------------------------------- */
