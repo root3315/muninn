@@ -13,7 +13,7 @@
  * the mission was built around is something you should be able to see.
  */
 
-import { openWorld, wireWorld } from './world.js';
+import { openWorld, wireWorld, preloadWorld } from './world.js';
 import { t, tIn, setLanguage, getLanguage, applyTranslations, fmt, fmtDate, fmtDay, fmtTime } from './i18n.js';
 import { skySigma, stackDepth, shortfall, limitAB, PLANET_NINE_V } from './depth.js';
 import { scoreSectors, standouts, SECTOR_COUNT } from './sectors.js';
@@ -4794,7 +4794,12 @@ async function buildGate() {
     onPick: (hit) => { gate.select(hit); showCard(hit); },
     onName: nameOnSky,
     // The colophon names what is drawn: the survey once it is here.
-    onSurvey: showSkyCredit,
+    onSurvey: () => {
+      showSkyCredit();
+      // The sky is up: now, in the background, the layers it opens onto.
+      preloadWorld('allsky', getLanguage());
+      setTimeout(() => preloadWorld('fly', getLanguage()), 4000);
+    },
   });
   window.addEventListener('resize', () => { if (!$('gate').hidden) gate.resize(); });
   // On a phone the sky is the space between the bar and the panel under it,

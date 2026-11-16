@@ -575,6 +575,16 @@ if (view) {
 applyLanguage();
 // The hint says how to hold the sky once; it does not stay in front of it.
 setTimeout(hideHint, 9000);
+// Inside the front page: pointed where it faces, at the width it had.
+addEventListener('message', (e) => {
+  if (e.origin !== location.origin || e.data?.type !== 'muninn:look' || !view) return;
+  const { ra, dec, fov } = e.data;
+  if (![ra, dec].every(Number.isFinite)) return;
+  view.set({ ra, dec, fov: Number.isFinite(fov) ? Math.min(FOV_MAX, fov) : view.state.fov, map: 0 });
+  writeHash();
+});
+if (embedded) hideHint();
+
 window.addEventListener('hashchange', () => {
   const s = readHash();
   view?.set(s.map ? { ...s, fov: FOV_MAX } : s);

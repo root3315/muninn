@@ -1917,7 +1917,7 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .world {
   position: fixed; inset: 0; z-index: var(--z-modal);
   background: var(--color-well);
-  opacity: 0; transition: opacity var(--dur-long) var(--ease-out);
+  opacity: 0; transition: opacity 600ms var(--ease-in-out);
 }
 .world[hidden] { display: none; }
 .world--on { opacity: 1; }
@@ -1949,8 +1949,11 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .scale-hint {
   position: absolute; z-index: 6; margin: 0;
   inset-inline: 0; margin-inline: auto; inline-size: fit-content; max-inline-size: calc(100% - 2rem);
-  inset-block-start: calc(var(--gate-bar, 3.5rem) + 0.75rem);
+  inset-block-start: 0.85rem;
   padding: var(--space-2xs) var(--space-md); border-radius: var(--radius-round);
   background: var(--gate-veil-deep); color: var(--color-muted);
   font-size: var(--text-xs); text-align: center; pointer-events: none;
+}
+@media (max-width: 48rem) and (min-height: 30.0625rem) {
+  .scale-hint { inset-block-start: calc(var(--gate-bar, 3.5rem) + 0.25rem); font-size: var(--text-2xs); }
 }

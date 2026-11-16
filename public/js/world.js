@@ -1,27 +1,46 @@
 /**
  * world.js — the whole sky and the flight as layers of the front page.
  *
- * "The whole sky" and "Fly among the stars" open over the front page's sky,
- * facing where it faces, and close back onto it: one place, entered at
- * different scales, not three pages. Zooming the front page's sky out past
- * its widest steps out into the flight. A link into the tool from either
- * opens that field here, underneath, by the front page's own address.
+ * Zooming the front page's sky in past its narrowest opens SPHEREx's
+ * whole-sky detail facing the same way; zooming it out past its widest steps
+ * into space. Each layer is loaded once, in the background, before it is
+ * wanted, so going in or out is a crossfade over a sky already drawn, not a
+ * black screen while a page loads. A link into the tool from a layer opens
+ * that field here, by the front page's own address.
  */
 
-let layer = null;
-let frame = null;
+const KINDS = { allsky: 'allsky.html', fly: 'fly.html' };
+const layers = {};
 let current = null;
 
-function ensureLayer() {
-  if (layer) return;
-  layer = document.createElement('div');
-  layer.className = 'world';
-  layer.hidden = true;
-  frame = document.createElement('iframe');
+function layerOf(kind, lang) {
+  if (layers[kind]) return layers[kind];
+  const el = document.createElement('div');
+  el.className = 'world';
+  el.hidden = true;
+  const frame = document.createElement('iframe');
   frame.className = 'world__frame';
-  frame.setAttribute('allow', 'fullscreen');
-  layer.append(frame);
-  document.body.append(layer);
+  frame.setAttribute('aria-hidden', 'true');
+  const url = new URL(KINDS[kind], location.href);
+  url.searchParams.set('embed', '1');
+  if (lang) url.searchParams.set('lang', lang);
+  frame.src = url.href;
+  el.append(frame);
+  document.body.append(el);
+  layers[kind] = { el, frame };
+  return layers[kind];
+}
+
+/** Load a layer now, out of sight, so opening it later is immediate. */
+export function preloadWorld(kind, lang) {
+  layerOf(kind, lang);
+}
+
+/** Point a loaded layer where the front page faces. */
+function aim(kind, look) {
+  const { frame } = layers[kind];
+  if (!look || !frame.contentWindow) return;
+  frame.contentWindow.postMessage({ type: 'muninn:look', ra: look.ra, dec: look.dec, fov: look.fov }, location.origin);
 }
 
 /**
@@ -29,32 +48,33 @@ function ensureLayer() {
  * page faces, { ra, dec, fov }; `lang` the page's language.
  */
 export function openWorld(kind, look, lang) {
-  ensureLayer();
-  const url = new URL(kind === 'fly' ? 'fly.html' : 'allsky.html', location.href);
-  url.searchParams.set('embed', '1');
-  if (lang) url.searchParams.set('lang', lang);
-  if (look) {
-    url.hash = kind === 'fly'
-      ? `look=${look.ra.toFixed(3)},${look.dec.toFixed(3)}`
-      : `ra=${look.ra.toFixed(4)}&dec=${look.dec.toFixed(4)}&fov=${Math.min(100, look.fov ?? 78).toFixed(1)}&view=colour`;
-  }
-  // The same layer again is shown as it was left.
-  if (current !== kind || frame.src === '') frame.src = url.href;
+  const layer = layerOf(kind, lang);
+  aim(kind, look);
+  // A layer still loading is aimed again once it has.
+  layer.frame.addEventListener('load', () => aim(kind, look), { once: true });
+  for (const [k, l] of Object.entries(layers)) if (k !== kind) hide(l);
   current = kind;
-  layer.hidden = false;
-  requestAnimationFrame(() => layer.classList.add('world--on'));
-  frame.focus();
+  layer.el.hidden = false;
+  layer.frame.removeAttribute('aria-hidden');
+  requestAnimationFrame(() => requestAnimationFrame(() => layer.el.classList.add('world--on')));
+  layer.frame.focus();
+}
+
+function hide(layer) {
+  if (!layer || layer.el.hidden) return;
+  layer.el.classList.remove('world--on');
+  layer.frame.setAttribute('aria-hidden', 'true');
+  const done = () => { if (!layer.el.classList.contains('world--on')) layer.el.hidden = true; };
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) done();
+  else setTimeout(done, 650);
 }
 
 export function closeWorld() {
-  if (!layer || layer.hidden) return;
-  layer.classList.remove('world--on');
-  const done = () => { layer.hidden = true; };
-  if (matchMedia('(prefers-reduced-motion: reduce)').matches) done();
-  else setTimeout(done, 320);
+  if (current) hide(layers[current]);
+  current = null;
 }
 
-export const worldOpen = () => Boolean(layer && !layer.hidden);
+export const worldOpen = () => current !== null;
 
 /** How the front page opens a layer, and what it does when one hands back a direction. */
 let lookNow = () => null;

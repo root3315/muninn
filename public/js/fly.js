@@ -29,6 +29,16 @@ const FOV = 70;
 /** Speed bounds, parsecs a second: from a few AU a second to a kiloparsec in ten seconds. */
 const SPEED_MIN = 0.00005;
 const SPEED_MAX = 100;
+/**
+ * How fast "forward" is: this many times the distance to the nearest surface,
+ * each second. Beside the Moon that is kilometres a second, among the stars
+ * light years: the speed suits the scale wherever the camera is.
+ */
+const FACTOR_MIN = 0.02;
+const FACTOR_MAX = 20;
+let factor = 0.5;
+/** Distance from the camera to the nearest body's surface, parsecs; worked out each frame. */
+let gap = 1;
 /** The autopilot stops this many of a star's radii from its centre: a disc a fifth of the sky across. */
 const STOP_RADII = 6;
 /** Bytes a star in stars.bin: float x, y, z; int16 magnitude, colour; int32 Hipparcos number. */
@@ -194,8 +204,10 @@ let starCount = 0;
 let proj = null;
 let card = null;
 let lastNear = null;
+/** Whether the address said where the camera is. */
+let hashPlaced = false;
 /** The reach shells and Planet Nine's region on screen; the sky at 4.6 µm instead of in V. */
-const view = { reach: true, ir: false };
+const view = { reach: false, ir: false };
 let last = performance.now();
 const keys = new Set();
 const hold = { forward: false, back: false };
@@ -203,7 +215,10 @@ const hold = { forward: false, back: false };
 function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));
   const xyz = ['x', 'y', 'z'].map((k) => Number(p.get(k)));
-  if (xyz.every(Number.isFinite)) cam.eye = xyz;
+  if (xyz.every(Number.isFinite)) {
+    cam.eye = xyz;
+    hashPlaced = true;
+  }
   // Opened from the front page: facing where its sky faced.
   const look = (p.get('look') ?? '').split(',').map(Number);
   if (look.length === 2 && look.every(Number.isFinite)) {
@@ -298,6 +313,7 @@ function flyTo(s) {
       : Math.max(radiusPc(s) * STOP_RADII, 5 * AU_PC);
   const dir = norm(sub(to, cam.eye));
   const end = away > stop ? add(to, dir, -stop) : cam.eye;
+  if (s.key === 'wise0855') showReach();
   autopilot = {
     home: s.key === 'earth',
     // A planet moves while the camera flies to it: the end is followed.
@@ -333,7 +349,7 @@ function steer(dt) {
         return;
       }
       // Arrived: slow enough to fly round the star rather than past it.
-      setSpeed(autopilot.stop);
+      factor = 0.5;
       if (autopilot.body >= 0) carried = { index: autopilot.body, offset: sub(cam.eye, posOf(autopilot.body)) };
       autopilot = null;
       writeHash();
@@ -350,7 +366,8 @@ function steer(dt) {
     carried = null;
     const boost = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 5 : 1;
     const R = cross(cam.F, cam.U);
-    cam.eye = add(add(cam.eye, cam.F, move * cam.speed * boost * dt), R, side * cam.speed * boost * dt);
+    const v = currentSpeed() * boost * dt;
+    cam.eye = add(add(cam.eye, cam.F, move * v), R, side * v);
     writeHash();
   }
 }
@@ -368,13 +385,19 @@ function nearestStar() {
   const p = stars.pos;
   const focalPx = (canvas.clientHeight * Math.min(devicePixelRatio || 1, 2) / 2) / Math.tan((FOV * Math.PI) / 360);
   const found = [];
+  let nearestGap = Infinity;
   for (let i = 0; i < stars.mag.length; i++) {
     // WISE 0855 has no light to see: it is never a disc.
     if (i === stars.dark) continue;
     const dx = p[i * 3] - ex;
     const dy = p[i * 3 + 1] - ey;
     const dz = p[i * 3 + 2] - ez;
-    const k = stars.rad[i] / Math.sqrt(dx * dx + dy * dy + dz * dz + 1e-40);
+    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz + 1e-40);
+    const k = stars.rad[i] / dist;
+    nearestGap = Math.min(nearestGap, Math.max(dist - stars.rad[i] * R_SUN_PC, 1e-12));
+    // The camera inside a body (it starts nowhere near one, but a flight can
+    // pass through): that body is not drawn round it.
+    if (dist < stars.rad[i] * R_SUN_PC) continue;
     found.push([k, i]);
     if (found.length > 64) {
       found.sort((a, b) => b[0] - a[0]);
@@ -382,6 +405,7 @@ function nearestStar() {
     }
   }
   found.sort((a, b) => b[0] - a[0]);
+  gap = Number.isFinite(nearestGap) ? nearestGap : 1;
   const px = (k) => k * R_SUN_PC * focalPx;
   const chosen = found.filter(([k], n) => n < 2 || px(k) >= 0.5).slice(0, 12);
   // In double precision: the GPU's single precision is a few AU at a few
@@ -414,7 +438,7 @@ function readout() {
   }
   $('read').textContent = [
     t('fly.fromSun', { d: distanceText(fromSun) }),
-    speedText(cam.speed),
+    speedText(currentSpeed()),
     nearName && t('fly.nearest', { name: nameOf(nearName), d: distanceText(nearD) }),
   ].filter(Boolean).join('  ·  ');
 }
@@ -646,8 +670,17 @@ canvas.addEventListener('pointercancel', (e) => pointers.delete(e.pointerId));
 
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
-  setSpeed(cam.speed * Math.exp(-e.deltaY / 500));
+  setFactor(factor * Math.exp(-e.deltaY / 500));
 }, { passive: false });
+
+/** Parsecs a second, now. */
+function currentSpeed() {
+  return Math.max(1e-12, Math.min(SPEED_MAX, factor * gap));
+}
+
+function setFactor(v) {
+  factor = Math.max(FACTOR_MIN, Math.min(FACTOR_MAX, v));
+}
 
 function setSpeed(v) {
   cam.speed = Math.max(SPEED_MIN * 1e-3, Math.min(SPEED_MAX, v));
@@ -657,8 +690,8 @@ addEventListener('keydown', (e) => {
   if (e.target.closest?.('input')) return;
   if (e.code === 'Escape') closeCard();
   keys.add(e.code);
-  if (e.code === 'Equal' || e.code === 'NumpadAdd') setSpeed(cam.speed * 2);
-  if (e.code === 'Minus' || e.code === 'NumpadSubtract') setSpeed(cam.speed / 2);
+  if (e.code === 'Equal' || e.code === 'NumpadAdd') setFactor(factor * 2);
+  if (e.code === 'Minus' || e.code === 'NumpadSubtract') setFactor(factor / 2);
   if (e.code.startsWith('Arrow')) e.preventDefault();
   if (['KeyW', 'KeyS', 'KeyA', 'KeyD'].includes(e.code) || e.code.startsWith('Arrow')) autopilot = null;
 });
@@ -671,8 +704,8 @@ for (const [id, k] of [['go-forward', 'forward'], ['go-back', 'back']]) {
   b.addEventListener('pointerdown', on(true));
   for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(ev, on(false));
 }
-$('faster').addEventListener('click', () => setSpeed(cam.speed * 4));
-$('slower').addEventListener('click', () => setSpeed(cam.speed / 4));
+$('faster').addEventListener('click', () => setFactor(factor * 3));
+$('slower').addEventListener('click', () => setFactor(factor / 3));
 
 /* ---- what SPHEREx can reach, and where Planet Nine would be --------- */
 
@@ -786,6 +819,11 @@ function placeMarks() {
 
 /** Planet Nine's region as a destination: above the Sun's plane, looking down on it. */
 const P9 = { key: 'p9', index: -1, pos: eclipticPoint(1, 0, 0).map(() => 0), en: 'Planet Nine (region)', ru: 'Планета Девять (зона)' };
+function showReach() {
+  view.reach = true;
+  $('reach').setAttribute('aria-pressed', 'true');
+}
+
 function flyToPlanetNine() {
   closeCard();
   const above = eclipticPoint(2400 * AU, 200, 55);
@@ -802,6 +840,25 @@ $('ir').addEventListener('click', () => {
   view.ir = !view.ir;
   $('ir').setAttribute('aria-pressed', String(view.ir));
   $('read-note').textContent = view.ir ? t('fly.irNote') : '';
+});
+
+// Inside the front page: out from the Earth, facing where its sky faced.
+addEventListener('message', (e) => {
+  if (e.origin !== location.origin || e.data?.type !== 'muninn:look' || !stars) return;
+  const { ra, dec } = e.data;
+  if (![ra, dec].every(Number.isFinite)) return;
+  autopilot = null;
+  closeCard();
+  cam.F = direction(ra, dec);
+  cam.U = [0, 0, 1];
+  orthonormal();
+  const earth = named.find((x) => x.key === 'earth');
+  if (earth) {
+    const at = posOf(earth.index);
+    cam.eye = add(at, cam.F, 3 * stars.rad[earth.index] * R_SUN_PC);
+    carried = { index: earth.index, offset: sub(cam.eye, at) };
+  }
+  factor = 0.5;
 });
 
 /** On the Earth again: its sky, facing where the camera faces. */
@@ -837,6 +894,17 @@ if (!space) {
   stars = data.stars;
   sunIndex = data.sun;
   named = data.named;
+  // Out from the Earth's sky, the camera is where the Earth is: three Earth
+  // radii out, the Earth behind it, the same sky ahead, carried with it.
+  if (!hashPlaced) {
+    const earth = named.find((x) => x.key === 'earth');
+    if (earth) {
+      const at = posOf(earth.index);
+      const r = stars.rad[earth.index] * R_SUN_PC;
+      cam.eye = add(at, cam.F, 3 * r);
+      carried = { index: earth.index, offset: sub(cam.eye, at) };
+    }
+  }
   starCount = data.count;
   buildLabels();
   buildReach();
