@@ -326,6 +326,7 @@ function flyTo(s) {
 }
 
 function steer(dt) {
+  if (stepPullOut()) return;
   if (autopilot && autopilot.body >= 0) {
     const to = posOf(autopilot.body);
     const dir = norm(sub(to, autopilot.from));
@@ -674,6 +675,11 @@ function openCard(entry) {
     frames.href = url.href;
   }
   const host = i >= 0 ? exo.find((x) => x.index === i) : null;
+  // A star with planets is shown as the system it is.
+  if (host && !entry.starOnly) {
+    openSystemCard(host);
+    return;
+  }
   const ev = $('card-exo');
   ev.hidden = !host;
   if (host) {
@@ -934,10 +940,39 @@ function lookFromEarth(ra, dec) {
   const earth = named.find((x) => x.key === 'earth');
   if (earth) {
     const at = posOf(earth.index);
-    cam.eye = add(at, cam.F, 3 * stars.rad[earth.index] * R_SUN_PC);
+    const r = stars.rad[earth.index] * R_SUN_PC;
+    cam.eye = add(at, cam.F, 1.2 * r);
     carried = { index: earth.index, offset: sub(cam.eye, at) };
+    // Leaving the Earth's sky: the camera backs away along the way it was
+    // looking and turns round, so the Earth it left comes into view, with the
+    // Moon if it is near that side, and the flight starts from there.
+    if (!reduceMotion) pullOut = { earth: earth.index, r, F0: cam.F, t0: performance.now(), ms: 3200 };
   }
   factor = 0.5;
+}
+
+/** The leaving of the Earth, while it runs. */
+let pullOut = null;
+
+function stepPullOut() {
+  if (!pullOut) return false;
+  const x = Math.min(1, (performance.now() - pullOut.t0) / pullOut.ms);
+  const e = x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2;
+  const at = posOf(pullOut.earth);
+  // Out to seven Earth radii, a little to the side: the Earth fills a third of the view.
+  const side = norm(cross(pullOut.F0, [0, 0, 1]));
+  const out = add(add(at, pullOut.F0, pullOut.r * (1.2 + 5.8 * e)), side, pullOut.r * 1.6 * e);
+  cam.eye = out;
+  // Turning round over the second half: from the sky ahead to the Earth behind.
+  const turn = Math.max(0, (x - 0.25) / 0.75);
+  const te = turn < 0.5 ? 2 * turn * turn : 1 - (-2 * turn + 2) ** 2 / 2;
+  const toEarth = norm(sub(at, cam.eye));
+  cam.F = norm(add(pullOut.F0, sub(toEarth, pullOut.F0), te));
+  if (len(cam.F) < 0.5) cam.F = toEarth;
+  orthonormal();
+  carried = { index: pullOut.earth, offset: sub(cam.eye, at) };
+  if (x >= 1) pullOut = null;
+  return true;
 }
 
 /** On the Earth again: its sky, facing where the camera faces. */
@@ -1177,6 +1212,68 @@ function placeSystemLabels() {
   });
 }
 
+/**
+ * The habitable zone of a star, AU: where a planet like the Earth could keep
+ * liquid water on its surface. Kopparapu et al. (2013), the conservative
+ * limits (runaway greenhouse inside, maximum greenhouse outside), with the
+ * effective fluxes' temperature dependence; L from the star's radius and
+ * temperature.
+ */
+export function habitableZone(rSun, teff) {
+  if (!(rSun > 0) || !(teff > 2600 && teff < 7200)) return null;
+  const L = rSun ** 2 * (teff / T_SUN) ** 4;
+  const t = teff - 5780;
+  const seff = (s0, a, b, c, d) => s0 + a * t + b * t ** 2 + c * t ** 3 + d * t ** 4;
+  const inner = seff(1.0385, 1.2456e-4, 1.4612e-8, -7.6345e-12, -1.7511e-15);
+  const outer = seff(0.3507, 5.9578e-5, 1.6707e-9, -3.0058e-12, -5.1925e-16);
+  return { inner: Math.sqrt(L / inner), outer: Math.sqrt(L / outer), L };
+}
+
+/** The system seen from above: its orbits to scale, its habitable zone, and where each planet is now. */
+function systemDiagram(sys) {
+  const NS = 'http://www.w3.org/2000/svg';
+  const el = (name, attrs) => {
+    const e = document.createElementNS(NS, name);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    return e;
+  };
+  const svg = el('svg', { viewBox: '-110 -110 220 220', class: 'fly-system', role: 'img' });
+  const hz = habitableZone(sys.starR, sys.teff);
+  const widest = Math.max(...sys.planets.map((pl) => pl.a || 0), hz ? hz.outer * 0.6 : 0, 0.01);
+  const scale = 100 / widest;
+  if (hz && hz.inner * scale < 105) {
+    svg.append(el('circle', { r: Math.min(hz.outer * scale, 104), class: 'fly-system__hz' }));
+    svg.append(el('circle', { r: hz.inner * scale, class: 'fly-system__hz-in' }));
+  }
+  svg.append(el('circle', { r: 3.5, class: 'fly-system__star' }));
+  const jd = JD();
+  for (const pl of sys.planets) {
+    if (!(pl.a > 0)) continue;
+    const r = pl.a * scale;
+    svg.append(el('circle', { r, class: 'fly-system__orbit' }));
+    if (pl.tc && pl.p > 0) {
+      // At transit the planet is between its star and the Sun: the bottom of the drawing.
+      const ang = 2 * Math.PI * ((((jd - pl.tc) / pl.p) % 1 + 1) % 1);
+      const x = r * Math.sin(ang);
+      const y = r * Math.cos(ang);
+      const dot = el('circle', { cx: x.toFixed(2), cy: y.toFixed(2), r: Math.max(2, Math.min(6, Math.sqrt(pl.r || 1) * 1.5)), class: 'fly-system__planet' });
+      const title = el('title', {});
+      title.textContent = pl.name;
+      dot.append(title);
+      svg.append(dot);
+    }
+  }
+  const scaleNote = document.createElement('p');
+  scaleNote.className = 'fly-system__note';
+  scaleNote.textContent = hz
+    ? t('exo.diagramHz', { a: fmt(widest, widest < 1 ? 2 : 1), i: fmt(hz.inner, 2), o: fmt(hz.outer, 2) })
+    : t('exo.diagram', { a: fmt(widest, widest < 1 ? 2 : 1) });
+  const box = document.createElement('figure');
+  box.className = 'fly-system__box';
+  box.append(svg, scaleNote);
+  return box;
+}
+
 /** A system's card: its planets, and the way to ExoVision for the rest. */
 function openSystemCard(sys) {
   closeCard();
@@ -1193,7 +1290,7 @@ function openSystemCard(sys) {
     bits.push(t('exo.found', { method: pl.method ?? '—', year: pl.year ?? '—' }));
     rows.push([pl.name, bits.join(' · ')]);
   }
-  $('card-rows').replaceChildren(...rows.map(([k, v]) => cardRow(k, v)));
+  $('card-rows').replaceChildren(systemDiagram(sys), ...rows.map(([k, v]) => cardRow(k, v)));
   const frames = $('card-frames');
   frames.hidden = false;
   const url = new URL('./', location.href);
@@ -1268,3 +1365,9 @@ if (!space) {
   if (!paused) requestAnimationFrame(frame);
 }
 
+
+// Inside the front page: the way back to its sky, facing where this faces.
+if (embedded) {
+  $('back-sky').hidden = false;
+  $('back-sky').addEventListener('click', () => { pullOut = null; landOnEarth(); });
+}

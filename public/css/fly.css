@@ -109,3 +109,17 @@
 .fly-label--exo .fly-label__name { color: oklch(88% 0.08 165); margin-block-start: -6px; }
 .fly-label--exo .fly-label__far { margin-block-start: -6px; }
 .fly-mark--planet { color: oklch(88% 0.08 165); }
+
+.fly-back { margin-inline-start: 0; }
+.fly-back[hidden] { display: none; }
+
+/* A system from above: its orbits to scale and its habitable zone. */
+.fly-system__box { margin: 0 0 var(--space-xs); }
+.fly-system { display: block; inline-size: 100%; max-inline-size: 15rem; margin-inline: auto; }
+.fly-system__hz { fill: oklch(72% 0.12 150 / 0.22); }
+.fly-system__hz-in { fill: var(--gate-veil-deep, #0b0d14); }
+.fly-system__star { fill: oklch(92% 0.08 85); }
+.fly-system__orbit { fill: none; stroke: oklch(82% 0.11 165 / 0.6); stroke-width: 0.8; }
+.fly-system__planet { fill: oklch(92% 0.04 165); stroke: oklch(20% 0.02 250); stroke-width: 0.8; }
+.fly-system__note { margin: var(--space-2xs) 0 0; font-size: var(--text-2xs); color: var(--color-neutral); text-align: center; }
+.fly-card { max-block-size: calc(100% - 2 * var(--edge) - 12rem); overflow-y: auto; }
