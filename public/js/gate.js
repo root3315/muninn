@@ -322,6 +322,9 @@ export class Gate {
     this.onSurvey = onSurvey;
     /** Called when the sky is zoomed out past its widest: the way out into space. */
     this.onStepOut = onStepOut;
+    this.bindKeys();
+    // On a touch screen there are no keys: the hint says to pinch out instead.
+    if (matchMedia('(pointer: coarse)').matches) document.querySelector('.scale-hint')?.setAttribute('data-i18n', 'scale.hintTouch');
 
     this.outward = 0;
     /** The surveyed band, once it has arrived: `{ pixels, W, H }`. */
@@ -1427,20 +1430,27 @@ export class Gate {
     this.canvas.addEventListener('wheel', (e) => {
       if (this.flight) return;
       e.preventDefault();
-      // Already at its widest and still zooming out: out of the sphere, into space.
-      if (this.onStepOut && e.deltaY > 0 && this.cam.fov >= FOV_MAX - 1e-6) {
-        this.outward += e.deltaY;
-        if (this.outward > 150) {
-          this.outward = 0;
-          this.onStepOut({ ra: this.cam.ra, dec: this.cam.dec, fov: this.cam.fov });
-        }
-        return;
-      }
-      this.outward = 0;
+      // The wheel zooms, and only zooms: flying is the keys' (see bindKeys).
       this.cam.fov = Math.max(this.fovMin, Math.min(FOV_MAX, this.cam.fov * Math.exp(e.deltaY * 0.0012)));
       this.findHit();
       this.draw();
     }, { passive: false });
+  }
+
+  /**
+   * W, A, S, D or the arrows: leave the sky and fly, from the Earth, the way
+   * it faces; the key held goes on flying in space. On a phone, with no keys,
+   * a pinch out past the widest field does the same.
+   */
+  bindKeys() {
+    addEventListener('keydown', (e) => {
+      if (!this.onStepOut || this.flight || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.target.closest?.('input, textarea, select, [contenteditable]')) return;
+      if (!['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown'].includes(e.code)) return;
+      if (this.canvas.closest('[hidden]') || !this.canvas.offsetParent) return;
+      e.preventDefault();
+      this.onStepOut({ ra: this.cam.ra, dec: this.cam.dec, fov: this.cam.fov, key: e.code });
+    });
   }
 
   press() {

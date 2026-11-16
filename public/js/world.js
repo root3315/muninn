@@ -40,7 +40,7 @@ export function preloadWorld(kind, lang) {
 function aim(kind, look) {
   const { frame } = layers[kind];
   if (!look || !frame.contentWindow) return;
-  frame.contentWindow.postMessage({ type: 'muninn:look', ra: look.ra, dec: look.dec, fov: look.fov }, location.origin);
+  frame.contentWindow.postMessage({ type: 'muninn:look', ra: look.ra, dec: look.dec, fov: look.fov, key: look.key }, location.origin);
 }
 
 /**
@@ -102,6 +102,11 @@ function goTo(scale, look) {
     openWorld(scale, look ?? lookNow(), langNow());
   }
 }
+
+// A key let go here, after it opened a layer, is let go there too.
+addEventListener('keyup', (e) => {
+  if (current) layers[current].frame.contentWindow?.postMessage({ type: 'muninn:keyup', key: e.code }, location.origin);
+});
 
 addEventListener('message', (e) => {
   if (e.origin !== location.origin || !e.data || typeof e.data !== 'object') return;
