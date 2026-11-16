@@ -35,6 +35,7 @@
  */
 
 import { createBandLayer } from './gate-band.js';
+import { createSurveySky } from './gate-sky.js';
 
 const D2R = Math.PI / 180;
 const R2D = 180 / Math.PI;
@@ -282,8 +283,18 @@ export class Gate {
     this.canvas = canvas;
     // The band on the GPU, under this canvas, where WebGL 2 can be had; then
     // this canvas is clear between the stars so the band shows through it.
-    this.bandLayer = createBandLayer(canvas);
-    this.ctx = canvas.getContext('2d', { alpha: Boolean(this.bandLayer) });
+    // Best of all, SPHEREx's own sky: the whole-sky renderer, under this
+    // canvas, from this camera. It shows the stars as SPHEREx saw them, so
+    // the catalogue is then only for naming and pointing, not drawn.
+    this.skySurvey = createSurveySky(canvas, {
+      onFirstSky: () => {
+        this.survey = { cube: true };
+        this.surveyAt = performance.now();
+        this.onSurvey();
+      },
+    });
+    this.bandLayer = this.skySurvey ? null : createBandLayer(canvas);
+    this.ctx = canvas.getContext('2d', { alpha: Boolean(this.skySurvey || this.bandLayer) });
     this.onPick = onPick;
     this.onName = onName;
     this.onSurvey = onSurvey;
@@ -796,6 +807,17 @@ export class Gate {
     this.trailMax = 0.22 * Math.max(width, height);
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
+    if (this.skySurvey) {
+      ctx.clearRect(0, 0, width, height);
+      this.skySurvey.draw({ ra: this.cam.ra, dec: this.cam.dec, fov: f ? f.fov : this.cam.fov, width: this.box.cssW, height: this.box.cssH });
+      if (!f) {
+        this.drawTargets(ctx);
+        this.drawSelected(ctx);
+        this.drawHit(ctx);
+      }
+      this.drawArrival(ctx);
+      return;
+    }
     // The model, giving way to the survey once it is here.
     const surveyed = this.surveyShare();
     if (this.bandLayer) {
@@ -1594,6 +1616,6 @@ export class Gate {
     if (!this.haze) this.buildHaze(this.quality.haze);
     if (!this.glows) this.buildGlows();
     this.draw();
-    if (!this.surveyAsked) this.loadSurvey();
+    if (!this.surveyAsked && !this.skySurvey) this.loadSurvey();
   }
 }
