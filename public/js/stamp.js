@@ -18,7 +18,7 @@ import { scanHDUs, decodePixels, readHeader, dataLength, padded } from './fits.j
 import { WCS } from './wcs.js';
 import { skySigma } from './depth.js';
 import { deadline, withRetry, FRAME_DEADLINE_MS } from './net.js';
-import { onHost, rangeProblem } from './ranges.js';
+import { onHost, rangeProblem, fetchFrame } from './ranges.js';
 import { parseWaveTable, wavelengthAt } from './spectrum.js';
 import { riceDecode } from './rice.js';
 
@@ -33,22 +33,23 @@ const MAX_HEADER = 1 << 20;
 /**
  * Asks per range: a dropped connection, a gateway error or a short answer is
  * asked again after a growing wait, every second time at the bucket's other
- * name (see ranges.js). What was read before stays read.
+ * name; the first ask goes through the site's own relay where there is one
+ * (see ranges.js). What was read before stays read.
  */
 const RANGE_TRIES = 4;
 
 const fault = (message, extra) => Object.assign(new Error(message), extra);
 
 function fetchRange(url, start, end, signal, { cache = 'default' } = {}) {
-  return withRetry((attempt) => fetchRangeOnce(onHost(url, attempt), start, end, signal, cache), { signal, tries: RANGE_TRIES });
+  return withRetry((attempt) => fetchRangeOnce(onHost(url, attempt), start, end, signal, cache, attempt), { signal, tries: RANGE_TRIES });
 }
 
-async function fetchRangeOnce(url, start, end, signal, cache) {
-  const res = await fetch(url, {
+async function fetchRangeOnce(url, start, end, signal, cache, attempt) {
+  const res = await fetchFrame(url, {
     headers: { Range: `bytes=${start}-${end}` },
     signal: deadline(signal, FRAME_DEADLINE_MS),
     cache,
-  });
+  }, attempt);
   if (!res.ok) throw fault(`${res.status} ${res.statusText} on ${url}`, { status: res.status });
   if (res.status === 206) return checked(res, await res.arrayBuffer(), start, end, url);
   // A server that ignores Range answers 200 with the whole file. From byte 0
@@ -485,10 +486,10 @@ const WAVE_TAIL_BYTES = 2 * 2880;
 function fetchTail(url, bytes, signal) {
   return withRetry(async (attempt) => {
     const at = onHost(url, attempt);
-    const res = await fetch(at, {
+    const res = await fetchFrame(at, {
       headers: { Range: `bytes=-${bytes}` },
       signal: deadline(signal, FRAME_DEADLINE_MS),
-    });
+    }, attempt);
     if (!res.ok) throw fault(`${res.status} ${res.statusText} on ${at}`, { status: res.status });
     // Anything but a partial answer would be the whole 70 MB file.
     if (res.status !== 206) throw fault(`Range not honoured (HTTP ${res.status}) on ${at}`, { retry: false });
