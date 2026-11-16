@@ -31,6 +31,7 @@ import {
 import { GALACTIC, mollweide, mollweideInverse, toGalactic, fromGalactic } from './maps.js';
 
 const DEG = Math.PI / 180;
+const COARSE = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
 export const FOV_MIN = 0.4;
 export const FOV_MAX = 108;
 /**
@@ -106,41 +107,12 @@ precision highp float;
 in vec2 vUv;
 uniform float uAlpha;
 uniform float uBias;
-uniform vec2 uTexel;
 out vec4 outColour;
 ${SHADE}
-vec3 readAt(vec2 uv) {
-  return vec3(texture(uR, uv, uBias).r, texture(uG, uv, uBias).r, texture(uB, uv, uBias).r);
-}
 void main() {
-  vec3 raw = readAt(vUv);
-  // The core of a star or a nucleus too bright for the detector is blank in
-  // the cube: drawn as it comes it is a black hole, or a ring of false colour
-  // where some wavelengths saturated and others did not. Where a pixel is
-  // blank, the brightest light around it, out to 16 pixels, says how bright
-  // it is at least; the blank wavelengths are drawn at that.
-  // A blank core is a patch: the pixel and its four neighbours all blank in
-  // that wavelength. A lone 0 is the sky's noise dipping below the floor, and
-  // is left as it is.
-  vec3 empty = vec3(0.5 / 255.0);
-  bvec3 hole = lessThanEqual(raw, empty);
-  if (any(hole)) {
-    vec3 around = max(max(readAt(vUv + vec2(uTexel.x, 0.0)), readAt(vUv - vec2(uTexel.x, 0.0))),
-                      max(readAt(vUv + vec2(0.0, uTexel.y)), readAt(vUv - vec2(0.0, uTexel.y))));
-    hole = bvec3(hole.x && around.x <= empty.x, hole.y && around.y <= empty.y, hole.z && around.z <= empty.z);
-  }
-  if (any(hole)) {
-    float top = 0.0;
-    for (int r = 0; r < 3; r++) {
-      float d = r == 0 ? 3.0 : r == 1 ? 8.0 : 16.0;
-      for (int a = 0; a < 4; a++) {
-        vec2 dir = a == 0 ? vec2(1.0, 0.0) : a == 1 ? vec2(-1.0, 0.0) : a == 2 ? vec2(0.0, 1.0) : vec2(0.0, -1.0);
-        vec3 v = readAt(vUv + dir * d * uTexel);
-        top = max(top, max(v.r, max(v.g, v.b)));
-      }
-    }
-    if (top > 0.3) raw = mix(raw, vec3(max(top, max(raw.r, max(raw.g, raw.b)))), vec3(hole));
-  }
+  // One look per pixel and per wavelength: on a phone's GPU every extra look
+  // at the texture is paid on every pixel of every frame.
+  vec3 raw = vec3(texture(uR, vUv, uBias).r, texture(uG, vUv, uBias).r, texture(uB, vUv, uBias).r);
   outColour = vec4(shade(raw), uAlpha);
 }`;
 
@@ -455,7 +427,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, maxLevel);
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-    if (aniso) gl.texParameterf(gl.TEXTURE_2D, aniso.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+    if (aniso) gl.texParameterf(gl.TEXTURE_2D, aniso.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(4, gl.getParameter(aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
     return tex;
   }
 
@@ -614,7 +586,9 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
   /* ---- drawing --------------------------------------------------------- */
 
   function camera() {
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    // A phone's screen has three device pixels to the point and a GPU a
+    // fraction of a desktop's: the sky is drawn at one and a half, and scaled.
+    const dpr = Math.min(window.devicePixelRatio || 1, COARSE ? 1.5 : 2);
     const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
     const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
     if (canvas.width !== w || canvas.height !== h) {
@@ -738,7 +712,6 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
       // field they show as grain. Read a little down the mipmap, the grain
       // averages out and the light stays; the sharp tiles above are read as they are.
       gl.uniform1f(sphere.u.Bias, sky.imgs.every((i) => i.averaged) ? ALLSKY_BIAS.averaged : ALLSKY_BIAS.picked);
-      gl.uniform2f(sphere.u.Texel, 1 / ATLAS_W, 1 / ATLAS_H);
       drawAllsky(cam);
       gl.uniform1f(sphere.u.Bias, 0);
     } else if (!fetch) {
@@ -753,7 +726,6 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
 
     const target = orderFor(state.fov / cam.short);
     if (target === null) return out;
-    gl.uniform2f(sphere.u.Texel, 1 / TILE_PX, 1 / TILE_PX);
     for (let order = ALLSKY_ORDER; order <= target; order++) {
       const levels = tileLevels;
       for (const { n, near } of visibleTiles(order, cam)) {

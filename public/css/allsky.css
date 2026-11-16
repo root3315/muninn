@@ -5,6 +5,9 @@
 
 *, *::before, *::after { box-sizing: border-box; }
 html, body { block-size: 100%; }
+/* What a phone shows, not what it would show without its address bar: in
+   100% the dock sat below the bottom of the screen. */
+@supports (height: 100dvh) { html, body { block-size: 100dvh; } }
 body {
   margin: 0;
   display: grid; grid-template-rows: auto 1fr;
