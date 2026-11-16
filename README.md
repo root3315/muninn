@@ -13,6 +13,12 @@ megabytes at a time.
 - **The whole sky:** <https://muninn.mydevbox.xyz/allsky.html> — IRSA's SPHEREx DR1 all-sky cube
   (HiPS, 102 wavelengths) drawn in WebGL: turn and zoom the sky, walk through the wavelengths, see it
   in colour from three real channels, and open the real frames of any point in the tool.
+- **One page, every scale:** the front page's sky *is* the SPHEREx DR1 all-sky cube. The wheel
+  zooms from the whole sky down to the cube's 512-pixel tiles in place; W A S D (or a pinch out on
+  a phone) leaves the Earth and flies into space, through the same SPHEREx sky, to the planets
+  where they are today and to the nearest stars and their planets, all at their real size.
+- **Brown dwarfs, 15 years on:** SPHEREx finds 14 of 16 nearby brown dwarfs where their motion
+  since WISE (2010) puts them, WISE 0855−0714 among them ([below](#brown-dwarfs-15-years-on)).
 - **VR:** press *Enter VR* on the sky or in a field in a headset's browser (Meta Quest 3 first, any
   WebXR headset), or open <https://muninn.mydevbox.xyz/vr.html> on a computer to look round with the mouse.
 - **Run it:** `node server.js`, then open <http://127.0.0.1:5173> (Node 18+, nothing to install).
@@ -172,8 +178,66 @@ separate repository, [root3315/TIC-id](https://github.com/root3315/TIC-id)). Mun
   `/system?ra=…&dec=…&from=muninn&name=…` in ExoVision: the orbits on a log scale, the habitable
   zone, a top-down view of the orbits, and the star's and planets' parameters, with a link back
   to Muninn. A modified click opens it in a new tab as usual.
+- **Any star, planets or not:** a field on a named star with no known planets, and a mark on any
+  star, link to ExoVision's detector (`/ai-detector?target=…`), which fetches the star's TESS light
+  curve from MAST and looks for transits in it.
+- A host's planet count is its own planets' letters: the archive's `sy_pnum` counts a whole
+  multiple-star system's (55 Cnc showed 7, it has 5).
+- **A mark says what the body is and what it goes round:** an asteroid or comet gets its orbit
+  from JPL's SBDB (class, a, e, i, period) with a sketch from above of where it and the Earth are
+  today; a star its kind, whether it is a pair, and its distance where the parallax is good to a
+  fifth; a galaxy its redshift.
 
 ---
+
+## Flying through space
+
+`public/fly.html` (opened from the front page; `js/fly.js`, `js/fly/`) is the Solar
+neighbourhood in 3-D at true scale, drawn with WebGL 2:
+
+- **The sky behind** is SPHEREx's own: the same DR1 all-sky cube and the same renderer as the front
+  page, from the flight's camera, so stepping out of the sky changes nothing on screen. It is the
+  sky seen from the Sun, so it is shown in full inside about 2 000 AU and gives way, by a light-year
+  out, to the catalogue's stars in 3-D.
+- **Stars:** the 60 240 Hipparcos stars (van Leeuwen 2007) with parallax better than 20 %, where
+  the parallax puts them, as bright as they would be from where the camera is. A star near enough
+  to have a disc is a sphere at its radius (measured where the catalogue or the Exoplanet Archive
+  has one, else estimated from brightness and colour, and the card says which).
+- **The Sun's planets and the Moon, now:** JPL's Keplerian elements and the Astronomical Almanac's
+  lunar series place them for the present moment; the Earth sits off the Earth–Moon barycentre by
+  its 4 670 km. Their mean radii are the IAU's. Mercury, Venus, the Earth, the Moon, Mars and
+  Jupiter carry real global spacecraft maps (MESSENGER, Magellan radar, Blue Marble, LRO, Viking,
+  Cassini; `public/data/fly/tex/maps.json` holds each source and credit), turned by the IAU's pole
+  and prime meridian for today. Saturn's rings are drawn at their real radii with the Cassini
+  division, shadowing and shadowed. Saturn, Uranus and Neptune have no global map worth the name
+  and keep a plain colour.
+- **Scale you can read:** round a star seen close, the orbits of the Earth, Jupiter and Neptune
+  are drawn as if it stood in the Sun's place (Betelgeuse would swallow Mars).
+- **Other stars' planets:** 4 834 systems and 6 442 planets from the NASA Exoplanet Archive
+  (`pscomppars`, `tools/build-fly-planets.mjs`). A host's card draws its system from above with
+  the habitable zone (Kopparapu et al. 2013); *Fly here* goes above the plane of its orbits, and
+  each planet has a way to it and a card of its own, with a link to ExoVision.
+- **WISE 0855−0714, Planet Nine's region and the 4.6 µm view** are labelled as what they are:
+  the brightness of a star at 4.6 µm is an estimate from its colour, and the reach shells are
+  computed, not observed.
+
+## Brown dwarfs, 15 years on
+
+`tools/measure-bd-motion.mjs` takes 16 nearby brown dwarfs, carries each from its AllWISE
+position (epoch 2010.56) by its catalogued proper motion to the SPHEREx epochs, and looks for it
+in SPHEREx's own D5/D6 frames, stacked by season. Results in `public/data/bd-motion.json`, method
+and every caveat in [docs/bd-motion.md](docs/bd-motion.md).
+
+- **14 of 16 are found where expected**, within 0.04–1.5″ of shifts of 9–129″. WISE 0855−0714
+  moved 129.6″ against 129.1″ expected; Luhman 16AB 45.0″ against 44.9″.
+- Isolated Gaia DR3 stars in the same stacks bound the frames' astrometry at under 0.25″.
+- From SPHEREx alone, one year of seasons gives Luhman 16AB 2.81″/yr (catalogue 2.79), ε Indi B
+  4.75″/yr (4.71), 2MASS 1114−2618 2.98″/yr (3.04).
+- The two that disagree, WISE 1639−6847 and WISE 1541−2250, both fail at the 2010 end: the
+  AllWISE source matched is 4–7″ from where CatWISE's motion carries back to.
+
+In the field tool, a target with a catalogued proper motion also gets a magnified motion vector:
+its track over the visits and one year of motion, scaled by a stated factor (×20 for WISE 0855).
 
 ## VR: standing inside the sky
 
@@ -738,6 +802,20 @@ AWS по диапазонам байтов: заголовок, только н�
 полёте, щелчки и тоны интерфейса, а выбранная звезда звучит со своего места тоном её цвета
 (это озвучивание данных, не «звук звезды»); выключается в карточке звезды, в карточке поля и в
 виде глубины.
+
+**Одна страница на все масштабы.** Небо на главной — это сам куб всего неба SPHEREx DR1. Колесо
+приближает от всего неба до тайлов куба; W A S D (на телефоне — щипок наружу) уводят от Земли в
+космос, на фоне того же неба SPHEREx: планеты там, где они сейчас, с настоящими картами
+поверхности, кольца Сатурна, 60 240 звёзд Hipparcos и 4 834 системы с планетами из архива
+NASA — всё в настоящем размере.
+
+**Коричневые карлики 15 лет спустя.** SPHEREx находит 14 из 16 ближайших коричневых карликов там,
+куда их привело собственное движение с 2010 года (WISE), в том числе WISE 0855−0714: 129,6″
+против ожидаемых 129,1″ ([docs/bd-motion.md](docs/bd-motion.md)).
+
+**ExoVision для любой звезды.** Звезда без известных планет ведёт в детектор ExoVision: он
+скачивает кривую блеска TESS и ищет в ней транзиты. Метка говорит, что это за тело и вокруг чего
+оно обращается.
 
 Если IRSA не отвечает, список заходов для любой точки берётся из собственного индекса кадров
 Muninn (`tools/build-frame-index.mjs`, около 130 МБ, лежит вне папки приложения в
