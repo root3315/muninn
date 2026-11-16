@@ -15,7 +15,8 @@ import { starColour, direction } from './gate.js';
 import { encodeHash } from './hash.js';
 import { radecOf } from './allsky/healpix.js';
 import { createSpace, screenOf } from './fly/space.js';
-import { temperatureOf, luminosityOf, radiusOf, R_SUN_PC, T_SUN } from './fly/stars.js';
+import { temperatureOf, luminosityOf, radiusOf, vMinusW2, R_SUN_PC, T_SUN } from './fly/stars.js';
+import { shells, planetNineShortfall, WISE0855_AB, WISE0855_PC, D6_ONE_VISIT_AB, PLANET_NINE_V, PLANET_NINE_AU, PLANET_NINE_MAX_BETA } from './fly/reach.js';
 
 const $ = (id) => document.getElementById(id);
 const LY_PER_PC = 3.26156;
@@ -92,10 +93,12 @@ async function loadStars() {
   const hipOf = new Int32Array(bin, stored * 16, stored);
   const measured = new Map(info.named.filter((s) => s.hip).map((s) => [s.hip, s.radius]));
 
-  const n = stored + 1;
+  // The catalogue, the Sun, and WISE 0855: a body the eye cannot see at all.
+  const n = stored + 2;
   const stars = {
     pos: new Float32Array(n * 3), mag: new Float32Array(n), col: new Float32Array(n * 3),
     rad: new Float32Array(n), bv: new Float32Array(n), hip: new Int32Array(n), measured: new Uint8Array(n),
+    ir: new Float32Array(n),
   };
   const put = (i, p, m, bv, hip) => {
     stars.pos.set(p, i * 3);
@@ -106,15 +109,32 @@ async function loadStars() {
     const r = measured.get(hip);
     stars.measured[i] = r ? 1 : 0;
     stars.rad[i] = r ?? radiusOf(m, bv);
+    // Absolute brightness at 4.6 µm, from the colour as a blackbody: an estimate.
+    stars.ir[i] = m - vMinusW2(temperatureOf(bv));
   };
   for (let i = 0; i < stored; i++) put(i, xyz.subarray(i * 3, i * 3 + 3), look[i * 2] / 100, look[i * 2 + 1] / 1000, hipOf[i]);
   // The Sun, which a catalogue of stars seen from it lacks.
   put(stored, [0, 0, 0], 4.83, 0.65, 0);
   stars.rad[stored] = 1;
   stars.measured[stored] = 1;
+  // WISE 0855 at its parallax: invisible in V, and at 4.6 µm as measured,
+  // W2 ≈ 13.9 at 2.28 pc, which is an absolute W2 of about 17.1.
+  const wise = info.named.find((s) => s.key === 'wise0855');
+  const wiseIndex = stored + 1;
+  if (wise) {
+    stars.pos.set(wise.pos, wiseIndex * 3);
+    stars.mag[wiseIndex] = 40;
+    stars.ir[wiseIndex] = 13.9 - 5 * Math.log10(WISE0855_PC / 10);
+    stars.col.set([1, 0.35, 0.25], wiseIndex * 3);
+    stars.rad[wiseIndex] = 0.1;
+    stars.bv[wiseIndex] = NaN;
+  }
   const indexOfHip = new Map();
   for (let i = 0; i < stored; i++) indexOfHip.set(hipOf[i], i);
-  const named = info.named.map((s) => ({ ...s, index: s.key === 'sun' ? stored : indexOfHip.get(s.hip) ?? -1 }));
+  const named = info.named.map((s) => ({
+    ...s,
+    index: s.key === 'sun' ? stored : s.key === 'wise0855' ? wiseIndex : indexOfHip.get(s.hip) ?? -1,
+  }));
   return { stars, named, count: info.count, sun: stored };
 }
 
@@ -151,6 +171,8 @@ let starCount = 0;
 let proj = null;
 let card = null;
 let lastNear = null;
+/** The reach shells and Planet Nine's region on screen; the sky at 4.6 µm instead of in V. */
+const view = { reach: true, ir: false };
 let last = performance.now();
 const keys = new Set();
 const hold = { forward: false, back: false };
@@ -201,6 +223,12 @@ function nameLabels() {
   const chips = $('dest');
   chips.replaceChildren();
   // The trip worth taking first: the challenge's own target, then the nearest stars.
+  const p9 = document.createElement('button');
+  p9.type = 'button';
+  p9.className = 'as-band fly-chip--target';
+  p9.textContent = nameOf(P9);
+  p9.addEventListener('click', () => { flyToPlanetNine(); openCardLater(P9); });
+  chips.append(p9);
   const order = ['wise0855', 'hip70890', 'hip87937', 'hip32349', 'hip108870', 'hip91262', 'hip27989', 'hip17702', 'hip11767', 'sun'];
   for (const key of order) {
     const s = named.find((x) => x.key === key);
@@ -226,7 +254,10 @@ function flyTo(s) {
   const away = len(sub(cam.eye, to));
   // A star with no light to see (WISE 0855) is approached less closely: a
   // disc the eye could not see would be a black hole in the stars.
-  const stop = radiusPc(s) * (s.index >= 0 ? STOP_RADII : 600);
+  // WISE 0855 gives no light to see: the autopilot stops a thousand AU
+  // out, near enough that at 4.6 µm it is one of the brightest things in the
+  // sky, far enough that in visible light the ring shows a place, not a disc.
+  const stop = s.key === 'wise0855' ? 0.005 : radiusPc(s) * (s.index >= 0 ? STOP_RADII : 600);
   const dir = norm(sub(to, cam.eye));
   const end = away > stop ? add(to, dir, -stop) : cam.eye;
   autopilot = {
@@ -281,6 +312,7 @@ function nearestStar() {
     const dx = p[i * 3] - ex;
     const dy = p[i * 3 + 1] - ey;
     const dz = p[i * 3 + 2] - ez;
+    if (stars.mag[i] > 30) continue;
     const k = stars.rad[i] / Math.sqrt(dx * dx + dy * dy + dz * dz + 1e-30);
     if (k > bestK) { bestK = k; best = i; }
   }
@@ -331,8 +363,9 @@ function frame(now) {
   last = now;
   steer(dt);
   lastNear = nearestStar();
-  proj = space.draw({ ...basis(), fov: FOV, near: lastNear });
+  proj = space.draw({ ...basis(), fov: FOV, near: view.ir ? null : lastNear, ir: view.ir, show: () => view.reach });
   placeLabels();
+  placeMarks();
   readout();
   requestAnimationFrame(frame);
 }
@@ -388,7 +421,17 @@ function openCard(entry) {
   const rows = [];
   if (i !== sunIndex) rows.push([t('fly.cardSun'), distanceText(fromSun)]);
   rows.push([t('fly.cardHere'), distanceText(len(sub(p, cam.eye)))]);
-  if (i >= 0) {
+  if (s.key === 'wise0855') {
+    const seenTo = shells();
+    rows.push([t('fly.cardW2'), t('fly.w2', { ab: fmt(WISE0855_AB, 1) })]);
+    rows.push([t('fly.cardOne'), t('fly.limitOne', { ab: fmt(D6_ONE_VISIT_AB, 1), d: distanceText(seenTo[0].pc) })]);
+    rows.push([t('fly.cardStack'), t('fly.limitStack', { n: seenTo[1].visits, ab: fmt(seenTo[1].limit, 1), d: distanceText(seenTo[1].pc) })]);
+  } else if (s.key === 'p9') {
+    rows.length = 0;
+    rows.push([t('fly.cardP9Where'), t('fly.p9Where', { a: PLANET_NINE_AU[0], b: PLANET_NINE_AU[1], beta: PLANET_NINE_MAX_BETA })]);
+    rows.push([t('fly.cardP9Bright'), t('fly.p9Bright', { lo: fmt(PLANET_NINE_V.bright, 1), hi: fmt(PLANET_NINE_V.faint, 1) })]);
+    rows.push([t('fly.cardP9Gap'), t('fly.p9Gap', { x: fmt(planetNineShortfall(17.6), 0) })]);
+  } else if (i >= 0) {
     const m = stars.mag[i];
     const bv = stars.bv[i];
     rows.push([t('fly.cardTemp'), t('fly.kelvin', { n: fmt(Math.round(temperatureOf(bv) / 10) * 10, 0) })]);
@@ -405,11 +448,12 @@ function openCard(entry) {
   $('card-title').textContent = title;
   $('card-note').textContent = s.key === 'wise0855'
     ? t('fly.dark')
+    : s.key === 'p9' ? t('fly.p9Note')
     : i >= 0 && i !== sunIndex ? `HIP ${stars.hip[i]} · ${t('fly.cardSource')}` : '';
   $('card-rows').replaceChildren(...rows.map(([k, v]) => cardRow(k, v)));
   // SPHEREx looks from beside the Earth: a star's place on its sky is its
   // direction from the Sun. The Sun itself has none.
-  const sky = fromSun > 0 ? radecOf(p) : null;
+  const sky = fromSun > 0 && s.key !== 'p9' ? radecOf(p) : null;
   const frames = $('card-frames');
   frames.hidden = !sky;
   if (sky) {
@@ -419,6 +463,12 @@ function openCard(entry) {
   }
   card = { s: { ...s, index: i } };
   $('card').hidden = false;
+}
+
+/** The card for a place that is not a star, shown once the autopilot has arrived. */
+function openCardLater(entry) {
+  const wait = () => (autopilot ? requestAnimationFrame(wait) : openCard(entry));
+  requestAnimationFrame(wait);
 }
 
 function closeCard() {
@@ -496,6 +546,95 @@ for (const [id, k] of [['go-forward', 'forward'], ['go-back', 'back']]) {
 $('faster').addEventListener('click', () => setSpeed(cam.speed * 4));
 $('slower').addEventListener('click', () => setSpeed(cam.speed / 4));
 
+/* ---- what SPHEREx can reach, and where Planet Nine would be --------- */
+
+const AU = 1 / 206264.806;
+/** The ecliptic's pole in ICRS, for the planets' plane. */
+const ECL = 23.4393 * Math.PI / 180;
+const eclipticPoint = (r, lonDeg, latDeg = 0) => {
+  const l = (lonDeg * Math.PI) / 180;
+  const b = (latDeg * Math.PI) / 180;
+  const x = Math.cos(b) * Math.cos(l);
+  const y = Math.cos(b) * Math.sin(l);
+  const z = Math.sin(b);
+  return [r * x, r * (y * Math.cos(ECL) - z * Math.sin(ECL)), r * (y * Math.sin(ECL) + z * Math.cos(ECL))];
+};
+
+/** A circle as segment ends, from a function of angle in degrees. */
+function ring(at, steps = 120) {
+  const out = [];
+  for (let k = 0; k < steps; k++) out.push(...at((k * 360) / steps), ...at(((k + 1) * 360) / steps));
+  return out;
+}
+
+/** A wire sphere round the Sun, in the ecliptic's frame: latitudes every 30°, longitudes every 45°. */
+function wireSphere(r) {
+  const out = [];
+  for (const lat of [-60, -30, 0, 30, 60]) out.push(...ring((lon) => eclipticPoint(r, lon, lat)));
+  for (let lon = 0; lon < 180; lon += 45) out.push(...ring((a) => eclipticPoint(r, lon + (a > 180 ? 180 : 0), a > 180 ? 360 - a - 90 : a - 90)));
+  return out;
+}
+
+/** The marks that go with the lines: places with words, not stars. */
+let marks = [];
+function buildReach() {
+  const [one, stack] = shells();
+  space.setLines([
+    { data: new Float32Array(wireSphere(one.pc)), ink: [0.55, 0.8, 1, 0.22], key: 'reach' },
+    { data: new Float32Array(wireSphere(stack.pc)), ink: [1, 0.72, 0.4, 0.22], key: 'reach' },
+    { data: new Float32Array(ring((l) => eclipticPoint(30 * AU, l))), ink: [0.7, 0.8, 1, 0.5], key: 'reach' },
+    { data: new Float32Array([
+      ...ring((l) => eclipticPoint(PLANET_NINE_AU[0] * AU, l)),
+      ...ring((l) => eclipticPoint(PLANET_NINE_AU[1] * AU, l)),
+      ...ring((l) => eclipticPoint(PLANET_NINE_AU[0] * AU, l, PLANET_NINE_MAX_BETA)),
+      ...ring((l) => eclipticPoint(PLANET_NINE_AU[0] * AU, l, -PLANET_NINE_MAX_BETA)),
+    ]), ink: [1, 0.72, 0.4, 0.55], key: 'reach' },
+  ]);
+  marks = [
+    { pos: eclipticPoint(one.pc, 90, 30), text: () => t('fly.shellOne', { d: distanceText(one.pc) }) },
+    { pos: eclipticPoint(stack.pc, 90, 30), text: () => t('fly.shellStack', { n: stack.visits, d: distanceText(stack.pc) }) },
+    { pos: eclipticPoint(30 * AU, 0), text: () => t('fly.neptune') },
+    { pos: eclipticPoint(PLANET_NINE_AU[1] * AU, 0), text: () => t('fly.p9Ring') },
+  ];
+  $('marks').replaceChildren(...marks.map((m) => {
+    const el = document.createElement('span');
+    el.className = 'fly-mark';
+    m.el = el;
+    return el;
+  }));
+}
+
+function placeMarks() {
+  const b = basis();
+  for (const m of marks) {
+    const at = view.reach ? screenOf(m.pos, b, proj) : null;
+    m.el.hidden = !at;
+    if (!at) continue;
+    m.el.textContent = m.text();
+    m.el.style.transform = `translate(${at.x.toFixed(1)}px, ${at.y.toFixed(1)}px)`;
+  }
+}
+
+/** Planet Nine's region as a destination: above the Sun's plane, looking down on it. */
+const P9 = { key: 'p9', index: -1, pos: eclipticPoint(1, 0, 0).map(() => 0), en: 'Planet Nine (region)', ru: 'Планета Девять (зона)' };
+function flyToPlanetNine() {
+  closeCard();
+  const above = eclipticPoint(2400 * AU, 200, 55);
+  autopilot = { from: cam.eye, to: above, look: [0, 0, 0], stop: 300 * AU, t0: performance.now(), ms: reduceMotion ? 1 : 3600 };
+  view.reach = true;
+  $('reach').setAttribute('aria-pressed', 'true');
+}
+
+$('reach').addEventListener('click', () => {
+  view.reach = !view.reach;
+  $('reach').setAttribute('aria-pressed', String(view.reach));
+});
+$('ir').addEventListener('click', () => {
+  view.ir = !view.ir;
+  $('ir').setAttribute('aria-pressed', String(view.ir));
+  $('read-note').textContent = view.ir ? t('fly.irNote') : '';
+});
+
 /* ---- language and start ----------------------------------------------- */
 
 function applyLanguage() {
@@ -525,6 +664,7 @@ if (!space) {
   named = data.named;
   starCount = data.count;
   buildLabels();
+  buildReach();
   applyLanguage();
   setTimeout(() => { $('hint').dataset.gone = 'true'; }, 9000);
   requestAnimationFrame(frame);

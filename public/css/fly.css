@@ -75,3 +75,12 @@
 @media (max-width: 640px) {
   .fly-card { inset-block-start: auto; inset-block-end: calc(var(--edge) + 9.5rem); padding: var(--space-sm) var(--space-md); }
 }
+
+/* Words for places that are not stars: the reach shells, the orbits. */
+.fly-mark {
+  position: absolute; inset-inline-start: 0; inset-block-start: 0;
+  font-size: var(--text-2xs); color: var(--color-counter); white-space: nowrap;
+  text-shadow: var(--shade-text); pointer-events: none; will-change: transform;
+}
+.fly-mark[hidden] { display: none; }
+#read-note:empty { display: none; }

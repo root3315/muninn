@@ -38,6 +38,19 @@ export function bolometricCorrection(t) {
 /** Luminosity in solar units from an absolute magnitude and B−V. */
 export const luminosityOf = (absMag, bv) => 10 ** (-0.4 * (absMag + bolometricCorrection(temperatureOf(bv)) - MBOL_SUN));
 
+/** Planck's law, up to a constant: the light of a body at temperature t at wavelength λ (µm). */
+const planck = (lambdaUm, t) => 1 / (lambdaUm ** 5 * (Math.exp(14387.77 / (lambdaUm * t)) - 1));
+
+/** Vega's temperature, K: by definition of the Vega system its V − W2 is zero. */
+const T_VEGA = 9602;
+
+/**
+ * V − W2 (4.6 µm) for a star of temperature t, as a blackbody, in the Vega
+ * system. An estimate from colour alone — real stars have lines and dust —
+ * and said to be one wherever it shows.
+ */
+export const vMinusW2 = (t) => 2.5 * Math.log10((planck(4.6, t) / planck(0.55, t)) / (planck(4.6, T_VEGA) / planck(0.55, T_VEGA)));
+
 /** Radius in solar radii from an absolute magnitude and B−V. */
 export function radiusOf(absMag, bv) {
   const t = temperatureOf(bv);

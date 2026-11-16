@@ -20,6 +20,8 @@ in vec3 aPos;
 in float aMag;
 in vec3 aCol;
 in float aRad;
+in float aIr;
+uniform bool uIR;
 uniform float uFocalPx;
 uniform float uMaxPoint;
 uniform int uSkip;
@@ -56,7 +58,7 @@ void main() {
   }
   gl_Position = vec4(c.x / c.z * uFocal.x, c.y / c.z * uFocal.y, 0.0, 1.0);
   // Apparent magnitude from here, and the light that gets through.
-  float m = aMag + 5.0 * log(d / 10.0) / log(10.0);
+  float m = (uIR ? aIr : aMag) + 5.0 * log(d / 10.0) / log(10.0);
   float flux = pow(10.0, -0.4 * (m - uLimit));
   vAlpha = clamp(flux, 0.0, 1.0);
   // The star's own disc, at its real size: its radius over its distance.
@@ -148,6 +150,25 @@ void main() {
   }
 }`;
 
+/* Lines in space — the reach shells, the orbits — projected by the camera, clipped by the GPU through w. */
+const LINE3_VS = `#version 300 es
+in vec3 aPos;
+uniform vec3 uEye;
+uniform vec3 uR;
+uniform vec3 uU;
+uniform vec3 uF;
+uniform vec2 uFocal;
+void main() {
+  vec3 rel = aPos - uEye;
+  gl_Position = vec4(dot(rel, uR) * uFocal.x, dot(rel, uU) * uFocal.y, 0.0, dot(rel, uF));
+}`;
+
+const LINE3_FS = `#version 300 es
+precision mediump float;
+uniform vec4 uInk;
+out vec4 outColour;
+void main() { outColour = uInk; }`;
+
 function compile(gl, vs, fs, attributes = []) {
   const program = gl.createProgram();
   attributes.forEach((name, i) => gl.bindAttribLocation(program, i, name));
@@ -177,14 +198,17 @@ function compile(gl, vs, fs, attributes = []) {
 export function createSpace(canvas, { stars, sky }) {
   const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, depth: false });
   if (!gl) return null;
-  const starProg = compile(gl, STAR_VS, STAR_FS, ['aPos', 'aMag', 'aCol', 'aRad']);
+  const starProg = compile(gl, STAR_VS, STAR_FS, ['aPos', 'aMag', 'aCol', 'aRad', 'aIr']);
+  const lineProg = compile(gl, LINE3_VS, LINE3_FS, ['aPos']);
+  /** Line groups uploaded once: { vao, count, ink, show }. */
+  let lineGroups = [];
   const skyProg = compile(gl, SKY_VS, SKY_FS);
   const nearProg = compile(gl, SKY_VS, NEAR_FS);
   const maxPoint = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1];
 
   const vao = gl.createVertexArray();
   gl.bindVertexArray(vao);
-  for (const [i, data, size] of [[0, stars.pos, 3], [1, stars.mag, 1], [2, stars.col, 3], [3, stars.rad, 1]]) {
+  for (const [i, data, size] of [[0, stars.pos, 3], [1, stars.mag, 1], [2, stars.col, 3], [3, stars.rad, 1], [4, stars.ir, 1]]) {
     gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
     gl.enableVertexAttribArray(i);
@@ -226,7 +250,20 @@ export function createSpace(canvas, { stars, sky }) {
      * closest to, { index, pos, rpc, col }, drawn as a sphere. Returns the
      * projection, for labels.
      */
-    draw({ eye, R, U, F, fov, limit = 8.5, near = null }) {
+    /** Lines to draw every frame: [{ data: Float32Array of segment ends, ink: [r, g, b, a], key }]. */
+    setLines(groups) {
+      lineGroups = groups.map((g) => {
+        const vao = gl.createVertexArray();
+        gl.bindVertexArray(vao);
+        gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+        gl.bufferData(gl.ARRAY_BUFFER, g.data, gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(0);
+        gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+        gl.bindVertexArray(null);
+        return { vao, count: g.data.length / 3, ink: g.ink, key: g.key };
+      });
+    },
+    draw({ eye, R, U, F, fov, limit = 8.5, near = null, ir = false, show = () => true }) {
       const { w, h, dpr } = fit();
       const fy = 1 / Math.tan((fov * Math.PI) / 360);
       const focal = [fy * (h / w), fy];
@@ -259,6 +296,7 @@ export function createSpace(canvas, { stars, sky }) {
       gl.uniform3fv(starProg.u.F, F);
       gl.uniform2fv(starProg.u.Focal, focal);
       gl.uniform1f(starProg.u.Limit, limit);
+      gl.uniform1i(starProg.u.IR, ir ? 1 : 0);
       gl.uniform1f(starProg.u.Px, dpr);
       gl.uniform1f(starProg.u.FocalPx, (fy * h) / 2);
       gl.uniform1f(starProg.u.MaxPoint, maxPoint);
@@ -280,6 +318,21 @@ export function createSpace(canvas, { stars, sky }) {
         gl.uniform3fv(nearProg.u.Col, near.col);
         gl.bindVertexArray(emptyVao);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
+      }
+      if (lineGroups.length) {
+        gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
+        gl.useProgram(lineProg.program);
+        gl.uniform3fv(lineProg.u.Eye, eye);
+        gl.uniform3fv(lineProg.u.R, R);
+        gl.uniform3fv(lineProg.u.U, U);
+        gl.uniform3fv(lineProg.u.F, F);
+        gl.uniform2fv(lineProg.u.Focal, focal);
+        for (const g of lineGroups) {
+          if (!show(g.key)) continue;
+          gl.uniform4fv(lineProg.u.Ink, g.ink);
+          gl.bindVertexArray(g.vao);
+          gl.drawArrays(gl.LINES, 0, g.count);
+        }
       }
       gl.disable(gl.BLEND);
       gl.bindVertexArray(null);

@@ -17,6 +17,8 @@
 <link rel="modulepreload" href="js/fly.js">
 <link rel="modulepreload" href="js/fly/space.js">
 <link rel="modulepreload" href="js/fly/stars.js">
+<link rel="modulepreload" href="js/fly/reach.js">
+<link rel="modulepreload" href="js/depth.js">
 <link rel="modulepreload" href="js/hash.js">
 <link rel="modulepreload" href="js/allsky/healpix.js">
 <link rel="modulepreload" href="js/gate.js">
@@ -38,6 +40,7 @@
 <main class="as-sky" id="sky">
   <canvas class="as-sky__canvas" id="canvas" tabindex="0" role="img" data-i18n-label="fly.canvas"></canvas>
   <div class="fly-labels" id="labels"></div>
+  <div class="fly-labels" id="marks"></div>
   <p class="as-sky__hint" id="hint"></p>
   <p class="as-sky__nogl" id="nogl" hidden data-i18n="allsky.noGl"></p>
 
@@ -63,11 +66,14 @@
       <div class="as-bands fly-dest" id="dest"></div>
     </div>
     <div class="as-dock__row">
+      <button type="button" class="as-toggle" id="reach" aria-pressed="true" data-i18n="fly.reach" data-i18n-title="fly.reachWhen"></button>
+      <button type="button" class="as-toggle" id="ir" aria-pressed="false" data-i18n="fly.ir" data-i18n-title="fly.irWhen"></button>
       <button type="button" class="as-toggle" id="slower" data-i18n="fly.slower"></button>
       <button type="button" class="as-toggle" id="faster" data-i18n="fly.faster"></button>
       <p class="as-read num" id="read" aria-live="off"></p>
     </div>
     <div class="as-dock__row as-dock__row--read">
+      <p class="as-read" id="read-note"></p>
       <p class="as-read as-read--credit" id="source"></p>
     </div>
   </section>
