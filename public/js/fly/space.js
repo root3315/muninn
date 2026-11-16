@@ -142,7 +142,34 @@ uniform vec3 uSun;
 // inner and outer edges (all 0 for none), and the ring plane's pole.
 uniform vec4 uRing;
 uniform vec3 uPole;
+// A surface map, simple cylindrical, west edge at longitude -180°, and the
+// body's axes (prime meridian, 90° east, north pole) to read it by.
+uniform bool uHasMap;
+uniform sampler2D uMap;
+uniform vec3 uBX;
+uniform vec3 uBY;
+uniform vec3 uBZ;
+// Air: the colour its scattered sunlight adds (0 for none). The maps are of
+// the ground; from space the Earth is as blue as its air makes it.
+uniform vec3 uAir;
 out vec4 outColour;
+
+const float PI = 3.14159265;
+
+/** The map's colour where the normal n points, its gradients taken across the seam at ±180° without a line. */
+vec3 surface(vec3 n) {
+  float lon = atan(dot(n, uBY), dot(n, uBX));
+  float lat = asin(clamp(dot(n, uBZ), -1.0, 1.0));
+  vec2 uv = vec2(lon / (2.0 * PI) + 0.5, 0.5 - lat / PI);
+  float u2 = fract(uv.x + 0.5);
+  vec2 dx = vec2(dFdx(uv.x), dFdx(uv.y));
+  vec2 dy = vec2(dFdy(uv.x), dFdy(uv.y));
+  if (abs(dFdx(u2)) < abs(dx.x)) dx.x = dFdx(u2);
+  if (abs(dFdy(u2)) < abs(dy.x)) dy.x = dFdy(u2);
+  vec3 c = textureGrad(uMap, uv, dx, dy).rgb;
+  // The map is sRGB; light is added in linear terms.
+  return pow(c, vec3(2.2));
+}
 
 /** Whether a point is in the body's shadow: the line from it to the Sun passes through the body. */
 bool shadowed(vec3 p) {
@@ -214,6 +241,17 @@ void main() {
           }
         }
       }
+      if (uHasMap) {
+        // The map, lit as the plain colour is; back to sRGB for the screen.
+        vec3 lin = surface(n) * (0.015 + 1.1 * day);
+        // Scattered light, more of it towards the limb, where the line of
+        // sight runs through more air; only where the Sun is up.
+        float mu = max(dot(n, -v), 0.0);
+        float twilight = smoothstep(-0.15, 0.25, dot(n, normalize(uSun - hit)));
+        lin += uAir * twilight * (0.35 + 0.9 * pow(1.0 - mu, 3.0));
+        outColour = vec4(pow(lin, vec3(1.0 / 2.2)), 1.0);
+        return;
+      }
       outColour = vec4(uCol * (0.02 + 0.98 * day), 1.0);
     } else {
       // A star: limb darkening, the edge dimmer than the middle.
@@ -221,6 +259,17 @@ void main() {
       outColour = vec4(uCol * (0.4 + 0.6 * mu), 1.0);
     }
   } else if (uLit) {
+    // The air's thin rim beyond the limb, lit side only.
+    if (uAir.b > 0.0) {
+      float above = (sqrt(miss2) - uRadius) / (uRadius * 0.025);
+      if (above < 1.0 && along > 0.0) {
+        vec3 rim = uCentre + normalize(v * along - uCentre) * uRadius;
+        float lit = smoothstep(-0.1, 0.3, dot(normalize(rim - uCentre), normalize(uSun - rim)));
+        float a = (1.0 - above) * (1.0 - above) * lit;
+        outColour = vec4(pow(uAir * 2.2 * a, vec3(1.0 / 2.2)), a);
+        return;
+      }
+    }
     if (ring.a > 0.0) {
       outColour = vec4(ring.rgb * ring.a, ring.a);
       return;
@@ -291,6 +340,7 @@ export function createSpace(canvas, { stars, sky }) {
   let lineGroups = [];
   const live = {};
   const liveBufs = {};
+  const maps = new Map();
   const skyProg = compile(gl, SKY_VS, SKY_FS);
   const nearProg = compile(gl, SKY_VS, NEAR_FS);
   const maxPoint = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1];
@@ -351,6 +401,21 @@ export function createSpace(canvas, { stars, sky }) {
      * Lines that change, relative to the eye: named groups, each replaced
      * whenever it is given; null data for none.
      */
+    /** A body's surface map, by key, from an image: drawn on its sphere once loaded. */
+    setMap(key, image) {
+      const tex = gl.createTexture();
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, image);
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      maps.set(key, tex);
+    },
+
     setLiveLines(data, ink, name = 'system') {
       if (!data || !data.length) { delete live[name]; return; }
       if (!liveBufs[name]) {
@@ -476,6 +541,17 @@ export function createSpace(canvas, { stars, sky }) {
           gl.uniform1i(nearProg.u.Lit, n.lit ? 1 : 0);
           gl.uniform4fv(nearProg.u.Ring, n.ring ?? [0, 0, 0, 0]);
           gl.uniform3fv(nearProg.u.Pole, n.pole ?? [0, 0, 1]);
+          const map = n.map && maps.get(n.map);
+          gl.uniform1i(nearProg.u.HasMap, map && n.axes ? 1 : 0);
+          gl.uniform3fv(nearProg.u.Air, n.air ?? [0, 0, 0]);
+          if (map && n.axes) {
+            gl.activeTexture(gl.TEXTURE3);
+            gl.bindTexture(gl.TEXTURE_2D, map);
+            gl.uniform1i(nearProg.u.Map, 3);
+            gl.uniform3fv(nearProg.u.BX, n.axes.x);
+            gl.uniform3fv(nearProg.u.BY, n.axes.y);
+            gl.uniform3fv(nearProg.u.BZ, n.axes.z);
+          }
           gl.uniform3fv(nearProg.u.Sun, sunFrom(n));
           gl.drawArrays(gl.TRIANGLES, 0, 3);
         }

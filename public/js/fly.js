@@ -18,7 +18,7 @@ import { systemUrl } from './exovision.js';
 import { radecOf } from './allsky/healpix.js';
 import { createSpace, screenOf } from './fly/space.js';
 import { temperatureOf, luminosityOf, radiusOf, vMinusW2, R_SUN_PC, T_SUN } from './fly/stars.js';
-import { solarSystem, orbits as solarOrbits, FACTS, AU_PC } from './fly/solar.js';
+import { solarSystem, orbits as solarOrbits, bodyAxes, FACTS, AU_PC } from './fly/solar.js';
 import { shells, planetNineShortfall, WISE0855_AB, WISE0855_PC, D6_ONE_VISIT_AB, PLANET_NINE_V, PLANET_NINE_AU, PLANET_NINE_MAX_BETA } from './fly/reach.js';
 
 const $ = (id) => document.getElementById(id);
@@ -162,6 +162,7 @@ async function loadStars() {
   });
   stars.lit = lit;
   stars.ringed = stored + 2 + bodies.findIndex((b) => b.key === 'saturn');
+  stars.bodyKey = new Map(bodies.map((b, k) => [stored + 2 + k, b.key]));
   const indexOfHip = new Map();
   for (let i = 0; i < stored; i++) indexOfHip.set(hipOf[i], i);
   const named = info.named.map((s) => ({
@@ -426,6 +427,47 @@ const SATURN_RINGS = (() => {
   };
 })();
 
+/* ---- surfaces ------------------------------------------------------------ */
+
+/**
+ * Real global maps of the bodies that have one (public/data/fly/tex,
+ * maps.json says whose and what each shows); Saturn, Uranus and Neptune have
+ * none worth the name and keep their plain colour. Loaded once the flight is
+ * up, a few hundred kilobytes in all.
+ */
+/** What each map shows: Mercury's colours are stretched filters, Venus's surface is radar under its clouds. */
+const MAP_KIND = { mercury: 'fly.mapFalse', venus: 'fly.mapRadar' };
+
+let surfaceInfo = {};
+let axesAt = 0;
+const axesOf = new Map();
+
+async function loadSurfaces() {
+  try {
+    const res = await fetch('data/fly/tex/maps.json');
+    if (!res.ok) return;
+    surfaceInfo = (await res.json()).maps ?? {};
+  } catch { return; }
+  for (const [key, m] of Object.entries(surfaceInfo)) {
+    const img = new Image();
+    img.decoding = 'async';
+    img.src = `data/fly/tex/${m.file}`;
+    img.decode().then(() => space.setMap(key, img)).catch(() => {});
+  }
+}
+
+/** A body's map key and its axes now (the axes worked out again each second). */
+function surfaceOf(i) {
+  const key = stars.bodyKey?.get(i);
+  if (!key || !surfaceInfo[key]) return {};
+  if (performance.now() - axesAt > 1000) {
+    axesOf.clear();
+    axesAt = performance.now();
+  }
+  if (!axesOf.has(key)) axesOf.set(key, bodyAxes(key));
+  return { map: key, axes: axesOf.get(key), ...(key === 'earth' ? { air: [0.05, 0.11, 0.3] } : {}) };
+}
+
 const TOP = 12;
 const topK = new Float64Array(TOP);
 const topI = new Int32Array(TOP);
@@ -489,6 +531,7 @@ function nearestStar() {
     col: [stars.col[i * 3], stars.col[i * 3 + 1], stars.col[i * 3 + 2]],
     lit: Boolean(stars.lit[i]),
     ...(i === stars.ringed ? SATURN_RINGS : {}),
+    ...surfaceOf(i),
   }));
 }
 
@@ -696,6 +739,8 @@ function openCard(entry) {
       rows.push([t('fly.cardGravity'), t('fly.gravity', { g: fmt(f.g, 2) })]);
       rows.push([t('fly.cardSurfaceT'), f.t]);
       if (s.key !== 'moon') rows.push([t('fly.cardMoons'), String(f.moons)]);
+      const m = surfaceInfo[s.key];
+      if (m) rows.push([t('fly.cardMap'), `${t(MAP_KIND[s.key] ?? 'fly.mapTrue')} · ${m.credit}`]);
     }
     rows.push([t('fly.cardSunAU'), t('fly.au', { n: fmt(fromSun / AU_PC, 2) })]);
   } else if (i >= 0) {
@@ -721,7 +766,7 @@ function openCard(entry) {
   }
   $('card-title').textContent = title;
   if (s.planet) rows.splice(0, 1);
-  $('card-note').textContent = s.planet ? t('fly.planetNote') : s.key === 'wise0855'
+  $('card-note').textContent = s.planet ? t(surfaceInfo[s.key] ? 'fly.planetNoteMap' : 'fly.planetNote') : s.key === 'wise0855'
     ? t('fly.dark')
     : s.key === 'p9' ? t('fly.p9Note')
     : i >= 0 && i !== sunIndex ? `HIP ${stars.hip[i]} · ${t('fly.cardSource')}` : '';
@@ -1221,6 +1266,7 @@ async function loadSystems() {
     if (!res.ok) return;
     const body = await res.json();
     exo = body.systems ?? [];
+    loadSurfaces();
     // A host that is a Hipparcos star is centred on the catalogue's star, so
     // its planets circle the disc drawn for it.
     for (const sys of exo) {

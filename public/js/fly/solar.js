@@ -89,6 +89,44 @@ export function solarSystem(date = new Date()) {
   });
 }
 
+/**
+ * Each body's spin (IAU WGCCRE 2015, Archinal et al. 2018): its north pole's
+ * RA and Dec, degrees, and its prime meridian W = W0 + rate·d, d days from
+ * J2000. The slow drift of the poles and the Moon's libration are left out:
+ * a fraction of a degree. Jupiter's is System III, its magnetic field's turn.
+ */
+const SPIN = {
+  mercury: [281.0103, 61.4155, 329.5988, 6.1385108],
+  venus: [272.76, 67.16, 160.20, -1.4813688],
+  earth: [0, 90, 190.147, 360.9856235],
+  moon: [269.9949, 66.5392, 38.3213, 13.17635815],
+  mars: [317.269202, 54.432516, 176.049863, 350.891982443297],
+  jupiter: [268.056595, 64.495303, 284.95, 870.536],
+  saturn: [40.589, 83.537, 38.90, 810.7939024],
+  uranus: [257.311, -15.175, 203.81, -501.1600928],
+  neptune: [299.36, 43.46, 249.978, 541.1397757],
+};
+
+/**
+ * A body's axes on ICRS for a date: x towards its prime meridian on its
+ * equator, z its north pole, y = z × x (east longitude grows from x to y).
+ */
+export function bodyAxes(key, date = new Date()) {
+  const spin = SPIN[key];
+  if (!spin) return null;
+  const [ra, dec, w0, rate] = spin;
+  const a = ra * D2R;
+  const d = dec * D2R;
+  const z = [Math.cos(d) * Math.cos(a), Math.cos(d) * Math.sin(a), Math.sin(d)];
+  // The equator's ascending node on the ICRS equator, at RA + 90°.
+  const node = [-Math.sin(a), Math.cos(a), 0];
+  const across = [z[1] * node[2] - z[2] * node[1], z[2] * node[0] - z[0] * node[2], z[0] * node[1] - z[1] * node[0]];
+  const W = ((w0 + rate * (julian(date) - 2451545.0)) % 360) * D2R;
+  const x = node.map((c, k) => c * Math.cos(W) + across[k] * Math.sin(W));
+  const y = [z[1] * x[2] - z[2] * x[1], z[2] * x[0] - z[0] * x[2], z[0] * x[1] - z[1] * x[0]];
+  return { x, y, z };
+}
+
 /** Orbital periods, years (sidereal): for tracing each orbit once. */
 const PERIOD_YEARS = { mercury: 0.2408, venus: 0.6152, earth: 1.0000, mars: 1.8808, jupiter: 11.862, saturn: 29.457, uranus: 84.011, neptune: 164.79 };
 
