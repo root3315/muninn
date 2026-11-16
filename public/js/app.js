@@ -4789,7 +4789,6 @@ wireWorld({
 async function buildGate() {
   gate = new Gate($('gate-sky'), {
     onStepOut: (look) => openWorld('fly', look, getLanguage()),
-    onStepIn: (look) => openWorld('allsky', look, getLanguage()),
     // A press shows what was pressed. The flight starts from the card.
     onPick: (hit) => { gate.select(hit); showCard(hit); },
     onName: nameOnSky,
@@ -4797,8 +4796,7 @@ async function buildGate() {
     onSurvey: () => {
       showSkyCredit();
       // The sky is up: now, in the background, the layers it opens onto.
-      preloadWorld('allsky', getLanguage());
-      setTimeout(() => preloadWorld('fly', getLanguage()), 4000);
+      setTimeout(() => preloadWorld('fly', getLanguage()), 3000);
     },
   });
   window.addEventListener('resize', () => { if (!$('gate').hidden) gate.resize(); });

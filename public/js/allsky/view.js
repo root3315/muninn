@@ -54,6 +54,7 @@ const FADE_MS = 320;
  * ones hardly at all, so the stars stay sharp.
  */
 const ALLSKY_BIAS = { picked: 1.25, averaged: 0.35 };
+const TILE_BIAS = 0.9;
 const ALLSKY_COUNT = 12 * 4 ** ALLSKY_ORDER;
 /** The floor sits this many noise sigmas above the median sky. */
 const FLOOR_SIGMAS = 0.8;
@@ -113,6 +114,15 @@ void main() {
   // One look per pixel and per wavelength: on a phone's GPU every extra look
   // at the texture is paid on every pixel of every frame.
   vec3 raw = vec3(texture(uR, vUv, uBias).r, texture(uG, vUv, uBias).r, texture(uB, vUv, uBias).r);
+  // A star's core too bright for the detector is blank in the wavelengths it
+  // saturated and bright in the rest; drawn as it comes it is a magenta or
+  // green dot. A blank channel beside bright ones takes their brightness.
+  // No look at the neighbours: this pixel's own three values decide. Read
+  // down the mipmaps a blank is not quite zero any more, so "blank" is a
+  // channel under a seventh of the brightest one where that one is bright:
+  // under IRSA's asinh stretch no real star's colour is that extreme.
+  float top = max(raw.r, max(raw.g, raw.b));
+  if (top > 0.45) raw = mix(raw, vec3(top), vec3(lessThan(raw, vec3(top / 7.0))));
   outColour = vec4(shade(raw), uAlpha);
 }`;
 
@@ -729,7 +739,10 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
       // averages out and the light stays; the sharp tiles above are read as they are.
       gl.uniform1f(sphere.u.Bias, sky.imgs.every((i) => i.averaged) ? ALLSKY_BIAS.averaged : ALLSKY_BIAS.picked);
       drawAllsky(cam);
-      gl.uniform1f(sphere.u.Bias, 0);
+      // The tiles read a little down their mipmaps too: each pixel of them
+    // carries its own noise, and laid sharp over the averaged sky around it a
+    // tile was a speckled square. Stars stay points; the grain softens.
+    gl.uniform1f(sphere.u.Bias, TILE_BIAS);
     } else if (!fetch) {
       return out;
     }

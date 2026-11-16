@@ -263,6 +263,13 @@ function guessTier() {
 /** How wide the camera opens, and how far it closes at the end of a dive. */
 const FOV_WIDE = 78;
 const FOV_MIN = 20;
+/**
+ * How far in the sky can be zoomed: on SPHEREx's own sky, two degrees, where
+ * a pixel of its finest tiles is still about one of the screen's; finer than
+ * that is the field's own frames, which a press dives into. On the drawn sky,
+ * no finer than the drawing.
+ */
+const FOV_MIN_SURVEY = 2;
 const FOV_MAX = 108;
 const FOV_DIVE = 1.0;
 /**
@@ -279,7 +286,7 @@ export class Gate {
    * @param {HTMLCanvasElement} canvas
    * @param {{onPick: (o: object) => void, onName: (o: object|null) => void}} hooks
    */
-  constructor(canvas, { onPick, onName, onSurvey = () => {}, onStepOut = null, onStepIn = null }) {
+  constructor(canvas, { onPick, onName, onSurvey = () => {}, onStepOut = null }) {
     this.canvas = canvas;
     // The band on the GPU, under this canvas, where WebGL 2 can be had; then
     // this canvas is clear between the stars so the band shows through it.
@@ -294,14 +301,14 @@ export class Gate {
       },
     });
     this.bandLayer = this.skySurvey ? null : createBandLayer(canvas);
+    this.fovMin = this.skySurvey ? FOV_MIN_SURVEY : FOV_MIN;
     this.ctx = canvas.getContext('2d', { alpha: Boolean(this.skySurvey || this.bandLayer) });
     this.onPick = onPick;
     this.onName = onName;
     this.onSurvey = onSurvey;
     /** Called when the sky is zoomed out past its widest: the way out into space. */
     this.onStepOut = onStepOut;
-    /** Called when the sky is zoomed in past its narrowest: SPHEREx's own detail. */
-    this.onStepIn = onStepIn;
+
     this.outward = 0;
     /** The surveyed band, once it has arrived: `{ pixels, W, H }`. */
     this.survey = null;
@@ -1353,12 +1360,8 @@ export class Gate {
             this.onStepOut({ ra: this.cam.ra, dec: this.cam.dec, fov: FOV_MAX });
             return;
           }
-          if (want < FOV_MIN * 0.75 && this.onStepIn) {
-            this.pinch = null;
-            this.onStepIn({ ra: this.cam.ra, dec: this.cam.dec, fov: FOV_MIN });
-            return;
-          }
-          this.cam.fov = Math.max(FOV_MIN, Math.min(FOV_MAX, want));
+          this.cam.fov = Math.max(this.fovMin, Math.min(FOV_MAX, want));
+          this.findHit();
           this.draw();
         }
         return;
@@ -1407,22 +1410,14 @@ export class Gate {
       // Already at its widest and still zooming out: out of the sphere, into space.
       if (this.onStepOut && e.deltaY > 0 && this.cam.fov >= FOV_MAX - 1e-6) {
         this.outward += e.deltaY;
-        if (this.outward > 400) {
+        if (this.outward > 150) {
           this.outward = 0;
           this.onStepOut({ ra: this.cam.ra, dec: this.cam.dec, fov: this.cam.fov });
         }
         return;
       }
-      if (this.onStepIn && e.deltaY < 0 && this.cam.fov <= FOV_MIN + 1e-6) {
-        this.outward += e.deltaY;
-        if (this.outward < -400) {
-          this.outward = 0;
-          this.onStepIn({ ra: this.cam.ra, dec: this.cam.dec, fov: this.cam.fov });
-        }
-        return;
-      }
       this.outward = 0;
-      this.cam.fov = Math.max(FOV_MIN, Math.min(FOV_MAX, this.cam.fov * Math.exp(e.deltaY * 0.0012)));
+      this.cam.fov = Math.max(this.fovMin, Math.min(FOV_MAX, this.cam.fov * Math.exp(e.deltaY * 0.0012)));
       this.findHit();
       this.draw();
     }, { passive: false });
@@ -1510,6 +1505,7 @@ export class Gate {
     const dRA = ((at.ra - from.ra + 540) % 360) - 180;
     const dDec = at.dec - from.dec;
 
+    const fov0 = out ? FOV_WIDE : Math.max(FOV_DIVE, this.cam.fov);
     this.measure(DIVE_DPR);
     return new Promise((resolve) => {
       this.flightDone = resolve;
@@ -1526,7 +1522,8 @@ export class Gate {
         return {
           ra: from.ra + dRA * aim,
           dec: from.dec + dDec * aim,
-          fov: FOV_WIDE * (FOV_DIVE / FOV_WIDE) ** k,
+          // From the field the sky was left at: zoomed in already, the dive goes on from there.
+          fov: fov0 * (FOV_DIVE / fov0) ** k,
         };
       };
 

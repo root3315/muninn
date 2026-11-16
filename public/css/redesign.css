@@ -1948,12 +1948,12 @@ body { font-size: var(--text-base); line-height: 1.5; }
 /* The two ways out of the sky, said once and quietly. */
 .scale-hint {
   position: absolute; z-index: 6; margin: 0;
-  inset-inline: 0; margin-inline: auto; inline-size: fit-content; max-inline-size: calc(100% - 2rem);
+  inset-inline-start: 1rem; inline-size: fit-content; max-inline-size: calc(100% - 2rem);
   inset-block-start: 0.85rem;
   padding: var(--space-2xs) var(--space-md); border-radius: var(--radius-round);
   background: var(--gate-veil-deep); color: var(--color-muted);
   font-size: var(--text-xs); text-align: center; pointer-events: none;
 }
 @media (max-width: 48rem) and (min-height: 30.0625rem) {
-  .scale-hint { inset-block-start: calc(var(--gate-bar, 3.5rem) + 0.25rem); font-size: var(--text-2xs); }
+  .scale-hint { inset-block-start: calc(var(--gate-bar, 3.5rem) + 0.25rem); inset-inline: 0; margin-inline: auto; font-size: var(--text-2xs); }
 }
