@@ -331,7 +331,7 @@ export function createSpace(canvas, { stars, sky }) {
       // The spheres are drawn exactly; their points are left out of the star pass.
       const skip = new Int32Array(12).fill(-1);
       nears.forEach((n, k) => { skip[k] = n.index; });
-      gl.uniform1iv(gl.getUniformLocation(starProg.program, 'uSkip[0]'), skip);
+      gl.uniform1iv(starProg.u['Skip[0]'], skip);
       const front = nears[0];
       gl.uniform4fv(starProg.u.Near, front
         ? [front.pos[0] - eye[0], front.pos[1] - eye[1], front.pos[2] - eye[2], front.rpc]

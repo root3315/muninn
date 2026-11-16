@@ -333,7 +333,8 @@ function levelsOf(bitmap, block) {
  * after every redraw, with how many images the screen wants and has.
  */
 export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () => {} }) {
-  const gl = canvas.getContext('webgl2', { antialias: true, alpha: false });
+  // No multisampling on a phone: on a textured sphere it buys little and costs much.
+  const gl = canvas.getContext('webgl2', { antialias: !COARSE, alpha: false });
   if (!gl) return null;
   gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);

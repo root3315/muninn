@@ -51,9 +51,13 @@ export function openWorld(kind, look, lang) {
   const layer = layerOf(kind, lang);
   aim(kind, look);
   // A layer still loading is aimed again once it has.
-  layer.frame.addEventListener('load', () => aim(kind, look), { once: true });
+  layer.frame.addEventListener('load', () => {
+    aim(kind, look);
+    if (current === kind) layer.frame.contentWindow?.postMessage({ type: 'muninn:resume' }, location.origin);
+  }, { once: true });
   for (const [k, l] of Object.entries(layers)) if (k !== kind) hide(l);
   current = kind;
+  layer.frame.contentWindow?.postMessage({ type: 'muninn:resume' }, location.origin);
   layer.el.hidden = false;
   layer.frame.removeAttribute('aria-hidden');
   requestAnimationFrame(() => requestAnimationFrame(() => layer.el.classList.add('world--on')));
@@ -64,6 +68,10 @@ function hide(layer) {
   if (!layer || layer.el.hidden) return;
   layer.el.classList.remove('world--on');
   layer.frame.setAttribute('aria-hidden', 'true');
+  // A hidden layer stops drawing: it costs the page under it nothing.
+  setTimeout(() => {
+    if (!layer.el.classList.contains('world--on')) layer.frame.contentWindow?.postMessage({ type: 'muninn:pause' }, location.origin);
+  }, 650);
   const done = () => { if (!layer.el.classList.contains('world--on')) layer.el.hidden = true; };
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) done();
   else setTimeout(done, 650);

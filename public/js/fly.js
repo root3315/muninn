@@ -380,37 +380,63 @@ function steer(dt) {
  * System, a planet from near it), and always the two largest, up to twelve.
  * The rest are too small to have a size on the screen and are points.
  */
+const TOP = 12;
+const topK = new Float64Array(TOP);
+const topI = new Int32Array(TOP);
+
 function nearestStar() {
   const [ex, ey, ez] = cam.eye;
   const p = stars.pos;
-  const focalPx = (canvas.clientHeight * Math.min(devicePixelRatio || 1, 2) / 2) / Math.tan((FOV * Math.PI) / 360);
-  const found = [];
+  const rad = stars.rad;
+  // The same pixel density the sky is drawn at (space.js), so "half a pixel" means it.
+  const dpr = Math.min(devicePixelRatio || 1, matchMedia('(pointer: coarse)').matches ? 1.5 : 2);
+  const focalPx = (canvas.clientHeight * dpr / 2) / Math.tan((FOV * Math.PI) / 360);
+  // The twelve largest discs, kept in place in typed arrays: no array per
+  // star, no sort per frame (this ran at 15 ms a frame on a desktop).
+  topK.fill(0);
+  topI.fill(-1);
   let nearestGap = Infinity;
-  for (let i = 0; i < stars.mag.length; i++) {
+  const n = stars.mag.length;
+  for (let i = 0; i < n; i++) {
     // WISE 0855 has no light to see: it is never a disc.
     if (i === stars.dark) continue;
     const dx = p[i * 3] - ex;
     const dy = p[i * 3 + 1] - ey;
     const dz = p[i * 3 + 2] - ez;
     const dist = Math.sqrt(dx * dx + dy * dy + dz * dz + 1e-40);
-    const k = stars.rad[i] / dist;
-    nearestGap = Math.min(nearestGap, Math.max(dist - stars.rad[i] * R_SUN_PC, 1e-12));
-    // The camera inside a body (it starts nowhere near one, but a flight can
-    // pass through): that body is not drawn round it.
-    if (dist < stars.rad[i] * R_SUN_PC) continue;
-    found.push([k, i]);
-    if (found.length > 64) {
-      found.sort((a, b) => b[0] - a[0]);
-      found.length = 24;
+    const r = rad[i] * R_SUN_PC;
+    const surface = dist - r;
+    if (surface < nearestGap) nearestGap = surface;
+    // The camera inside a body (a flight can pass through one): not drawn round it.
+    if (dist < r) continue;
+    const k = rad[i] / dist;
+    if (k <= topK[TOP - 1]) continue;
+    let at = TOP - 1;
+    while (at > 0 && topK[at - 1] < k) {
+      topK[at] = topK[at - 1];
+      topI[at] = topI[at - 1];
+      at--;
     }
+    topK[at] = k;
+    topI[at] = i;
   }
-  found.sort((a, b) => b[0] - a[0]);
-  gap = Number.isFinite(nearestGap) ? nearestGap : 1;
-  const px = (k) => k * R_SUN_PC * focalPx;
-  const chosen = found.filter(([k], n) => n < 2 || px(k) >= 0.5).slice(0, 12);
-  // In double precision: the GPU's single precision is a few AU at a few
-  // hundred parsecs, and a body seen from a few of its radii needs better.
-  return chosen.map(([, i]) => ({
+  gap = Number.isFinite(nearestGap) ? Math.max(nearestGap, 1e-12) : 1;
+  const chosen = [];
+  const F = cam.F;
+  for (let s = 0; s < TOP; s++) {
+    const i = topI[s];
+    if (i < 0) break;
+    const discPx = topK[s] * R_SUN_PC * focalPx;
+    if (s >= 2 && discPx < 0.5) break;
+    // Behind the eye a sphere would cost a full-screen pass for nothing.
+    const dx = p[i * 3] - ex;
+    const dy = p[i * 3 + 1] - ey;
+    const dz = p[i * 3 + 2] - ez;
+    const dist = Math.hypot(dx, dy, dz);
+    if ((dx * F[0] + dy * F[1] + dz * F[2]) < -rad[i] * R_SUN_PC && dist > 0) continue;
+    chosen.push(i);
+  }
+  return chosen.map((i) => ({
     index: i,
     pos: posOf(i),
     rpc: stars.rad[i] * R_SUN_PC,
@@ -503,10 +529,37 @@ function moveBodies() {
 /** The body the camera stopped beside, so time moving it does not leave the camera behind. */
 let carried = null;
 
+/**
+ * Inside the front page this layer is hidden most of the time, and a hidden
+ * frame loop cost the front page nine tenths of its frame time: it stops
+ * while hidden and starts again when shown.
+ */
+let paused = embedded;
+let looping = false;
+addEventListener('message', (e) => {
+  if (e.origin !== location.origin) return;
+  if (e.data?.type === 'muninn:pause') paused = true;
+  if (e.data?.type === 'muninn:resume' && paused) {
+    paused = false;
+    last = performance.now();
+    if (!looping) requestAnimationFrame(frame);
+  }
+});
+
+let movedAt = 0;
 function frame(now) {
+  if (paused) {
+    looping = false;
+    return;
+  }
+  looping = true;
   const dt = Math.min(0.1, (now - last) / 1000);
   last = now;
-  moveBodies();
+  // The planets move slowly enough that four times a second is real time.
+  if (now - movedAt > 250) {
+    movedAt = now;
+    moveBodies();
+  }
   steer(dt);
   lastNear = nearestStar();
   proj = space.draw({ ...basis(), fov: FOV, near: view.ir ? null : lastNear, ir: view.ir, show: () => view.reach });
@@ -843,10 +896,20 @@ $('ir').addEventListener('click', () => {
 });
 
 // Inside the front page: out from the Earth, facing where its sky faced.
+/** A direction asked for before the stars had loaded: applied once they have. */
+let pendingLook = null;
 addEventListener('message', (e) => {
-  if (e.origin !== location.origin || e.data?.type !== 'muninn:look' || !stars) return;
+  if (e.origin !== location.origin || e.data?.type !== 'muninn:look') return;
   const { ra, dec } = e.data;
   if (![ra, dec].every(Number.isFinite)) return;
+  if (!stars) {
+    pendingLook = { ra, dec };
+    return;
+  }
+  lookFromEarth(ra, dec);
+});
+
+function lookFromEarth(ra, dec) {
   autopilot = null;
   closeCard();
   cam.F = direction(ra, dec);
@@ -859,7 +922,7 @@ addEventListener('message', (e) => {
     carried = { index: earth.index, offset: sub(cam.eye, at) };
   }
   factor = 0.5;
-});
+}
 
 /** On the Earth again: its sky, facing where the camera faces. */
 function landOnEarth() {
@@ -908,8 +971,10 @@ if (!space) {
   starCount = data.count;
   buildLabels();
   buildReach();
+  if (pendingLook) lookFromEarth(pendingLook.ra, pendingLook.dec);
   applyLanguage();
   setTimeout(() => { $('hint').dataset.gone = 'true'; }, 9000);
-  requestAnimationFrame(frame);
+  moveBodies();
+  if (!paused) requestAnimationFrame(frame);
 }
 
