@@ -54,6 +54,9 @@ export function createSurveySky(canvas, { onFirstSky = () => {} } = {}) {
       const short = Math.min(width, height);
       const across = (2 * Math.atan(Math.tan((fov * DEG) / 2) * (short / height))) / DEG;
       view.set({ ra, dec, fov: across });
+      // In this frame, not the next: the gate draws its markers now, and a
+      // sky a frame behind them slides under them in a turn.
+      view.drawNow();
     },
     get shown() { return shown; },
     /** One wavelength (a frame of the cube) or the colour view. */

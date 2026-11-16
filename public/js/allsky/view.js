@@ -42,7 +42,14 @@ export const FOV_MAX = 108;
 const FRONT = 0.15;
 const WANT_MAX = 140;
 const LOADS_AT_ONCE = 6;
-const KEEP_TILES = 260;
+/**
+ * Images kept in memory once off screen. A 512-pixel tile with its mipmaps is
+ * about a third of a megabyte on the GPU, an Allsky image a megabyte and a
+ * half: a desktop keeps 260 tiles and the last dozen Allskies, a phone, whose
+ * browser is closed for less, about a third of that and half a dozen.
+ */
+const KEEP_TILES = COARSE ? 90 : 260;
+const KEEP_ALLSKIES = COARSE ? 6 : 12;
 const RETRY_MS = 8000;
 /** Detail-tile meshes kept: a few screens' worth. */
 const MESHES_KEPT = 600;
@@ -336,13 +343,26 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
   // No multisampling on a phone: on a textured sphere it buys little and costs much.
   const gl = canvas.getContext('webgl2', { antialias: !COARSE, alpha: false });
   if (!gl) return null;
-  gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
-  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
-  const aniso = gl.getExtension('EXT_texture_filter_anisotropic');
 
-  const sphere = compile(gl, SPHERE_VS, SPHERE_FS, ['aPos', 'aUv']);
-  const map = compile(gl, MAP_VS, MAP_FS, []);
-  const line = compile(gl, LINE_VS, LINE_FS, ['aPos']);
+  /*
+   * Everything the GPU holds — programs, meshes, textures — is made by
+   * initGL, below, and made again by it if the browser takes the context
+   * away and gives it back (a phone does, when the page is in the background
+   * or the GPU is wanted elsewhere). Until then they are empty.
+   */
+  let aniso = null;
+  let sphere = null;
+  let map = null;
+  let line = null;
+  let allskyMesh = null;
+  let lineBuffer = null;
+  let lineVao = null;
+  let emptyVao = null;
+  let rampTexture = null;
+  /** Set while the context is lost: nothing is drawn or uploaded. */
+  let lost = false;
+  /** Counts the contexts: an image that arrives for an earlier one is not uploaded to this one. */
+  let generation = 0;
 
   const state = { ra: 266.4, dec: -29.0, fov: 120, frames: [], grid: false, map: 0, insets: { top: 0, bottom: 0 } };
   /** The frames on screen before the last change, drawn under the new ones until those are up. */
@@ -389,7 +409,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
   // one image, two texels in from the edge so the filter, read down to the
   // second mipmap level, never reaches the neighbouring cell.
   const ALLSKY_STEPS = 4;
-  const allskyMesh = (() => {
+  const allskyGeometry = (() => {
     const side = ALLSKY_STEPS + 1;
     const positions = new Float32Array(ALLSKY_COUNT * side * side * 3);
     const uv = new Float32Array(ALLSKY_COUNT * side * side * 2);
@@ -405,7 +425,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
         uv[(n * side * side + v) * 2 + 1] = (slot.y + w * ALLSKY_TILE) / ATLAS_H;
       }
     }
-    return meshVao(positions, uv, ALLSKY_STEPS, ALLSKY_COUNT);
+    return { positions, uv };
   })();
   const allskyCentres = Array.from({ length: ALLSKY_COUNT }, (_, n) => tileCentre(ALLSKY_ORDER, n));
 
@@ -433,15 +453,6 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     return meshes.get(key);
   }
 
-  const lineBuffer = gl.createBuffer();
-  const lineVao = gl.createVertexArray();
-  gl.bindVertexArray(lineVao);
-  gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
-  gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
-  gl.bindVertexArray(null);
-  const emptyVao = gl.createVertexArray();
-
   /* ---- textures -------------------------------------------------------- */
 
   function makeTexture(source, maxLevel) {
@@ -458,7 +469,8 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     return tex;
   }
 
-  const rampTexture = (() => {
+  /** The single wavelength's colours, dark to light, drawn once on a 256 × 1 canvas. */
+  const rampCanvas = (() => {
     const c = document.createElement('canvas');
     c.width = 256;
     c.height = 1;
@@ -467,12 +479,37 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     ramp.forEach((colour, i) => g.addColorStop(i / (ramp.length - 1), colour));
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, 256, 1);
+    return c;
+  })();
+
+  function makeRampTexture() {
     const tex = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, c);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, rampCanvas);
     for (const [p, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, p, v);
     return tex;
-  })();
+  }
+
+  /** Every GPU resource the view starts with, made on a fresh context. */
+  function initGL() {
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    aniso = gl.getExtension('EXT_texture_filter_anisotropic');
+    sphere = compile(gl, SPHERE_VS, SPHERE_FS, ['aPos', 'aUv']);
+    map = compile(gl, MAP_VS, MAP_FS, []);
+    line = compile(gl, LINE_VS, LINE_FS, ['aPos']);
+    allskyMesh = meshVao(allskyGeometry.positions, allskyGeometry.uv, ALLSKY_STEPS, ALLSKY_COUNT);
+    lineBuffer = gl.createBuffer();
+    lineVao = gl.createVertexArray();
+    gl.bindVertexArray(lineVao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+    emptyVao = gl.createVertexArray();
+    rampTexture = makeRampTexture();
+  }
+  initGL();
 
   /** Every image asked for, by URL: `{ state, tex, used, priority, readyAt, levels }`. */
   const images = new Map();
@@ -538,9 +575,16 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     const img = images.get(url);
     img.state = 'loading';
     loading++;
+    const born = generation;
     try {
       const bitmap = await createImageBitmap(await fetchImage(url, img), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
-      if (disposed) return;
+      // Arrived for a context that is gone, or while there is none: the image
+      // is asked for again once the new context draws.
+      if (disposed || lost || born !== generation) {
+        bitmap.close?.();
+        img.state = 'queued';
+        return;
+      }
       if (img.allsky) {
         // IRSA's Allsky is single pixels, shown averaged about 4 × 4; the site's
         // own is averaged already. Each is measured as it is shown.
@@ -571,6 +615,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
   }
 
   function pump() {
+    if (lost) return;
     for (let i = queue.length - 1; i >= 0; i--) {
       const img = images.get(queue[i]);
       if (img.used < use - 1) {
@@ -590,8 +635,8 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     const allskies = ready.filter(([, v]) => v.allsky);
     const tiles = ready.filter(([, v]) => !v.allsky);
     // Allsky images are a megabyte each and a sweep through the spectrum passes
-    // a hundred of them: the last dozen stay.
-    for (const [list, keep] of [[tiles, KEEP_TILES], [allskies, 12]]) {
+    // a hundred of them: only the last few stay.
+    for (const [list, keep] of [[tiles, KEEP_TILES], [allskies, KEEP_ALLSKIES]]) {
       if (list.length <= keep) continue;
       list.sort((a, b) => a[1].used - b[1].used);
       for (const [url, v] of list.slice(0, list.length - keep)) {
@@ -933,7 +978,8 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
 
   function draw() {
     queued = false;
-    if (disposed) return;
+    frameRequest = 0;
+    if (disposed || lost) return;
     use++;
     const now = performance.now();
     const cam = camera();
@@ -969,13 +1015,51 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     onChange({ wanted: result.wanted, have: result.have, failed });
   }
 
+  let frameRequest = 0;
   function redraw() {
-    if (queued || disposed) return;
+    if (queued || disposed || lost) return;
     queued = true;
-    requestAnimationFrame(draw);
+    frameRequest = requestAnimationFrame(draw);
+  }
+
+  /** The frame waiting for the next animation frame, drawn now instead. */
+  function drawNow() {
+    if (!queued) return;
+    cancelAnimationFrame(frameRequest);
+    draw();
   }
 
   new ResizeObserver(redraw).observe(canvas);
+
+  /*
+   * A phone's browser may take the GPU from a page (in the background, or
+   * short of memory) and give it back later with nothing on it. Saying so
+   * with preventDefault is what lets it give it back at all; then every
+   * program, mesh and texture is made again and the images are fetched anew
+   * (most from the browser's cache), the Allsky first, as on a first visit.
+   */
+  canvas.addEventListener('webglcontextlost', (e) => {
+    e.preventDefault();
+    lost = true;
+    if (queued) cancelAnimationFrame(frameRequest);
+    queued = false;
+  });
+  canvas.addEventListener('webglcontextrestored', () => {
+    if (disposed) return;
+    generation++;
+    images.clear();
+    queue.length = 0;
+    meshes.clear();
+    previous = [];
+    try {
+      initGL();
+    } catch {
+      // Lost again while being made: the next restore tries again.
+      return;
+    }
+    lost = false;
+    redraw();
+  });
 
   /** The map's device-pixel frame and the camera, for the pointer helpers. */
   const geometry = () => {
@@ -986,12 +1070,23 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
   return {
     get state() { return { ...state, frames: [...state.frames] }; },
     set({ ra = state.ra, dec = state.dec, fov = state.fov, map: mix = state.map } = {}) {
-      state.ra = ((ra % 360) + 360) % 360;
-      state.dec = Math.max(-89.999, Math.min(89.999, dec));
-      state.fov = Math.max(FOV_MIN, Math.min(FOV_MAX, fov));
-      state.map = Math.max(0, Math.min(1, mix));
+      const next = {
+        ra: ((ra % 360) + 360) % 360,
+        dec: Math.max(-89.999, Math.min(89.999, dec)),
+        fov: Math.max(FOV_MIN, Math.min(FOV_MAX, fov)),
+        map: Math.max(0, Math.min(1, mix)),
+      };
+      // An unchanged view needs no new frame.
+      if (next.ra === state.ra && next.dec === state.dec && next.fov === state.fov && next.map === state.map) return;
+      Object.assign(state, next);
       redraw();
     },
+    /**
+     * The frame now, not at the next animation frame: for a page that draws
+     * its own layer over the sky in this frame and wants the two to agree.
+     * Does nothing when nothing has changed.
+     */
+    drawNow,
     /** One frame for a single wavelength, three (red, green, blue) for colour. */
     setFrames(frames) {
       if (frames.join() === state.frames.join()) return;
