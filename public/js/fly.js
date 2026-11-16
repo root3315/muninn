@@ -17,6 +17,7 @@ import { embedded, goTo } from './embed.js';
 import { systemUrl } from './exovision.js';
 import { radecOf } from './allsky/healpix.js';
 import { createSpace, screenOf } from './fly/space.js';
+import { RELIEF, reliefScale } from './fly/relief.js';
 import { createSkyView } from './allsky/view.js';
 import { HIPS_BASE, COLOUR_FRAMES } from './allsky/hips.js';
 import { temperatureOf, luminosityOf, radiusOf, vMinusW2, R_SUN_PC, T_SUN } from './fly/stars.js';
@@ -190,6 +191,8 @@ const SURVEY_FULL_PC = 0.01;
 const SURVEY_NONE_PC = 0.3;
 let survey = null;
 let surveyLayer = null;
+/** The camera the survey was last drawn for. */
+let surveyDrawnFor = '';
 
 function makeSurvey() {
   surveyLayer = document.createElement('canvas');
@@ -224,12 +227,21 @@ function surveyShare() {
 /** The survey from the flight's camera, now, so it and the stars over it agree in this frame. */
 function drawSurvey(share) {
   if (!survey) return;
-  surveyLayer.style.visibility = share > 0 ? '' : 'hidden';
-  if (share <= 0) return;
-  const R = cross(cam.F, cam.U);
-  // Vertical field here; across the shorter side there.
+  const visibility = share > 0 ? '' : 'hidden';
+  if (surveyLayer.style.visibility !== visibility) surveyLayer.style.visibility = visibility;
+  if (share <= 0) {
+    surveyDrawnFor = '';
+    return;
+  }
+  // The survey is the sky seen from the Sun: it changes only when the camera
+  // turns, zooms or is resized, and loads its own images as they arrive.
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
+  const seen = [...cam.F, ...cam.U, FOV, w, h].join();
+  if (seen === surveyDrawnFor) return;
+  surveyDrawnFor = seen;
+  const R = cross(cam.F, cam.U);
+  // Vertical field here; across the shorter side there.
   const across = (2 * Math.atan(Math.tan((FOV * Math.PI) / 360) * (Math.min(w, h) / h)) * 180) / Math.PI;
   survey.set({ basis: { C: cam.F, E: R.map((c) => -c), N: cam.U }, fov: across });
   survey.drawNow();
@@ -246,14 +258,32 @@ async function loadSky() {
 
 /* ---- words ------------------------------------------------------------- */
 
+/*
+ * Numbers for the readout and the labels, which are written again whenever
+ * the camera moves: fmt builds a formatter on every call, which was the
+ * largest single cost of a frame. One formatter per language and number of
+ * digits, made once, writes the same digits.
+ */
+const numberFormats = new Map();
+function num(n, digits) {
+  if (n == null || !Number.isFinite(n)) return '—';
+  const key = `${getLanguage()}:${digits}`;
+  let f = numberFormats.get(key);
+  if (!f) {
+    f = new Intl.NumberFormat(getLanguage() === 'ru' ? 'ru-RU' : 'en-GB', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+    numberFormats.set(key, f);
+  }
+  return f.format(n);
+}
+
 const ly = (pc) => pc * LY_PER_PC;
 const KM_PER_PC = 3.0856775814913673e13;
 function distanceText(pc) {
   const l = ly(pc);
   // Beside a planet AU are too coarse: kilometres, as a spacecraft would say.
-  if (pc * AU_PER_PC < 0.01) return t('fly.km', { n: fmt(pc * KM_PER_PC, 0) });
-  if (l < 0.01) return t('fly.au', { n: fmt(pc * AU_PER_PC, pc * AU_PER_PC < 10 ? 2 : 0) });
-  return t('fly.ly', { n: fmt(l, l < 10 ? 2 : l < 100 ? 1 : 0) });
+  if (pc * AU_PER_PC < 0.01) return t('fly.km', { n: num(pc * KM_PER_PC, 0) });
+  if (l < 0.01) return t('fly.au', { n: num(pc * AU_PER_PC, pc * AU_PER_PC < 10 ? 2 : 0) });
+  return t('fly.ly', { n: num(l, l < 10 ? 2 : l < 100 ? 1 : 0) });
 }
 const nameOf = (s) => (getLanguage() === 'ru' ? s.ru : s.en);
 const sig = (v) => (v >= 100 ? fmt(v, 0) : v >= 10 ? fmt(v, 1) : v >= 1 ? fmt(v, 2) : fmt(v, 3));
@@ -281,7 +311,9 @@ const hold = { forward: false, back: false };
 
 function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));
-  const xyz = ['x', 'y', 'z'].map((k) => Number(p.get(k)));
+  // Only an address that says all three: Number(null) is 0, and an address
+  // with none put the camera in the middle of the Sun.
+  const xyz = ['x', 'y', 'z'].map((k) => (p.has(k) ? Number(p.get(k)) : NaN));
   if (xyz.every(Number.isFinite)) {
     cam.eye = xyz;
     hashPlaced = true;
@@ -295,14 +327,27 @@ function readHash() {
   }
 }
 
+/*
+ * The address is written once the camera has rested for 300 ms. Flying asks
+ * for it every frame: a timer is set once and, when it fires early, set again
+ * for the rest of the wait, instead of a timer cleared and made each frame.
+ */
 let hashTimer = 0;
+let hashAskedAt = 0;
 function writeHash() {
-  clearTimeout(hashTimer);
-  hashTimer = setTimeout(() => {
-    // Exponent form: beside the Moon a millionth of a parsec is too coarse.
-    const p = new URLSearchParams({ x: cam.eye[0].toExponential(10), y: cam.eye[1].toExponential(10), z: cam.eye[2].toExponential(10) });
-    history.replaceState(null, '', `#${p}`);
-  }, 300);
+  hashAskedAt = performance.now();
+  if (!hashTimer) hashTimer = setTimeout(hashDue, 300);
+}
+function hashDue() {
+  const waited = performance.now() - hashAskedAt;
+  if (waited < 300) {
+    hashTimer = setTimeout(hashDue, 300 - waited);
+    return;
+  }
+  hashTimer = 0;
+  // Exponent form: beside the Moon a millionth of a parsec is too coarse.
+  const p = new URLSearchParams({ x: cam.eye[0].toExponential(10), y: cam.eye[1].toExponential(10), z: cam.eye[2].toExponential(10) });
+  history.replaceState(null, '', `#${p}`);
 }
 
 const posOf = (i) => [stars.pos[i * 3], stars.pos[i * 3 + 1], stars.pos[i * 3 + 2]];
@@ -403,6 +448,7 @@ function flyTo(s) {
     ms: reduceMotion ? 1 : 3000 + 400 * Math.log10(1 + away / Math.max(stop, 1e-12)),
   };
   $('hint').dataset.gone = 'true';
+  wake();
 }
 
 function steer(dt) {
@@ -501,6 +547,8 @@ const SATURN_RINGS = (() => {
 const MAP_KIND = { mercury: 'fly.mapFalse', venus: 'fly.mapRadar' };
 
 let surfaceInfo = {};
+/** The height maps' sources and ranges (maps.json `heights`), for the bodies with one. */
+let heightInfo = {};
 let axesAt = 0;
 const axesOf = new Map();
 
@@ -508,14 +556,43 @@ async function loadSurfaces() {
   try {
     const res = await fetch('data/fly/tex/maps.json');
     if (!res.ok) return;
-    surfaceInfo = (await res.json()).maps ?? {};
+    const info = await res.json();
+    surfaceInfo = info.maps ?? {};
+    heightInfo = info.heights ?? {};
   } catch { return; }
   for (const [key, m] of Object.entries(surfaceInfo)) {
     const img = new Image();
     img.decoding = 'async';
     img.src = `data/fly/tex/${m.file}`;
-    img.decode().then(() => space.setMap(key, img)).catch(() => {});
+    img.decode().then(() => { space.setMap(key, img); wake(); }).catch(() => {});
   }
+}
+
+/** The bodies whose heights have been asked for. */
+const reliefAsked = new Set();
+let reliefWorker = null;
+
+/**
+ * A body's height map, read at its full 16 bits and turned into slopes once
+ * (relief.js), beside the page, the first time the body is seen large
+ * enough for its ground to show. The Earth's oceans are flat: the map holds
+ * the sea floor too, and the sea over it is what is seen.
+ */
+function loadRelief(key) {
+  reliefAsked.add(key);
+  if (!reliefWorker) {
+    try {
+      reliefWorker = new Worker(new URL('./fly/relief-worker.js', import.meta.url), { type: 'module' });
+    } catch { return; }
+    reliefWorker.addEventListener('message', (e) => {
+      if (!e.data.levels) return;
+      space.setRelief(e.data.key, e.data.levels);
+      wake();
+    });
+  }
+  const meta = heightInfo[key];
+  const url = new URL(`data/fly/tex/${meta.file}`, location.href).href;
+  reliefWorker.postMessage({ url, meta, key, seaLevel: key === 'earth' ? 0 : null });
 }
 
 /** A body's map key and its axes now (the axes worked out again each second). */
@@ -533,14 +610,24 @@ function surfaceOf(i) {
 const TOP = 12;
 const topK = new Float64Array(TOP);
 const topI = new Int32Array(TOP);
+const coarsePointer = matchMedia('(pointer: coarse)');
+/** Counts every change to where the bodies are or how large: the planets moving, a star's radius corrected. */
+let bodiesChanged = 0;
+/** The eye and the bodies the last pass over every star was made for. */
+let scannedFor = null;
 
-function nearestStar() {
+/**
+ * One pass over every star: the distance to the nearest surface, which sets
+ * the speed, and the twelve that look largest. It depends only on where the
+ * eye and the bodies are, so turning the camera, or a frame with nothing
+ * moved, reuses the last pass instead of reading sixty thousand stars again.
+ */
+function scanBodies() {
   const [ex, ey, ez] = cam.eye;
+  if (scannedFor && scannedFor[0] === ex && scannedFor[1] === ey && scannedFor[2] === ez && scannedFor[3] === bodiesChanged) return;
+  scannedFor = [ex, ey, ez, bodiesChanged];
   const p = stars.pos;
   const rad = stars.rad;
-  // The same pixel density the sky is drawn at (space.js), so "half a pixel" means it.
-  const dpr = Math.min(devicePixelRatio || 1, matchMedia('(pointer: coarse)').matches ? 1.5 : 2);
-  const focalPx = (canvas.clientHeight * dpr / 2) / Math.tan((FOV * Math.PI) / 360);
   // The twelve largest discs, kept in place in typed arrays: no array per
   // star, no sort per frame (this ran at 15 ms a frame on a desktop).
   topK.fill(0);
@@ -553,8 +640,15 @@ function nearestStar() {
     const dx = p[i * 3] - ex;
     const dy = p[i * 3 + 1] - ey;
     const dz = p[i * 3 + 2] - ez;
-    const dist = Math.sqrt(dx * dx + dy * dy + dz * dz + 1e-40);
+    const d2 = dx * dx + dy * dy + dz * dz + 1e-40;
     const r = rad[i] * R_SUN_PC;
+    // Nearly every star is neither nearer than the nearest surface so far
+    // nor larger than the twelfth disc: both are asked in squares first, and
+    // the square root is taken only for the few that might be.
+    const reach = nearestGap + r;
+    const kMin = topK[TOP - 1];
+    if (reach > 0 && d2 >= reach * reach && rad[i] * rad[i] <= kMin * kMin * d2) continue;
+    const dist = Math.sqrt(d2);
     const surface = dist - r;
     if (surface < nearestGap) nearestGap = surface;
     // The camera inside a body (a flight can pass through one): not drawn round it.
@@ -571,6 +665,16 @@ function nearestStar() {
     topI[at] = i;
   }
   gap = Number.isFinite(nearestGap) ? Math.max(nearestGap, 1e-12) : 1;
+}
+
+function nearestStar() {
+  scanBodies();
+  const [ex, ey, ez] = cam.eye;
+  const p = stars.pos;
+  const rad = stars.rad;
+  // The same pixel density the sky is drawn at (space.js), so "half a pixel" means it.
+  const dpr = Math.min(devicePixelRatio || 1, coarsePointer.matches ? 1.5 : 2);
+  const focalPx = (canvas.clientHeight * dpr / 2) / Math.tan((FOV * Math.PI) / 360);
   const chosen = [];
   const F = cam.F;
   for (let s = 0; s < TOP; s++) {
@@ -594,16 +698,52 @@ function nearestStar() {
     lit: Boolean(stars.lit[i]),
     ...(i === stars.ringed ? SATURN_RINGS : {}),
     ...surfaceOf(i),
+    relief: reliefFrom(i, focalPx),
   }));
+}
+
+/**
+ * How many times steeper than true a body's ground is drawn from here; 0 for
+ * a body with no heights, or one too small on the screen for its ground to
+ * show, whose heights are then not even read.
+ */
+function reliefFrom(i, focalPx) {
+  const key = stars.bodyKey?.get(i);
+  if (!key || !heightInfo[key]?.file || !RELIEF[key]) return 0;
+  const r = stars.rad[i] * R_SUN_PC;
+  const d = len(sub(posOf(i), cam.eye));
+  if ((r / d) * focalPx < 12) return 0;
+  if (!reliefAsked.has(key)) loadRelief(key);
+  return reliefScale(key, d / r - 1);
 }
 
 /* ---- the readout and labels ------------------------------------------- */
 
 /** Speed in the unit that suits it: km/s near planets, AU/s in the Solar System, ly/s among the stars. */
 function speedText(pcPerS) {
-  if (pcPerS * AU_PER_PC < 0.01) return t('fly.speedKm', { v: fmt(pcPerS * KM_PER_PC, 0) });
-  if (ly(pcPerS) < 0.01) return t('fly.speedAu', { v: fmt(pcPerS * AU_PER_PC, 2) });
-  return t('fly.speed', { v: fmt(ly(pcPerS), ly(pcPerS) < 1 ? 2 : 1) });
+  if (pcPerS * AU_PER_PC < 0.01) return t('fly.speedKm', { v: num(pcPerS * KM_PER_PC, 0) });
+  if (ly(pcPerS) < 0.01) return t('fly.speedAu', { v: num(pcPerS * AU_PER_PC, 2) });
+  return t('fly.speed', { v: num(ly(pcPerS), ly(pcPerS) < 1 ? 2 : 1) });
+}
+
+/*
+ * The page's words over the canvas are written only when they change: a
+ * style or text written each frame with what it already says still costs
+ * the browser a fresh layout of the labels.
+ */
+function setText(el, text) {
+  if (el.textContent !== text) el.textContent = text;
+}
+function setHidden(el, hidden) {
+  if (el.hidden !== hidden) el.hidden = hidden;
+}
+/** Put an element at a point of the canvas, CSS pixels, with dy below it. */
+function setPlace(el, at, dy = 0) {
+  const transform = `translate(${at.x.toFixed(1)}px, ${(at.y + dy).toFixed(1)}px)`;
+  if (el.placed !== transform) {
+    el.style.transform = transform;
+    el.placed = transform;
+  }
 }
 
 function readout() {
@@ -614,47 +754,66 @@ function readout() {
     const d = len(sub(placeOf(s), cam.eye));
     if (d < nearD && d > 1e-12) { nearD = d; nearName = s; }
   }
-  $('read').textContent = [
+  setText($('read'), [
     t('fly.fromSun', { d: distanceText(fromSun) }),
     speedText(currentSpeed()),
     nearName && t('fly.nearest', { name: nameOf(nearName), d: distanceText(nearD) }),
-  ].filter(Boolean).join('  ·  ');
+  ].filter(Boolean).join('  ·  '));
+}
+
+/**
+ * The bodies drawn as spheres this frame, where each is on the screen and how
+ * many pixels its radius is: worked out once a frame for every label that
+ * asks whether a disc covers it.
+ */
+let discs = [];
+function measureDiscs(b) {
+  const pxPerRad = proj.focal[1] * (proj.h / proj.dpr) / 2;
+  discs = (lastNear ?? []).map((n) => {
+    const d = len(sub(n.pos, cam.eye));
+    return { index: n.index, d, c: screenOf(n.pos, b, proj), r: (n.rpc / d) * pxPerRad };
+  });
 }
 
 function placeLabels() {
   const b = basis();
   const kept = [];
-  for (const { s, el } of labels) {
-    const at = screenOf(placeOf(s), b, proj);
+  // A planet's name only near the Sun: from the stars the planets are one point.
+  const outOfSystem = len(cam.eye) > 0.01;
+  for (const label of labels) {
+    const { s, el } = label;
+    const p = placeOf(s);
+    const d = len(sub(p, cam.eye));
+    const at = screenOf(p, b, proj);
+    label.at = at;
+    if (!at) {
+      setHidden(el, true);
+      continue;
+    }
     // A star seen as a large disc needs no ring and name on top of it.
-    const ln = (lastNear ?? []).find((x) => x.index === s.index);
-    const big = ln && (ln.rpc / len(sub(ln.pos, cam.eye))) * proj.focal[1] * (proj.h / proj.dpr) / 2 > 24;
-    // A planet's name only near the Sun: from the stars the planets are one point.
-    const far = s.planet && len(cam.eye) > 0.01;
+    const own = discs.find((x) => x.index === s.index);
+    const big = own && own.r > 24;
+    const far = s.planet && outOfSystem;
     // Behind a nearer disc: hidden by it.
-    const behind = at && (lastNear ?? []).some((n) => {
-      if (n.index === s.index) return false;
-      const dn = len(sub(n.pos, cam.eye));
-      if (dn >= len(sub(placeOf(s), cam.eye))) return false;
-      const c = screenOf(n.pos, b, proj);
-      const r = (n.rpc / dn) * proj.focal[1] * (proj.h / proj.dpr) / 2;
-      return c && Math.hypot(c.x - at.x, c.y - at.y) < r;
-    });
-    el.hidden = !at || big || far || behind;
-    if (!at) continue;
-    el.style.transform = `translate(${at.x.toFixed(1)}px, ${at.y.toFixed(1)}px)`;
-    el.dataset.x = at.x;
-    el.dataset.y = at.y;
-    el.querySelector('.fly-label__far').textContent = distanceText(len(sub(placeOf(s), cam.eye)));
-    kept.push({ el, at, d: len(sub(placeOf(s), cam.eye)) });
+    const behind = discs.some((n) => n.index !== s.index && n.d < d && n.c && Math.hypot(n.c.x - at.x, n.c.y - at.y) < n.r);
+    kept.push({ label, at, d, hidden: Boolean(big || far || behind) });
   }
   // Two names on one spot are read as neither: the nearer body keeps its own.
+  // A name hidden by its disc still keeps the spot, as it always has.
   kept.sort((p, q) => p.d - q.d);
   const shown = [];
   for (const k of kept) {
-    if (shown.some((o) => Math.abs(o.at.x - k.at.x) < 150 && Math.abs(o.at.y - k.at.y) < 16)) k.el.hidden = true;
+    if (shown.some((o) => Math.abs(o.at.x - k.at.x) < 150 && Math.abs(o.at.y - k.at.y) < 16)) k.hidden = true;
     else shown.push(k);
+    const { el } = k.label;
+    setHidden(el, k.hidden);
+    k.label.shown = !k.hidden;
+    if (k.hidden) continue;
+    setPlace(el, k.at);
+    if (!k.label.farEl) k.label.farEl = el.querySelector('.fly-label__far');
+    setText(k.label.farEl, distanceText(k.d));
   }
+  for (const label of labels) if (!label.at) label.shown = false;
 }
 
 /* ---- time ------------------------------------------------------------ */
@@ -664,15 +823,19 @@ function placeLabels() {
  * out for this moment, every frame, from the same orbital elements. Time runs
  * at its own pace and no other; the stars' own motions are too slow to see.
  */
+/** The bodies' positions as sent to the renderer, one array kept for it. */
+let bodiesXyz = null;
 function moveBodies() {
   const bodies = solarSystem(new Date());
   const first = stars.firstBody;
-  const xyz = new Float32Array(bodies.length * 3);
+  if (bodiesXyz?.length !== bodies.length * 3) bodiesXyz = new Float32Array(bodies.length * 3);
+  const xyz = bodiesXyz;
   bodies.forEach((b, k) => {
     xyz.set(b.pos, k * 3);
     stars.pos.set(b.pos, (first + k) * 3);
   });
   space.movePositions(first, xyz);
+  bodiesChanged++;
   // A camera riding with the Earth or the Moon is carried with it, near it.
   if (carried) {
     const now = posOf(carried.index);
@@ -687,6 +850,10 @@ let carried = null;
  * Inside the front page this layer is hidden most of the time, and a hidden
  * frame loop cost the front page nine tenths of its frame time: it stops
  * while hidden and starts again when shown.
+ *
+ * Shown, it draws only while something changes: a key or a finger flying,
+ * the autopilot, a drag, the wheel, a button. A camera at rest is drawn
+ * again four times a second, as the planets move, and otherwise left alone.
  */
 let paused = embedded;
 let looping = false;
@@ -695,25 +862,48 @@ addEventListener('message', (e) => {
   if (e.data?.type === 'muninn:pause') paused = true;
   if (e.data?.type === 'muninn:resume' && paused) {
     paused = false;
-    last = performance.now();
-    if (!looping) requestAnimationFrame(frame);
+    wake();
   }
 });
 
-let movedAt = 0;
+/** Draw at the next frame, and go on drawing for as long as anything moves. */
+function wake() {
+  if (paused || looping || !space || !stars) return;
+  looping = true;
+  // The time since the last frame drawn is not time flown: the first step is a frame's.
+  last = performance.now();
+  requestAnimationFrame(frame);
+}
+
+/** Whether a key or a held button is flying the camera. */
+function flying() {
+  return keys.has('KeyW') || keys.has('ArrowUp') || keys.has('KeyS') || keys.has('ArrowDown')
+    || keys.has('KeyA') || keys.has('ArrowLeft') || keys.has('KeyD') || keys.has('ArrowRight')
+    || hold.forward || hold.back;
+}
+
+// The planets move slowly enough that four times a second is real time.
+setInterval(() => {
+  if (paused || !space || !stars) return;
+  moveBodies();
+  wake();
+}, 250);
+
 function frame(now) {
   if (paused) {
     looping = false;
     return;
   }
-  looping = true;
-  const dt = Math.min(0.1, (now - last) / 1000);
+  const dt = Math.min(0.1, Math.max(0, now - last) / 1000);
   last = now;
-  // The planets move slowly enough that four times a second is real time.
-  if (now - movedAt > 250) {
-    movedAt = now;
-    moveBodies();
-  }
+  // The speed is a share of the distance to the nearest surface, so it is
+  // measured from where the camera is before it moves. Measured only after,
+  // a camera put somewhere new kept the distance from where it was before:
+  // in the front page's flight, loaded out of sight and never drawn, that was
+  // the parsec it starts with, and a W held from the sky flew the first frame
+  // at half a parsec a second, out past Neptune. From beside the Earth the
+  // first step is a few hundred km/s.
+  scanBodies();
   steer(dt);
   lastNear = nearestStar();
   const extra = drawSystem();
@@ -721,6 +911,7 @@ function frame(now) {
   const share = surveyShare();
   drawSurvey(share);
   proj = space.draw({ ...basis(), fov: FOV, near, ir: view.ir, show: () => view.reach, survey: share });
+  measureDiscs(basis());
   placeLabels();
   placeExoLabels();
   placeSystemLabels();
@@ -728,7 +919,8 @@ function frame(now) {
   drawSolarOrbits();
   placeMarks();
   readout();
-  requestAnimationFrame(frame);
+  if (autopilot || pullOut || flying()) requestAnimationFrame(frame);
+  else looping = false;
 }
 
 /* ---- a star's card ----------------------------------------------------- */
@@ -805,6 +997,8 @@ function openCard(entry) {
       if (s.key !== 'moon') rows.push([t('fly.cardMoons'), String(f.moons)]);
       const m = surfaceInfo[s.key];
       if (m) rows.push([t('fly.cardMap'), `${t(MAP_KIND[s.key] ?? 'fly.mapTrue')} · ${m.credit}`]);
+      const hm = heightInfo[s.key];
+      if (hm && RELIEF[s.key]) rows.push([t('fly.cardRelief'), `${t('fly.relief', { n: fmt(RELIEF[s.key], RELIEF[s.key] % 1 ? 1 : 0) })} · ${hm.credit}`]);
     }
     rows.push([t('fly.cardSunAU'), t('fly.au', { n: fmt(fromSun / AU_PC, 2) })]);
   } else if (i >= 0) {
@@ -906,6 +1100,7 @@ canvas.addEventListener('pointermove', (e) => {
   cam.F = rotate(cam.F, R, dy * perPx);
   cam.U = rotate(cam.U, R, dy * perPx);
   orthonormal();
+  wake();
 });
 canvas.addEventListener('pointerup', (e) => {
   const p = pointers.get(e.pointerId);
@@ -923,6 +1118,7 @@ canvas.addEventListener('pointercancel', (e) => pointers.delete(e.pointerId));
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
   FOV = Math.max(FOV_RANGE[0], Math.min(FOV_RANGE[1], FOV * Math.exp(e.deltaY / 600)));
+  wake();
 }, { passive: false });
 
 /** Parsecs a second, now. */
@@ -947,6 +1143,7 @@ addEventListener('keydown', (e) => {
   if (e.code === 'Minus' || e.code === 'NumpadSubtract') setFactor(factor / 2);
   if (e.code.startsWith('Arrow')) e.preventDefault();
   if (['KeyW', 'KeyS', 'KeyA', 'KeyD'].includes(e.code) || e.code.startsWith('Arrow')) autopilot = null;
+  wake();
 });
 addEventListener('keyup', (e) => {
   keys.delete(e.code);
@@ -956,12 +1153,12 @@ addEventListener('blur', () => keys.clear());
 
 for (const [id, k] of [['go-forward', 'forward'], ['go-back', 'back']]) {
   const b = $(id);
-  const on = (v) => (e) => { e.preventDefault(); hold[k] = v; if (v) autopilot = null; };
+  const on = (v) => (e) => { e.preventDefault(); hold[k] = v; if (v) { autopilot = null; wake(); } };
   b.addEventListener('pointerdown', on(true));
   for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(ev, on(false));
 }
-$('faster').addEventListener('click', () => setFactor(factor * 3));
-$('slower').addEventListener('click', () => setFactor(factor / 3));
+$('faster').addEventListener('click', () => { setFactor(factor * 3); wake(); });
+$('slower').addEventListener('click', () => { setFactor(factor / 3); wake(); });
 
 /* ---- what SPHEREx can reach, and where Planet Nine would be --------- */
 
@@ -1053,23 +1250,16 @@ function placeMarks() {
     const pos = view.reach ? m.at() : null;
     const at = pos ? screenOf(pos, b, proj) : null;
     // A mark on top of a star's label would be read as neither.
-    const crowded = at && labels.some(({ s, el }) => {
-      if (el.hidden) return false;
-      const p = screenOf(placeOf(s), b, proj);
-      return p && Math.abs(p.x - at.x) < 60 && Math.abs(p.y - at.y) < 14;
-    });
+    const crowded = at && labels.some((l) => l.shown && Math.abs(l.at.x - at.x) < 60 && Math.abs(l.at.y - at.y) < 14);
     // Nor on a disc, nor on another mark.
-    const onDisc = at && (lastNear ?? []).some((n) => {
-      const c = screenOf(n.pos, b, proj);
-      const r = (n.rpc / len(sub(n.pos, cam.eye))) * proj.focal[1] * (proj.h / proj.dpr) / 2;
-      return c && Math.hypot(c.x - at.x, c.y - at.y) < r + 12;
-    });
+    const onDisc = at && discs.some((n) => n.c && Math.hypot(n.c.x - at.x, n.c.y - at.y) < n.r + 12);
     const stacked = at && placedMarks.some((o) => Math.abs(o.x - at.x) < 220 && Math.abs(o.y - at.y) < 18);
-    m.el.hidden = !at || crowded || onDisc || stacked;
-    if (m.el.hidden) continue;
+    const hidden = Boolean(!at || crowded || onDisc || stacked);
+    setHidden(m.el, hidden);
+    if (hidden) continue;
     placedMarks.push(at);
-    m.el.textContent = m.text();
-    m.el.style.transform = `translate(${at.x.toFixed(1)}px, ${at.y.toFixed(1)}px)`;
+    setText(m.el, m.text());
+    setPlace(m.el, at);
   }
 }
 
@@ -1086,16 +1276,19 @@ function flyToPlanetNine() {
   autopilot = { from: cam.eye, to: above, look: [0, 0, 0], stop: 300 * AU, t0: performance.now(), ms: reduceMotion ? 1 : 3600 };
   view.reach = true;
   $('reach').setAttribute('aria-pressed', 'true');
+  wake();
 }
 
 $('reach').addEventListener('click', () => {
   view.reach = !view.reach;
   $('reach').setAttribute('aria-pressed', String(view.reach));
+  wake();
 });
 $('ir').addEventListener('click', () => {
   view.ir = !view.ir;
   $('ir').setAttribute('aria-pressed', String(view.ir));
   $('read-note').textContent = view.ir ? t('fly.irNote') : '';
+  wake();
 });
 
 // Inside the front page: out from the Earth, facing where its sky faced.
@@ -1114,6 +1307,7 @@ addEventListener('message', (e) => {
   const { ra, dec, key, fov } = e.data;
   // The front page's field, so the sky stays as it was on screen.
   if (Number.isFinite(fov)) FOV = Math.max(FOV_RANGE[0], Math.min(FOV_RANGE[1], fov));
+  wake();
   if (![ra, dec].every(Number.isFinite)) return;
   // A key pressed on the sky goes on flying here until it is let go: here,
   // or on the page around, which says so; and if neither is heard, a moment.
@@ -1147,6 +1341,7 @@ function lookFromEarth(ra, dec) {
     if (!reduceMotion && !keys.size) pullOut = { earth: earth.index, r, F0: cam.F, t0: performance.now(), ms: 3200 };
   }
   factor = 0.5;
+  wake();
 }
 
 /** The leaving of the Earth, while it runs. */
@@ -1181,8 +1376,54 @@ function landOnEarth() {
 
 /* ---- the Sun's own system ----------------------------------------------- */
 
+/** Polylines as the two ends of each segment, one after the other, in double precision. */
+function segmentEnds(lines) {
+  let n = 0;
+  for (const pts of lines) n += Math.max(0, pts.length - 1) * 6;
+  const out = new Float64Array(n);
+  let o = 0;
+  for (const pts of lines) {
+    for (let k = 0; k + 1 < pts.length; k++) {
+      out.set(pts[k], o);
+      out.set(pts[k + 1], o + 3);
+      o += 6;
+    }
+  }
+  return out;
+}
+
+/**
+ * Segment ends moved by `base` and seen from the eye, into a single-precision
+ * array kept for the purpose: the subtraction is made in double precision
+ * first, so lines millionths of a parsec from the camera stay where they are.
+ */
+function fromEye(ends, base, into) {
+  const [ex, ey, ez] = cam.eye;
+  const [bx, by, bz] = base;
+  for (let i = 0; i < ends.length; i += 3) {
+    into[i] = ends[i] + bx - ex;
+    into[i + 1] = ends[i + 1] + by - ey;
+    into[i + 2] = ends[i + 2] + bz - ez;
+  }
+  return into;
+}
+
+/** Null if `was` was kept for this eye and these bodies (and `more`); otherwise the key to keep now. */
+function sameView(was, ...more) {
+  const now = [...cam.eye, bodiesChanged, ...more];
+  return was && was.length === now.length && was.every((v, i) => v === now[i]) ? null : now;
+}
+
+const ORIGIN = [0, 0, 0];
 let solarPaths = null;
 let solarPathsAt = 0;
+/** The orbits' segment ends, from the Sun, and the Moon's, from the Earth; traced once an hour. */
+let solarEnds = null;
+let moonEnds = null;
+/** The same from the eye, rewritten only when the eye or the planets have moved. */
+let solarFromEye = null;
+let moonFromEye = null;
+let solarDrawnFor = null;
 
 /** The planets' orbits within a few hundred AU of the Sun, the Moon's near the Earth: relative to the eye. */
 function drawSolarOrbits() {
@@ -1190,26 +1431,27 @@ function drawSolarOrbits() {
   if (fromSun > 400 * AU) {
     space.setLiveLines(null, null, 'solar');
     space.setLiveLines(null, null, 'moon');
+    solarDrawnFor = null;
     return;
   }
   // The orbits barely change in an hour: traced again then.
   if (!solarPaths || performance.now() - solarPathsAt > 3600000) {
     solarPaths = solarOrbits();
     solarPathsAt = performance.now();
+    solarEnds = segmentEnds(Object.entries(solarPaths).filter(([key]) => key !== 'moon').map(([, pts]) => pts));
+    moonEnds = segmentEnds([solarPaths.moon]);
+    solarFromEye = new Float32Array(solarEnds.length);
+    moonFromEye = new Float32Array(moonEnds.length);
+    solarDrawnFor = null;
   }
-  const segs = [];
-  for (const [key, pts] of Object.entries(solarPaths)) {
-    if (key === 'moon') continue;
-    for (let k = 0; k + 1 < pts.length; k++) segs.push(...sub(pts[k], cam.eye), ...sub(pts[k + 1], cam.eye));
-  }
-  space.setLiveLines(new Float32Array(segs), [0.75, 0.82, 1, 0.28], 'solar');
+  const next = sameView(solarDrawnFor);
+  if (!next) return;
+  solarDrawnFor = next;
+  space.setLiveLines(fromEye(solarEnds, ORIGIN, solarFromEye), [0.75, 0.82, 1, 0.28], 'solar');
   const earth = named.find((x) => x.key === 'earth');
   const earthPos = earth ? posOf(earth.index) : null;
   if (earthPos && len(sub(cam.eye, earthPos)) < 0.05 * AU) {
-    const m = [];
-    const pts = solarPaths.moon;
-    for (let k = 0; k + 1 < pts.length; k++) m.push(...sub(add(earthPos, pts[k]), cam.eye), ...sub(add(earthPos, pts[k + 1]), cam.eye));
-    space.setLiveLines(new Float32Array(m), [0.75, 0.82, 1, 0.35], 'moon');
+    space.setLiveLines(fromEye(moonEnds, earthPos, moonFromEye), [0.75, 0.82, 1, 0.35], 'moon');
   } else {
     space.setLiveLines(null, null, 'moon');
   }
@@ -1264,6 +1506,10 @@ function openSolarCard() {
  */
 const SCALE_ORBITS = [[1, 'fly.orbitEarth'], [5.203, 'fly.orbitJupiter'], [30.07, 'fly.orbitNeptune']];
 
+const SCALE_STEPS = 128;
+const scaleFromEye = new Float32Array(SCALE_ORBITS.length * SCALE_STEPS * 6);
+let scaleDrawnFor = null;
+
 function drawScale(nears) {
   const box = $('scale-labels');
   const star = (nears ?? []).find((n) => !n.lit && n.index >= 0);
@@ -1272,6 +1518,7 @@ function drawScale(nears) {
   const discFrac = star ? (star.rpc / d) / Math.tan((FOV * Math.PI) / 360) : 0;
   if (!star || discFrac < 0.08) {
     space.setLiveLines(null, null, 'scale');
+    scaleDrawnFor = null;
     if (box.childElementCount) box.replaceChildren();
     return;
   }
@@ -1280,21 +1527,28 @@ function drawScale(nears) {
   if (len(a) < 1e-6) a = cross(toCam, [1, 0, 0]);
   a = norm(a);
   const bvec = norm(cross(toCam, a));
-  const segs = [];
   const marks = [];
+  // The circles face the camera: traced again when it moves or rolls, not otherwise.
+  const next = sameView(scaleDrawnFor, star.index, ...cam.U);
+  let o = 0;
   for (const [au, key] of SCALE_ORBITS) {
     const r = au * AU;
     // An orbit far wider than the view, or far smaller than the star, says nothing.
     if (r / d > 3 || r < star.rpc * 0.05) continue;
-    for (let k = 0; k < 128; k++) {
-      const a0 = (k / 128) * 2 * Math.PI;
-      const a1 = ((k + 1) / 128) * 2 * Math.PI;
-      segs.push(...sub(add(add(star.pos, a, r * Math.cos(a0)), bvec, r * Math.sin(a0)), cam.eye));
-      segs.push(...sub(add(add(star.pos, a, r * Math.cos(a1)), bvec, r * Math.sin(a1)), cam.eye));
+    for (let k = 0; next && k < SCALE_STEPS; k++) {
+      for (const step of [k, k + 1]) {
+        const ang = (step / SCALE_STEPS) * 2 * Math.PI;
+        const rc = r * Math.cos(ang);
+        const rs = r * Math.sin(ang);
+        for (let j = 0; j < 3; j++) scaleFromEye[o++] = star.pos[j] + a[j] * rc + bvec[j] * rs - cam.eye[j];
+      }
     }
     marks.push({ pos: add(star.pos, bvec, r * 0.96), text: t(key), inside: r < star.rpc });
   }
-  space.setLiveLines(segs.length ? new Float32Array(segs) : null, [0.75, 0.85, 1, 0.55], 'scale');
+  if (next) {
+    scaleDrawnFor = next;
+    space.setLiveLines(o ? scaleFromEye.subarray(0, o) : null, [0.75, 0.85, 1, 0.55], 'scale');
+  }
   while (box.childElementCount < marks.length) {
     const el = document.createElement('span');
     el.className = 'fly-mark fly-mark--scale';
@@ -1304,10 +1558,10 @@ function drawScale(nears) {
   [...box.children].forEach((el, k) => {
     const m = marks[k];
     const at = m ? screenOf(m.pos, b, proj) : null;
-    el.hidden = !at;
+    setHidden(el, !at);
     if (!at) return;
-    el.textContent = m.inside ? t('fly.orbitInside', { orbit: m.text }) : m.text;
-    el.style.transform = `translate(${at.x.toFixed(1)}px, ${at.y.toFixed(1)}px)`;
+    setText(el, m.inside ? t('fly.orbitInside', { orbit: m.text }) : m.text);
+    setPlace(el, at);
   });
 }
 
@@ -1343,9 +1597,11 @@ async function loadSystems() {
       if (sys.index >= 0 && sys.starR > 0 && !stars.measured[sys.index]) {
         stars.rad[sys.index] = sys.starR;
         stars.measured[sys.index] = 1;
+        bodiesChanged++;
       }
     }
     buildExoLabels();
+    wake();
   } catch { /* the flight goes on without them */ }
 }
 
@@ -1413,6 +1669,8 @@ function buildExoLabels() {
     el.hidden = true;
     el.innerHTML = '<span class="fly-label__dot"></span><span class="fly-label__name"></span><span class="fly-label__far num"></span>';
     el.addEventListener('click', () => { if (el.sys) openSystemCard(el.sys); });
+    el.nameEl = el.querySelector('.fly-label__name');
+    el.farEl = el.querySelector('.fly-label__far');
     $('labels').append(el);
     return el;
   });
@@ -1422,18 +1680,17 @@ function placeExoLabels() {
   if (!exo.length) return;
   const b = basis();
   const near = [];
+  const [ex, ey, ez] = cam.eye;
   for (const sys of exo) {
-    const d = len(sub(sys.center, cam.eye));
-    if (d > 60) continue;
-    const at = screenOf(sys.center, b, proj);
+    // Five thousand systems a frame: their distances without an array for each.
+    const c = sys.center;
+    const d2 = (c[0] - ex) ** 2 + (c[1] - ey) ** 2 + (c[2] - ez) ** 2;
+    if (d2 > 3600) continue;
+    const d = Math.sqrt(d2);
+    const at = screenOf(c, b, proj);
     if (!at) continue;
     // Behind a nearer disc (a planet beside the camera): hidden by it.
-    if ((lastNear ?? []).some((n) => {
-      const dn = len(sub(n.pos, cam.eye));
-      if (dn >= d) return false;
-      const c = screenOf(n.pos, b, proj);
-      return c && Math.hypot(c.x - at.x, c.y - at.y) < (n.rpc / dn) * proj.focal[1] * (proj.h / proj.dpr) / 2 + 8;
-    })) continue;
+    if (discs.some((n) => n.d < d && n.c && Math.hypot(n.c.x - at.x, n.c.y - at.y) < n.r + 8)) continue;
     near.push({ sys, d, at });
   }
   near.sort((x, y) => x.d - y.d);
@@ -1442,16 +1699,16 @@ function placeExoLabels() {
   for (const n of near) {
     if (k >= exoLabels.length) break;
     if (shown.some((o) => Math.abs(o.x - n.at.x) < 150 && Math.abs(o.y - n.at.y) < 16)) continue;
-    if (labels.some(({ el }) => !el.hidden && Math.abs(parseFloat(el.dataset.x) - n.at.x) < 60 && Math.abs(parseFloat(el.dataset.y) - n.at.y) < 14)) continue;
+    if (labels.some((l) => l.shown && Math.abs(l.at.x - n.at.x) < 60 && Math.abs(l.at.y - n.at.y) < 14)) continue;
     const el = exoLabels[k++];
     el.sys = n.sys;
-    el.hidden = false;
-    el.querySelector('.fly-label__name').textContent = t('exo.label', { host: n.sys.host, n: n.sys.planets.length });
-    el.querySelector('.fly-label__far').textContent = distanceText(n.d);
-    el.style.transform = `translate(${n.at.x.toFixed(1)}px, ${n.at.y.toFixed(1)}px)`;
+    setHidden(el, false);
+    setText(el.nameEl, t('exo.label', { host: n.sys.host, n: n.sys.planets.length }));
+    setText(el.farEl, distanceText(n.d));
+    setPlace(el, n.at);
     shown.push(n.at);
   }
-  for (; k < exoLabels.length; k++) exoLabels[k].hidden = true;
+  for (; k < exoLabels.length; k++) setHidden(exoLabels[k], true);
 }
 
 const JD = () => Date.now() / 86400000 + 2440587.5;
@@ -1486,13 +1743,33 @@ function systemNow(sys) {
 /** The system the camera is in: the nearest within a thousand AU of its star. */
 function systemHere() {
   let best = null;
-  let bestD = 1000 * AU;
+  let bestD2 = (1000 * AU) ** 2;
+  const [ex, ey, ez] = cam.eye;
   for (const sys of exo) {
-    const d = len(sub(sys.center, cam.eye));
-    if (d < bestD) { bestD = d; best = sys; }
+    const c = sys.center;
+    const d2 = (c[0] - ex) ** 2 + (c[1] - ey) ** 2 + (c[2] - ez) ** 2;
+    if (d2 < bestD2) { bestD2 = d2; best = sys; }
   }
   return best;
 }
+
+/** A system's orbits as segment ends, 96 to a circle, parsecs from the Sun. */
+function orbitEnds(sys, now) {
+  const pts = [];
+  for (const o of now) {
+    if (!o.r) continue;
+    for (let k = 0; k < 96; k++) {
+      const a0 = (k / 96) * 2 * Math.PI;
+      const a1 = ((k + 1) / 96) * 2 * Math.PI;
+      pts.push(add(add(sys.center, o.toSun, o.r * Math.cos(a0)), o.side, o.r * Math.sin(a0)));
+      pts.push(add(add(sys.center, o.toSun, o.r * Math.cos(a1)), o.side, o.r * Math.sin(a1)));
+    }
+  }
+  return Float64Array.from(pts.flat());
+}
+
+/** The eye and the system the orbits were last moved to. */
+let systemDrawnFor = null;
 
 /** Orbits and planets of the system the camera is in, every frame. */
 function drawSystem() {
@@ -1500,21 +1777,22 @@ function drawSystem() {
   inSystem = null;
   if (!sys) {
     space.setLiveLines(null);
+    systemDrawnFor = null;
     return [];
   }
   const now = systemNow(sys);
-  const segs = [];
-  for (const o of now) {
-    if (!o.r) continue;
-    for (let k = 0; k < 96; k++) {
-      const a0 = (k / 96) * 2 * Math.PI;
-      const a1 = ((k + 1) / 96) * 2 * Math.PI;
-      // Relative to the eye, in double precision, before they become single.
-      segs.push(...sub(add(add(sys.center, o.toSun, o.r * Math.cos(a0)), o.side, o.r * Math.sin(a0)), cam.eye));
-      segs.push(...sub(add(add(sys.center, o.toSun, o.r * Math.cos(a1)), o.side, o.r * Math.sin(a1)), cam.eye));
-    }
+  // The orbits are circles that stay as they are: traced once for a system,
+  // and moved to the eye (in double precision, before they become single)
+  // only when the eye has moved.
+  if (!sys.orbitEnds) {
+    sys.orbitEnds = orbitEnds(sys, now);
+    sys.orbitFromEye = new Float32Array(sys.orbitEnds.length);
   }
-  space.setLiveLines(new Float32Array(segs), [0.55, 0.9, 0.75, 0.45]);
+  const next = sameView(systemDrawnFor, sys.host);
+  if (next) {
+    systemDrawnFor = next;
+    space.setLiveLines(fromEye(sys.orbitEnds, ORIGIN, sys.orbitFromEye), [0.55, 0.9, 0.75, 0.45]);
+  }
   const starCol = sys.index >= 0 ? [stars.col[sys.index * 3], stars.col[sys.index * 3 + 1], stars.col[sys.index * 3 + 2]] : starColour(0.65).map((c) => c / 255);
   const spheres = [];
   // A host the catalogue lacks is drawn here, at its archive radius.
@@ -1550,10 +1828,10 @@ function placeSystemLabels() {
   [...box.children].forEach((el, k) => {
     const o = items[k];
     const at = o ? screenOf(o.pos, b, proj) : null;
-    el.hidden = !at;
+    setHidden(el, !at);
     if (!at) return;
-    el.textContent = o.pl.name;
-    el.style.transform = `translate(${at.x.toFixed(1)}px, ${(at.y + 10).toFixed(1)}px)`;
+    setText(el, o.pl.name);
+    setPlace(el, at, 10);
   });
 }
 
@@ -1686,6 +1964,7 @@ function flyToSystem(sys) {
     from: cam.eye, to, look: sys.center, stop: height, t0: performance.now(), body: -1,
     ms: reduceMotion ? 1 : 3400 + 400 * Math.log10(1 + len(sub(sys.center, cam.eye)) / height),
   };
+  wake();
   const wait = () => (autopilot ? requestAnimationFrame(wait) : openSystemCard(sys));
   requestAnimationFrame(wait);
 }
@@ -1710,6 +1989,7 @@ function flyToExoPlanet(sys, pl) {
     ms: reduceMotion ? 1 : 3000 + 400 * Math.log10(1 + len(sub(now.pos, cam.eye)) / (rp * 7)),
     follow: () => systemNow(sys).find((o) => o.pl === pl)?.pos,
   };
+  wake();
   const wait = () => (autopilot ? requestAnimationFrame(wait) : openPlanetCard(sys, pl));
   requestAnimationFrame(wait);
 }
@@ -1747,6 +2027,7 @@ function applyLanguage() {
   if (named.length) nameLabels();
   if (starCount) $('source').textContent = t('fly.source', { n: fmt(starCount, 0) });
   if (card) openCard(card.s);
+  wake();
 }
 $('lang').addEventListener('click', () => {
   setLanguage(getLanguage() === 'en' ? 'ru' : 'en');
@@ -1785,7 +2066,10 @@ if (!space) {
   applyLanguage();
   setTimeout(() => { $('hint').dataset.gone = 'true'; }, 9000);
   moveBodies();
-  if (!paused) requestAnimationFrame(frame);
+  scanBodies();
+  // Whatever changes the canvas's size changes what is drawn on it.
+  new ResizeObserver(wake).observe(canvas);
+  wake();
 }
 
 

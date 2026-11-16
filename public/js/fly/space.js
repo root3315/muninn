@@ -162,23 +162,46 @@ uniform vec3 uBZ;
 // Air: the colour its scattered sunlight adds (0 for none). The maps are of
 // the ground; from space the Earth is as blue as its air makes it.
 uniform vec3 uAir;
+// The ground's slope east and north (relief.js), laid out as the map, and
+// how many times steeper than true it is drawn.
+uniform bool uHasRelief;
+uniform sampler2D uRelief;
+uniform float uReliefScale;
 out vec4 outColour;
 
 const float PI = 3.14159265;
 
-/** The map's colour where the normal n points, its gradients taken across the seam at ±180° without a line. */
-vec3 surface(vec3 n) {
+/** Where the normal n points on the maps, and the gradients to read them by, taken across the seam at ±180° without a line. */
+vec2 mapAt(vec3 n, out vec2 dx, out vec2 dy) {
   float lon = atan(dot(n, uBY), dot(n, uBX));
   float lat = asin(clamp(dot(n, uBZ), -1.0, 1.0));
   vec2 uv = vec2(lon / (2.0 * PI) + 0.5, 0.5 - lat / PI);
   float u2 = fract(uv.x + 0.5);
-  vec2 dx = vec2(dFdx(uv.x), dFdx(uv.y));
-  vec2 dy = vec2(dFdy(uv.x), dFdy(uv.y));
+  dx = vec2(dFdx(uv.x), dFdx(uv.y));
+  dy = vec2(dFdy(uv.x), dFdy(uv.y));
   if (abs(dFdx(u2)) < abs(dx.x)) dx.x = dFdx(u2);
   if (abs(dFdy(u2)) < abs(dy.x)) dy.x = dFdy(u2);
-  vec3 c = textureGrad(uMap, uv, dx, dy).rgb;
-  // The map is sRGB; light is added in linear terms.
-  return pow(c, vec3(2.2));
+  return uv;
+}
+
+/** The map's colour there; the map is sRGB, and light is added in linear terms. */
+vec3 surface(vec2 uv, vec2 dx, vec2 dy) {
+  return pow(textureGrad(uMap, uv, dx, dy).rgb, vec3(2.2));
+}
+
+/**
+ * The ground's own normal: the sphere's, tilted by the slope there. Ground
+ * rising to the east faces west by as much, and so on; at the poles, where
+ * east has no direction, the sphere's.
+ */
+vec3 ground(vec3 n, vec2 uv, vec2 dx, vec2 dy) {
+  if (!uHasRelief) return n;
+  vec3 east = cross(uBZ, n);
+  if (dot(east, east) < 1e-8) return n;
+  east = normalize(east);
+  vec3 north = cross(n, east);
+  vec2 slope = textureGrad(uRelief, uv, dx, dy).rg * uReliefScale;
+  return normalize(n - slope.x * east - slope.y * north);
 }
 
 /** Whether a point is in the body's shadow: the line from it to the Sun passes through the body. */
@@ -238,8 +261,10 @@ void main() {
       // side from being a hole in the stars.
       vec3 hit = v * (along - sqrt(r2 - miss2));
       vec3 n = (hit - uCentre) / uRadius;
-      float day = max(0.0, dot(n, normalize(uSun - hit)));
+      float sunUp = dot(n, normalize(uSun - hit));
+      float day = max(0.0, sunUp);
       // The rings' shadow on the body.
+      float ringShade = 1.0;
       if (uRing.y > 0.0) {
         vec3 toSun = normalize(uSun - hit);
         float den = dot(toSun, uPole);
@@ -247,13 +272,22 @@ void main() {
           float t = dot(uCentre - hit, uPole) / den;
           if (t > 0.0) {
             float d = length(hit + toSun * t - uCentre) / uRadius;
-            if (d > uRing.x && d < uRing.y && !(d > uRing.z && d < uRing.w)) day *= 0.35;
+            if (d > uRing.x && d < uRing.y && !(d > uRing.z && d < uRing.w)) ringShade = 0.35;
           }
         }
       }
+      day *= ringShade;
       if (uHasMap) {
+        vec2 dx;
+        vec2 dy;
+        vec2 uv = mapAt(n, dx, dy);
+        // The Sun on the ground as it slopes: a slope facing it brighter, one
+        // facing away darker, most of all near the terminator, where the Sun
+        // is low. A peak just past the terminator still catches a little.
+        vec3 g = ground(n, uv, dx, dy);
+        float lit = max(0.0, dot(g, normalize(uSun - hit))) * smoothstep(-0.05, 0.02, sunUp) * ringShade;
         // The map, lit as the plain colour is; back to sRGB for the screen.
-        vec3 lin = surface(n) * (0.015 + 1.1 * day);
+        vec3 lin = surface(uv, dx, dy) * (0.015 + 1.1 * lit);
         // Scattered light, more of it towards the limb, where the line of
         // sight runs through more air; only where the Sun is up.
         float mu = max(dot(n, -v), 0.0);
@@ -352,6 +386,7 @@ export function createSpace(canvas, { stars, sky, stored = Infinity }) {
   const live = {};
   const liveBufs = {};
   const maps = new Map();
+  const reliefs = new Map();
   const skyProg = compile(gl, SKY_VS, SKY_FS);
   const nearProg = compile(gl, SKY_VS, NEAR_FS);
   const maxPoint = gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1];
@@ -427,6 +462,26 @@ export function createSpace(canvas, { stars, sky, stored = Infinity }) {
       maps.set(key, tex);
     },
 
+    /**
+     * A body's slopes, by key: the levels relief.js halves them into, each
+     * { data, w, h } with two floats a cell, largest first. Half floats are
+     * enough for a slope and, unlike full ones, every WebGL2 filters them;
+     * the smaller levels come from relief.js, since a half-float texture
+     * cannot be asked to make its own everywhere.
+     */
+    setRelief(key, levels) {
+      const tex = gl.createTexture();
+      gl.activeTexture(gl.TEXTURE4);
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+      levels.forEach((l, k) => gl.texImage2D(gl.TEXTURE_2D, k, gl.RG16F, l.w, l.h, 0, gl.RG, gl.FLOAT, l.data));
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      reliefs.set(key, tex);
+    },
+
     setLiveLines(data, ink, name = 'system') {
       if (!data || !data.length) { delete live[name]; return; }
       if (!liveBufs[name]) {
@@ -437,10 +492,18 @@ export function createSpace(canvas, { stars, sky, stored = Infinity }) {
         gl.enableVertexAttribArray(0);
         gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
         gl.bindVertexArray(null);
-        liveBufs[name] = { vao, buf };
+        liveBufs[name] = { vao, buf, bytes: 0 };
       }
-      gl.bindBuffer(gl.ARRAY_BUFFER, liveBufs[name].buf);
-      gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+      // The same buffer is written over while the lines fit in it: a new one
+      // each time they move would be made and thrown away every frame.
+      const held = liveBufs[name];
+      gl.bindBuffer(gl.ARRAY_BUFFER, held.buf);
+      if (data.byteLength > held.bytes) {
+        gl.bufferData(gl.ARRAY_BUFFER, data, gl.DYNAMIC_DRAW);
+        held.bytes = data.byteLength;
+      } else {
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, data);
+      }
       live[name] = { vao: liveBufs[name].vao, count: data.length / 3, ink, live: true };
     },
     /** Lines to draw every frame: [{ data: Float32Array of segment ends, ink: [r, g, b, a], key }]. */
@@ -574,6 +637,14 @@ export function createSpace(canvas, { stars, sky, stored = Infinity }) {
             gl.uniform3fv(nearProg.u.BX, n.axes.x);
             gl.uniform3fv(nearProg.u.BY, n.axes.y);
             gl.uniform3fv(nearProg.u.BZ, n.axes.z);
+          }
+          const relief = map && n.axes && n.relief > 0 && reliefs.get(n.map);
+          gl.uniform1i(nearProg.u.HasRelief, relief ? 1 : 0);
+          if (relief) {
+            gl.activeTexture(gl.TEXTURE4);
+            gl.bindTexture(gl.TEXTURE_2D, relief);
+            gl.uniform1i(nearProg.u.Relief, 4);
+            gl.uniform1f(nearProg.u.ReliefScale, n.relief);
           }
           gl.uniform3fv(nearProg.u.Sun, sunFrom(n));
           gl.drawArrays(gl.TRIANGLES, 0, 3);
