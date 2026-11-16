@@ -699,12 +699,11 @@ export class Gate {
    */
   drawBand(target, source = { pixels: this.bandPixels, W: this.bandW, H: this.bandH }, alpha = 1) {
     if (!this.band || alpha <= 0) return;
-    /** Screen pixels per sample. The model has no detail this fine — and in a
+    /** Screen pixels per sample. The band has no detail this fine — and in a
      * dive it is smeared by the motion anyway, so it is sampled coarser. The
-     * survey has dust lanes and nebulae: on the faster machines it is
-     * sampled finer. */
-    const fine = source === this.survey && this.tier <= 1 ? 0.65 : 1;
-    const SS = this.quality.band * fine * (this.flight ? 1.6 : 1);
+     * survey is sampled as the model was: finer cost every frame of a drag
+     * two and a half times the work, and the page stuttered. */
+    const SS = this.quality.band * (this.flight ? 1.6 : 1);
     const { width, height } = this.box;
     const W = Math.max(2, Math.ceil(width / SS));
     const H = Math.max(2, Math.ceil(height / SS));
