@@ -66,7 +66,7 @@ export function tileUrl(order, npix, frame) {
  */
 export const AVERAGED_FRAMES = new Set([8, 25, 42, 59, 76, 93]);
 
-export const irsaAllsky = (frame) => `${HIPS_BASE}/Norder${ALLSKY_ORDER}/Allsky${suffix(frame)}.png`;
+const irsaAllsky = (frame) => `${HIPS_BASE}/Norder${ALLSKY_ORDER}/Allsky${suffix(frame)}.png`;
 
 export const allskyUrl = (frame) => (AVERAGED_FRAMES.has(frame) ? `data/allsky/Allsky_${frame}.png` : irsaAllsky(frame));
 

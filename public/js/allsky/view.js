@@ -26,7 +26,7 @@
 
 import { vecOf, radecOf, tileMesh, tileCentre } from './healpix.js';
 import {
-  ALLSKY_ORDER, ALLSKY_TILE, ALLSKY_COLUMNS, TILE_PX, HIPS_BASE, allskySlot, allskyUrl, irsaAllsky, allskyFallback, tileUrl, orderFor, tileDegrees,
+  ALLSKY_ORDER, ALLSKY_TILE, ALLSKY_COLUMNS, TILE_PX, HIPS_BASE, allskySlot, allskyUrl, allskyFallback, tileUrl, orderFor, tileDegrees,
 } from './hips.js';
 import { GALACTIC, mollweide, mollweideInverse, toGalactic, fromGalactic } from './maps.js';
 
@@ -345,17 +345,10 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
   const map = compile(gl, MAP_VS, MAP_FS, []);
   const line = compile(gl, LINE_VS, LINE_FS, ['aPos']);
 
-  const state = { ra: 266.4, dec: -29.0, fov: 120, frames: [], grid: false, map: 0, insets: { top: 0, bottom: 0 }, picked: false };
-  /**
-   * The Allsky image a frame is drawn from. In a sweep through the spectrum,
-   * IRSA's for every frame: the site's averaged ones exist for six frames
-   * only, and mixed into a sweep they would flicker against the rest.
-   */
-  const skyUrl = (frame) => (state.picked ? irsaAllsky(frame) : allskyUrl(frame));
+  const state = { ra: 266.4, dec: -29.0, fov: 120, frames: [], grid: false, map: 0, insets: { top: 0, bottom: 0 } };
   /** The frames on screen before the last change, drawn under the new ones until those are up. */
   let previous = [];
   let previousSince = 0;
-  let prefetch = [];
   let disposed = false;
   let queued = false;
 
@@ -731,7 +724,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
    */
   function drawSphereLayer(frames, cam, now, fetch, alpha) {
     const out = { wanted: 0, have: 0, fading: false, base: false };
-    const sky = fetch ? layerOf(frames.map(skyUrl), -1) : { imgs: frames.map((f) => images.get(skyUrl(f))) };
+    const sky = fetch ? layerOf(frames.map(allskyUrl), -1) : { imgs: frames.map((f) => images.get(allskyUrl(f))) };
     const skyReady = sky.imgs.every((i) => i?.state === 'ready');
     out.wanted += frames.length;
     useSphere(cam);
@@ -786,7 +779,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
 
   function drawMapLayer(frames, cam, now, fetch, alpha) {
     const out = { wanted: frames.length, have: 0, fading: false, base: false };
-    const imgs = frames.map((f) => (fetch ? want(skyUrl(f), -1, { allsky: true }) : images.get(skyUrl(f))));
+    const imgs = frames.map((f) => (fetch ? want(allskyUrl(f), -1, { allsky: true }) : images.get(allskyUrl(f))));
     if (!imgs.every((i) => i?.state === 'ready')) return out;
     out.have = frames.length;
     out.base = true;
@@ -923,8 +916,6 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     if (state.frames.length) {
       if (m < 1) layer(drawSphereLayer, 1);
       if (m > 0) layer(drawMapLayer, m);
-      // Ask ahead for what comes next in a sweep, after everything on screen.
-      for (const f of prefetch) want(skyUrl(f), 5, { allsky: true });
       pump();
       evict();
     }
@@ -937,12 +928,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     gl.bindVertexArray(null);
     if (result.fading || previous.length) redraw();
     const failed = [...images.values()].filter((i) => i.state === 'failed' && i.used >= use).length;
-    onChange({
-      wanted: result.wanted, have: result.have, failed,
-      complete: result.base && result.have >= result.wanted && !result.fading,
-      // The whole sky of the frame is up, whatever detail is still coming.
-      based: result.base && !result.fading,
-    });
+    onChange({ wanted: result.wanted, have: result.have, failed });
   }
 
   function redraw() {
@@ -971,7 +957,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     /** One frame for a single wavelength, three (red, green, blue) for colour. */
     setFrames(frames) {
       if (frames.join() === state.frames.join()) return;
-      const sky = state.frames.map((f) => images.get(skyUrl(f)));
+      const sky = state.frames.map((f) => images.get(allskyUrl(f)));
       if (state.frames.length && sky.every((i) => i?.state === 'ready')) {
         previous = state.frames;
         previousSince = performance.now();
@@ -979,11 +965,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
       state.frames = [...frames];
       redraw();
     },
-    /** Frames to have ready before they are asked for. */
-    setPrefetch(frames) { prefetch = frames; redraw(); },
     setGrid(on) { state.grid = on; redraw(); },
-    /** Draw every frame from IRSA's own Allsky (for a sweep), or from the site's where it has one. */
-    setPicked(on) { state.picked = on; redraw(); },
     /** CSS pixels kept clear of the map at the top and bottom. */
     setInsets(insets) { state.insets = insets; redraw(); },
     /** The sky under a point of the canvas (CSS pixels), in whichever view is showing; null off the map. */

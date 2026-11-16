@@ -3,8 +3,8 @@
  * by wavelength, and a way from any point of it into the tool's own frames.
  *
  * It opens inside the sphere, facing where the front page faces, at the
- * front page's width. The whole sky at once, the Mollweide map, is a button
- * away; a click on the map goes back in at that point.
+ * front page's width. A link with map=1 opens on the whole sky at once, the
+ * Mollweide map; a click on the map goes in at that point.
  *
  * The page keeps its place in the address — #ra=…&dec=…&fov=…&view=…, and
  * map=1 on the map — so a link opens the same sky. `view` is `colour` or a
@@ -134,7 +134,6 @@ function showView() {
 
 let lambdaTimer = 0;
 lambda.addEventListener('input', () => {
-  stopPlay();
   current = FRAMES[Number(lambda.value)];
   // The words follow the slider at once; the sky once the hand rests, so a
   // sweep across the range does not ask IRSA for every frame on the way.
@@ -144,62 +143,12 @@ lambda.addEventListener('input', () => {
 });
 
 $('bands').addEventListener('change', (e) => {
-  stopPlay();
   const v = e.target.value;
   current = v === 'colour' ? 'colour' : bandFrame(Number(v));
   showView();
 });
 
 $('grid').addEventListener('change', (e) => view?.setGrid(e.target.checked));
-
-/* ---- playing through the spectrum ------------------------------------- */
-
-/*
- * One frame after another, short to long, each shown once it is fully on
- * screen and never faster than STEP_MS: the sweep waits for IRSA rather than
- * skip what it has not drawn. The next two frames are asked for ahead.
- */
-const STEP_MS = 380;
-let playing = false;
-let lastStep = 0;
-let based = false;
-
-function setPlay(on) {
-  playing = on;
-  $('play').setAttribute('aria-pressed', String(on));
-  if (on && current === 'colour') {
-    current = FRAMES[0];
-    showView();
-  }
-  lastStep = performance.now();
-  view?.setPicked(on);
-  view?.setPrefetch(on ? ahead() : []);
-  if (on) tickPlay();
-}
-
-function stopPlay() {
-  if (playing) setPlay(false);
-}
-
-function ahead() {
-  const i = FRAMES.indexOf(current);
-  return [1, 2].map((d) => FRAMES[(i + d) % FRAMES.length]);
-}
-
-function tickPlay() {
-  if (!playing) return;
-  const now = performance.now();
-  if (based && now - lastStep >= STEP_MS) {
-    current = FRAMES[(FRAMES.indexOf(current) + 1) % FRAMES.length];
-    lastStep = now;
-    based = false;
-    showView();
-    view.setPrefetch(ahead());
-  }
-  requestAnimationFrame(tickPlay);
-}
-
-$('play').addEventListener('click', () => setPlay(!playing));
 
 /* ---- moving about ------------------------------------------------------ */
 
@@ -261,26 +210,6 @@ function dive(at, fov = DIVE_FOV) {
   view.set({ ra: at.ra, dec: at.dec, fov: Math.min(FOV_MAX, fov * 2.5) });
   animate({ ra: at.ra, dec: at.dec, fov, map: 0 }, 1100, { arc: false });
 }
-
-/** Where the sphere was before the map, to go back to. */
-let beforeMap = null;
-
-/** From the sphere out to the whole sky. */
-function surface() {
-  const s = view.state;
-  beforeMap = { ra: s.ra, dec: s.dec, fov: s.fov };
-  animate({ fov: FOV_MAX, map: 1 }, 900, { arc: false });
-}
-
-$('whole').addEventListener('click', () => {
-  if (!view) return;
-  if (!inMap()) {
-    surface();
-    return;
-  }
-  const back = beforeMap ?? { ...view.state, fov: 60 };
-  dive(back, back.fov);
-});
 
 /** Zoom by a factor, keeping the sky under (px, py) where it is. */
 function zoomAt(factor, px, py) {
@@ -543,8 +472,7 @@ $('open').addEventListener('click', () => {
 /* ---- after every redraw ------------------------------------------------ */
 
 let wasMap = null;
-function afterDraw({ wanted, have, failed, based: up }) {
-  based = up;
+function afterDraw({ wanted, have, failed }) {
   placeRings();
   const s = view.state;
   const map = s.map >= 0.5;
@@ -552,7 +480,6 @@ function afterDraw({ wanted, have, failed, based: up }) {
   document.body.dataset.map = String(map);
   if (map !== wasMap) {
     wasMap = map;
-    $('whole').setAttribute('aria-pressed', String(map));
     $('open').disabled = map;
     $('open').title = t(map ? 'allsky.openMap' : 'allsky.openWhen');
     sayHint();
