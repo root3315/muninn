@@ -288,3 +288,37 @@ export function galaxyDistance(z) {
   const mpc = z >= MIN_REDSHIFT ? redshiftDistanceMpc(z) : null;
   return { mpc, au: mpc ? mpc * 1e6 * AU_PER_PC : null };
 }
+
+/**
+ * A sky position to its place in the plate's picture, `{ u, v }` (u across
+ * from the left, v up from the bottom, both 0…1), by the grid the visit is
+ * drawn on (wcs.js TangentGrid: north up, east left); null off the picture.
+ */
+export function plateUV(grid, ra, dec) {
+  const ij = grid?.worldToIndex(ra, dec);
+  if (!ij) return null;
+  const u = (ij[0] + 0.5) / grid.width;
+  const v = 1 - (ij[1] + 0.5) / grid.height;
+  return u >= 0 && u <= 1 && v >= 0 && v <= 1 ? { u, v } : null;
+}
+
+/**
+ * The point on the plate under (u, v): `corners` its four corners, bottom-left,
+ * bottom-right, top-right, top-left, as the picture is stretched over them.
+ * A ray started here leaves the very pixel its object is in.
+ */
+export function platePoint(corners, u, v) {
+  const [a, b, c, d] = corners;
+  const w = [(1 - u) * (1 - v), u * (1 - v), u * v, (1 - u) * v];
+  return [0, 1, 2].map((k) => w[0] * a[k] + w[1] * b[k] + w[2] * c[k] + w[3] * d[k]);
+}
+
+/**
+ * The rays worth drawing when there are more than `max`: by `score`, highest
+ * first (the field's own object, what SPHEREx sees in the visit, the
+ * brighter), ties in the order given. Returns `{ drawn, total }`.
+ */
+export function capRays(rays, max) {
+  const order = rays.map((r, i) => i).sort((p, q) => (rays[q].score - rays[p].score) || p - q);
+  return { drawn: order.slice(0, Math.max(0, max)).map((i) => rays[i]), total: rays.length };
+}

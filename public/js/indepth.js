@@ -18,9 +18,16 @@
  * counted. A filled point is seen by SPHEREx in the visit on the plate; a
  * hollow one is in the catalogue only.
  *
+ * Every placed thing is joined to the photo by a ray, as in the headset: from
+ * its own pixel on the plate (the plate's own grid, so the ray leaves the
+ * star in the picture) back to where it stands, bright at the photo and
+ * fading with distance. The rays drawn are capped, the ones SPHEREx sees and
+ * the brightest first; what has no distance gets only a short stub.
+ *
  * Loaded only when the mode is chosen (app.js), so the page does not carry
  * three.js until someone asks for depth. It draws when something changed —
- * a turn, an answer, another visit — and not at all while it is off screen.
+ * a turn, an answer, another visit, the rays' first growth out of the plate —
+ * and not at all while it is off screen.
  */
 
 import * as THREE from './vendor/three.module.js';
@@ -32,7 +39,7 @@ import { resolveColor } from './render.js';
 import {
   placeByDistance, depthMetres, unknownShell, starDistance, galaxyDistance, matchTarget,
   AU_PER_PC, DEPTH_SCALE, DEPTH_TICKS, PLANET_X_AU, PLANET_X_MAX_BETA, eclipticLatitude,
-  decadeRings, viewFrame, fieldDirection,
+  decadeRings, viewFrame, fieldDirection, plateUV, platePoint, capRays,
 } from './vr/depth3d.js';
 import { geometricDistances, galaxiesWithRedshift, bakedAnswers } from './vr/distances.js';
 import { tv } from './vr/strings.js';
@@ -58,13 +65,23 @@ const SEASON_DAYS = 45;
 const TAP_PX = 6;
 /** How near a tap must land to a point to pick it, in CSS pixels. */
 const PICK_PX = 18;
+/** How long the rays take to grow out of the plate when the mode opens. */
+const INTRO_MS = 1500;
+/** The most rays drawn at once, on a wide plate and on a phone's: past that they are a fog. */
+const MAX_RAYS = { wide: 70, narrow: 36 };
+/** The most stubs drawn for things with no distance, and how far each runs past the plate, in metres. */
+const MAX_STUBS = { wide: 60, narrow: 24 };
+const STUB_M = 0.3;
 /** The corridor, looked along from its mouth: −z ahead, x to the right, y up. */
 const FRAME = viewFrame([0, 0, -1]);
 const TAN_CONE = Math.tan(D.coneDeg * D2R);
 const cone = (r) => r * TAN_CONE;
 
-/** The view as it opens: a little above and to the side of the plate, the corridor running away three-quarter. */
-const HOME = { yaw: 0.5, pitch: 0.2, dist: 4.4, along: 2.6 };
+/**
+ * The view as it opens: near the plate, a little above and to its side, so the
+ * photo is the first thing seen and its rays run away behind it three-quarter.
+ */
+const HOME = { yaw: 0.38, pitch: 0.14, dist: 1.8, along: 1.55 };
 
 /** Each kind of thing, the token it is drawn in, and whether the "No distance" switch holds it. */
 const KINDS = ['stars', 'bodies', 'galaxies', 'unknown'];
@@ -76,6 +93,7 @@ const POINT_VERTEX = /* glsl */ `
   uniform float dpr;
   uniform float nearM;
   uniform float farM;
+  uniform float grow;
   varying vec3 vTint;
   varying float vSolid;
   varying float vDim;
@@ -84,8 +102,58 @@ const POINT_VERTEX = /* glsl */ `
     gl_PointSize = max(3.0, size * dpr);
     vTint = tint;
     vSolid = solid;
-    // A little dimmer toward the far end, so the near reads as near (a depth cue, not a brightness).
-    vDim = mix(1.0, 0.65, clamp((length(position) - nearM) / (farM - nearM), 0.0, 1.0));
+    // A little dimmer toward the far end, so the near reads as near (a depth cue, not a brightness);
+    // and there only once the rays have reached it.
+    vDim = mix(1.0, 0.65, clamp((length(position) - nearM) / (farM - nearM), 0.0, 1.0)) * smoothstep(0.7, 1.0, grow);
+  }
+`;
+
+/*
+ * A ray: one segment from the object's pixel on the plate (`start`) to where
+ * it stands (`position`). `grow` runs it out from the plate as the mode
+ * opens; the colour is the plate end's (`tint0`) fading to the far end's
+ * (`tint`), each already scaled by how strongly the ray is drawn.
+ */
+const RAY_VERTEX = /* glsl */ `
+  attribute vec3 start;
+  attribute float along;
+  attribute vec3 tint;
+  attribute vec3 tint0;
+  uniform float grow;
+  uniform float dim;
+  varying vec3 vTint;
+  void main() {
+    vec3 p = mix(start, position, along * grow);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+    vTint = mix(tint0, tint, grow) * dim;
+  }
+`;
+
+const RAY_FRAGMENT = /* glsl */ `
+  varying vec3 vTint;
+  void main() { gl_FragColor = vec4(vTint, 1.0); }
+`;
+
+/** A soft glint where a ray leaves the photo. */
+const GLINT_VERTEX = /* glsl */ `
+  attribute float size;
+  attribute vec3 tint;
+  uniform float dpr;
+  varying vec3 vTint;
+  void main() {
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    gl_PointSize = size * dpr;
+    vTint = tint;
+  }
+`;
+
+const GLINT_FRAGMENT = /* glsl */ `
+  varying vec3 vTint;
+  void main() {
+    float d = length(gl_PointCoord - 0.5) * 2.0;
+    float a = exp(-d * d * 5.0) * (1.0 - smoothstep(0.85, 1.0, d));
+    if (a < 0.01) discard;
+    gl_FragColor = vec4(vTint * a, 1.0);
   }
 `;
 
@@ -164,7 +232,10 @@ export function mountInDepth(plate, { sky, field }) {
   reset.type = 'button';
   const how = el('p', 'indepth__how');
   how.setAttribute('aria-hidden', 'true');
-  corner.append(reset, how);
+  // How many of the rays are drawn, when not all of them are.
+  const raysNote = el('p', 'indepth__rays num');
+  raysNote.hidden = true;
+  corner.append(reset, how, raysNote);
   // Along the foot: a switch for each kind, with its count.
   const kinds = el('div', 'indepth__kinds');
   const tip = el('div', 'tip indepth__tip');
@@ -199,6 +270,15 @@ export function mountInDepth(plate, { sky, field }) {
   let visible = true;
   let frame = 0;
   let dirty = true;
+  // The rays grow out of the plate once, when there is first something to send out; still for
+  // anyone who asked the system for less motion. Past that, a frame only when something changed.
+  const grow = { value: matchMedia('(prefers-reduced-motion: reduce)').matches ? 1 : 0 };
+  let introAt = null;
+  function startIntro() {
+    if (grow.value >= 1 || introAt != null) return;
+    introAt = performance.now();
+    invalidate();
+  }
   function invalidate() {
     dirty = true;
     if (!visible || document.hidden || frame) return;
@@ -208,9 +288,16 @@ export function mountInDepth(plate, { sky, field }) {
     frame = 0;
     if (!dirty) return;
     dirty = false;
+    if (introAt != null) {
+      const k = Math.min(1, (performance.now() - introAt) / INTRO_MS);
+      grow.value = 1 - (1 - k) ** 3;
+      if (k >= 1) { introAt = null; showLate(); }
+    }
+    tags.classList.toggle('indepth__tags--wait', grow.value < 1);
     placeCamera();
     renderer.render(scene, camera);
     placeTags();
+    if (introAt != null) invalidate();
   }
   const seen = new IntersectionObserver((entries) => {
     visible = entries.some((e) => e.isIntersecting);
@@ -244,10 +331,15 @@ export function mountInDepth(plate, { sky, field }) {
   /* ---- the field's geometry: plate, rings, Planet X, the far shell ------ */
   const statics = new THREE.Group();
   const objects = new THREE.Group();
-  scene.add(statics, objects);
+  // The one thing pointed at: its ray whole, a ring on its pixel, a ring where it stands.
+  const focus = new THREE.Group();
+  focus.renderOrder = 9;
+  scene.add(statics, objects, focus);
   const plateMat = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false, side: THREE.DoubleSide });
   let plateTex = null;
-  /** What a tap can land on: `{ pos, kind, card() }`. */
+  /** The plate's corners in the corridor: bottom-left, bottom-right, top-right, top-left as seen from its front. */
+  let plateCorners = null;
+  /** What a tap or a hover can land on: `{ key, pos, start, kind, color, known, card() }`. */
   let pickables = [];
 
   function disposeGroup(g) {
@@ -297,6 +389,7 @@ export function mountInDepth(plate, { sky, field }) {
     const hh = grid.fovHeightDeg / 2;
     const corner = (e, n) => unit(fieldDirection(e, n, FRAME, spread)).map((x) => x * D.nearM);
     const pts = [corner(hw, -hh), corner(-hw, -hh), corner(-hw, hh), corner(hw, hh)];
+    plateCorners = pts;
     const plateGeo = new THREE.BufferGeometry();
     plateGeo.setAttribute('position', new THREE.Float32BufferAttribute(pts.flat(), 3));
     plateGeo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
@@ -426,7 +519,7 @@ export function mountInDepth(plate, { sky, field }) {
     geo.setAttribute('tint', new THREE.BufferAttribute(tint, 3));
     geo.setAttribute('solid', new THREE.BufferAttribute(solid, 1));
     const mat = new THREE.ShaderMaterial({
-      uniforms: { dpr: { value: dpr }, nearM: { value: D.nearM }, farM: { value: D.unknownM } },
+      uniforms: { dpr: { value: dpr }, nearM: { value: D.nearM }, farM: { value: D.unknownM }, grow },
       vertexShader: POINT_VERTEX, fragmentShader: POINT_FRAGMENT,
       blending: THREE.AdditiveBlending, depthWrite: false, transparent: true,
     });
@@ -436,14 +529,110 @@ export function mountInDepth(plate, { sky, field }) {
     return p;
   }
 
-  /** From each placed thing's own pixel on the plate out to where it stands. */
-  function sightLines(items, color, opacity) {
-    const out = [];
-    for (const it of items) {
-      const l = Math.hypot(...it.pos);
-      out.push((it.pos[0] / l) * D.nearM, (it.pos[1] / l) * D.nearM, (it.pos[2] / l) * D.nearM, ...it.pos);
-    }
-    return lines(out, color, opacity);
+  /** Where a thing's ray leaves the plate: its own pixel in the picture, else (off the picture) its direction at the plate's distance. */
+  function startOf(ra, dec, dir) {
+    const uv = plateCorners ? plateUV(sky.grid, ra, dec) : null;
+    if (uv) return platePoint(plateCorners, uv.u, uv.v);
+    const l = Math.hypot(...dir);
+    return [(dir[0] / l) * D.nearM, (dir[1] / l) * D.nearM, (dir[2] / l) * D.nearM];
+  }
+
+  /** Drawn only once the rays have grown out to them (paths, ±1σ): the intro sends out the rays alone. */
+  function late(obj) {
+    obj.userData.late = true;
+    obj.visible = grow.value >= 1;
+    return obj;
+  }
+  function showLate() {
+    objects.traverse((o) => { if (o.userData.late) o.visible = true; });
+  }
+
+  /**
+   * Rays `{ start, pos, color, strength, tail }`, additive and thin: bright
+   * where they leave the photo, down to `tail` of that at the far end. Drawn
+   * twice: in full where nothing stands in front, and faintly where the
+   * plate does, so a ray is followed back through the picture to its pixel.
+   */
+  function rayLines(list) {
+    const n = list.length;
+    const position = new Float32Array(n * 6);
+    const start = new Float32Array(n * 6);
+    const along = new Float32Array(n * 2);
+    const tint = new Float32Array(n * 6);
+    const tint0 = new Float32Array(n * 6);
+    const c = new THREE.Color();
+    list.forEach((r, i) => {
+      position.set(r.start, i * 6);
+      position.set(r.pos, i * 6 + 3);
+      start.set(r.start, i * 6);
+      start.set(r.start, i * 6 + 3);
+      along[i * 2 + 1] = 1;
+      r.color.getRGB(c, THREE.SRGBColorSpace);
+      const near = [c.r * r.strength, c.g * r.strength, c.b * r.strength];
+      const far = near.map((x) => x * r.tail);
+      tint.set(near, i * 6);
+      tint.set(far, i * 6 + 3);
+      tint0.set(near, i * 6);
+      tint0.set(near, i * 6 + 3);
+    });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(position, 3));
+    geo.setAttribute('start', new THREE.BufferAttribute(start, 3));
+    geo.setAttribute('along', new THREE.BufferAttribute(along, 1));
+    geo.setAttribute('tint', new THREE.BufferAttribute(tint, 3));
+    geo.setAttribute('tint0', new THREE.BufferAttribute(tint0, 3));
+    const pass = (dim, depthFunc) => {
+      const mat = new THREE.ShaderMaterial({
+        uniforms: { grow, dim: { value: dim } },
+        vertexShader: RAY_VERTEX, fragmentShader: RAY_FRAGMENT,
+        blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, depthFunc,
+      });
+      const obj = new THREE.LineSegments(geo, mat);
+      obj.frustumCulled = false;
+      obj.renderOrder = 4;
+      return obj;
+    };
+    // The second pass shares the geometry; disposing it twice is harmless.
+    return [pass(1, THREE.LessEqualDepth), pass(0.3, THREE.GreaterDepth)];
+  }
+
+  /** A soft glint on the photo at each ray's pixel. */
+  function glints(list) {
+    const pos = new Float32Array(list.length * 3);
+    const size = new Float32Array(list.length);
+    const tint = new Float32Array(list.length * 3);
+    const c = new THREE.Color();
+    list.forEach((r, i) => {
+      pos.set(r.start, i * 3);
+      size[i] = 5 + 7 * r.strength;
+      r.color.getRGB(c, THREE.SRGBColorSpace);
+      tint.set([c.r * r.strength * 0.7, c.g * r.strength * 0.7, c.b * r.strength * 0.7], i * 3);
+    });
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('size', new THREE.BufferAttribute(size, 1));
+    geo.setAttribute('tint', new THREE.BufferAttribute(tint, 3));
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { dpr: { value: dpr } },
+      vertexShader: GLINT_VERTEX, fragmentShader: GLINT_FRAGMENT,
+      blending: THREE.AdditiveBlending, depthWrite: false, depthTest: false, transparent: true,
+    });
+    const p = new THREE.Points(geo, mat);
+    p.frustumCulled = false;
+    p.renderOrder = 3;
+    return p;
+  }
+
+  /** How strongly a ray is drawn, by kind and, for a star, by its brightness and whether SPHEREx sees it. */
+  const starStrength = (mag, seen) => Math.max(0.16, Math.min(0.7, 0.7 - 0.06 * ((mag ?? 18) - 9))) * (seen ? 1 : 0.55);
+  /** How much of a ray's light is left at its far end: a near one stays bright, a far one fades out. */
+  const tailAt = (pos) => 0.75 - 0.63 * Math.max(0, Math.min(1, (Math.hypot(...pos) - D.nearM) / (D.farM - D.nearM)));
+
+  /** Is this body the field's own, the one the field is named for (by its name, or a demonstration field's)? */
+  function ownBody(b, f) {
+    const label = String(f.label || (f.key ? t(`preset.${f.key}`) : '')).toLowerCase();
+    if (!label) return false;
+    return Boolean(b.num && label.includes(`(${b.num})`)) || label.split(/[\s·,()]+/).includes(String(b.name).toLowerCase());
   }
 
   function placeObjects() {
@@ -456,6 +645,10 @@ export function mountInDepth(plate, { sky, field }) {
     const objTags = [];
     pickables = [];
     counts = { bj: 0, plx: 0, stars: 0, unknown: 0, bodies: 0, galaxies: 0, galaxiesAll: 0, bodiesAsked: false };
+    /** Every ray there could be, `{ kind, start, pos, color, strength, tail, score, bar }`; capped below. */
+    const rays = [];
+    const stubs = [];
+    const pick = (p) => { pickables.push(p); return p; };
 
     // Stars: Gaia DR3, carried to the visit's epoch, by geometric distance or parallax.
     const rows = got?.gaia?.rows ?? [];
@@ -467,10 +660,10 @@ export function mountInDepth(plate, { sky, field }) {
     const placed = placeByDistance(stars.map((s) => ({ id: s.r.id, dir: s.dir, au: s.au })));
     const known = [];
     const unknown = [];
-    const bars = [];
     placed.forEach((p, i) => {
       const s = stars[i];
       const seenHere = detected(current, s.at.ra, s.at.dec);
+      const start = startOf(s.at.ra, s.at.dec, s.dir);
       const it = {
         pos: p.pos, solid: seenHere,
         // Brighter is larger; one without a distance is a dim speck on the far shell.
@@ -478,21 +671,28 @@ export function mountInDepth(plate, { sky, field }) {
         color: p.known ? look.ink : look.ruleStrong,
       };
       (p.known ? known : unknown).push(it);
+      const strength = starStrength(s.r.mag, seenHere);
+      // Seen by SPHEREx first, then the brighter.
+      const score = (seenHere ? 1000 : 0) + 30 - (s.r.mag ?? 25);
       if (p.known) {
         counts[s.d.src] += 1;
+        let bar = null;
         if (s.d.lo && s.d.hi) {
           const a = placeByDistance([{ dir: s.dir, au: s.d.lo * AU_PER_PC }, { dir: s.dir, au: s.d.hi * AU_PER_PC }]);
-          bars.push(...a[0].pos, ...a[1].pos);
+          bar = [...a[0].pos, ...a[1].pos];
         }
+        rays.push({ kind: 'stars', start, pos: p.pos, color: look.ink, strength, tail: tailAt(p.pos), score, bar });
+      } else {
+        // No distance: a short stub along its line of sight, no further than anything can be said.
+        const l = Math.hypot(...start);
+        const end = start.map((x) => x * (1 + STUB_M / l));
+        stubs.push({ kind: 'unknown', start, pos: end, color: look.neutral, strength: strength * 0.8, tail: 0, score });
       }
-      pickables.push({ pos: p.pos, kind: p.known ? 'stars' : 'unknown', card: () => starCard(s, seenHere) });
+      pick({ key: `star:${s.r.id}`, pos: p.pos, start, kind: p.known ? 'stars' : 'unknown', color: p.known ? look.ink : look.neutral, known: p.known, card: () => starCard(s, seenHere) });
     });
     counts.stars = known.length;
     counts.unknown = unknown.length;
-    if (known.length) {
-      layer.stars.add(points(known), sightLines(known, look.neutral, 0.07));
-      if (bars.length) layer.stars.add(lines(bars, look.ink, 0.45));
-    }
+    if (known.length) layer.stars.add(points(known));
     if (unknown.length) layer.unknown.add(points(unknown));
 
     // The field's own target, where its distance comes from: the Gaia source it is, else a published parallax, else none.
@@ -503,17 +703,20 @@ export function mountInDepth(plate, { sky, field }) {
       const at = propagate(target, epoch, target.epoch ?? GAIA_EPOCH);
       const lit = !s?.d.pc && target.plx > 0 ? 1000 / target.plx : null;
       const pc = s?.d.pc ?? lit;
-      const [p] = placeByDistance([{ dir: dirOf(at.ra, at.dec), au: pc ? pc * AU_PER_PC : null }]);
+      const dir = dirOf(at.ra, at.dec);
+      const [p] = placeByDistance([{ dir, au: pc ? pc * AU_PER_PC : null }]);
       const words = s?.d.pc
         ? tv(s.d.src === 'bj' ? 'vr.distBJ' : 'vr.distPlx', { pc: pcText(pc) })
         : lit ? tv('vr.distLit', { pc: pcText(lit), ref: target.ref ?? '' }) : tv('vr.notMeasured');
       const it = { pos: p.pos, size: 12, color: look.accent, solid: detected(current, at.ra, at.dec) };
       layer.stars.add(points([it]));
-      if (p.known) layer.stars.add(sightLines([it], look.accent, 0.6));
+      const start = startOf(at.ra, at.dec, dir);
+      if (p.known) rays.push({ kind: 'stars', start, pos: p.pos, color: look.accent, strength: 1, tail: Math.max(0.35, tailAt(p.pos)), score: 1e6 });
       // On the corridor only how far, in light-years; the card says by what.
       const short = pc ? lyText(pc) : tv('vr.notMeasured');
-      objTags.push({ pos: p.pos, kind: 'stars', priority: 10, tone: 'accent', title: target.label ?? '', sub: short });
-      pickables.push({ pos: p.pos, kind: 'stars', card: () => ({ title: target.label ?? '', rows: [words, `${formatRA(at.ra)}  ${formatDec(at.dec)}`] }) });
+      // The field's own object is named first of all, before the plate itself.
+      objTags.push({ pos: p.pos, kind: 'stars', priority: 12, tone: 'accent', title: target.label ?? '', sub: short });
+      pick({ key: 'target', pos: p.pos, start, kind: 'stars', color: look.accent, known: p.known, card: () => ({ title: target.label ?? '', rows: [words, `${formatRA(at.ra)}  ${formatDec(at.dec)}`] }) });
     }
 
     // Asteroids and comets: where SkyBoT or JPL put them at the visit, with the season's path.
@@ -521,24 +724,33 @@ export function mountInDepth(plate, { sky, field }) {
     counts.bodiesAsked = bodies.asked;
     counts.bodies = bodies.list.length;
     if (bodies.list.length) {
-      const items = bodies.list.map((b) => ({
-        pos: placeByDistance([{ dir: dirOf(b.ra, b.dec), au: b.dGeo }])[0].pos, size: 10, color: look.counter, solid: b.seen,
-      }));
-      layer.bodies.add(points(items), sightLines(items, look.counter, 0.4));
+      const items = bodies.list.map((b) => {
+        const dir = dirOf(b.ra, b.dec);
+        return { pos: placeByDistance([{ dir, au: b.dGeo }])[0].pos, start: startOf(b.ra, b.dec, dir), size: 10, color: look.counter, solid: b.seen };
+      });
+      layer.bodies.add(points(items));
       const path = [];
       for (const b of bodies.list) {
         const pts = b.track.map((p) => placeByDistance([{ dir: dirOf(p.ra, p.dec), au: p.au }])[0].pos);
         for (let k = 1; k < pts.length; k++) path.push(...pts[k - 1], ...pts[k]);
       }
-      if (path.length) layer.bodies.add(lines(path, look.counter, 0.8));
+      if (path.length) layer.bodies.add(late(lines(path, look.counter, 0.8)));
       const order = bodies.list.map((b, i) => i).sort((p, q) => bodies.list[p].dGeo - bodies.list[q].dGeo);
-      order.forEach((i, rank) => {
+      let named = 0;
+      order.forEach((i) => {
         const b = bodies.list[i];
+        const own = ownBody(b, f);
         const name = b.num ? `(${b.num}) ${b.name}` : b.name;
         const sub = current && b.mjd === current.frame.mjd ? tv('vr.bodyAt', { au: fmt(b.dGeo, 2) }) : tv('vr.bodyAtDate', { au: fmt(b.dGeo, 2), date: day(b.mjd) });
-        if (rank < 4) objTags.push({ pos: items[i].pos, kind: 'bodies', priority: 9 - rank * 0.1, tone: 'counter', title: name, sub });
-        pickables.push({
-          pos: items[i].pos, kind: 'bodies',
+        rays.push({
+          kind: 'bodies', start: items[i].start, pos: items[i].pos, color: look.counter,
+          strength: own ? 1 : b.seen ? 0.85 : 0.6, tail: Math.max(0.4, tailAt(items[i].pos)), score: own ? 1e6 : 1e5 + (b.seen ? 1e3 : 0) - b.dGeo,
+        });
+        // The field's own body is named before anything else; then the nearest few.
+        if (own) objTags.push({ pos: items[i].pos, kind: 'bodies', priority: 12, tone: 'counter', title: name, sub });
+        else if (named < 4) { named += 1; objTags.push({ pos: items[i].pos, kind: 'bodies', priority: 9 - named * 0.1, tone: 'counter', title: name, sub }); }
+        pick({
+          key: `body:${b.name}`, pos: items[i].pos, start: items[i].start, kind: 'bodies', color: look.counter, known: true,
           card: () => ({
             title: name,
             rows: [
@@ -559,19 +771,20 @@ export function mountInDepth(plate, { sky, field }) {
     counts.galaxies = galKnown.length;
     if (gal.length) {
       const items = gal.map((o) => {
-        const [p] = placeByDistance([{ dir: dirOf(o.g.ra, o.g.dec), au: o.au }]);
-        return { pos: p.pos, size: 8, color: o.au ? look.accent : look.ruleStrong, solid: false, known: p.known };
+        const dir = dirOf(o.g.ra, o.g.dec);
+        const [p] = placeByDistance([{ dir, au: o.au }]);
+        return { pos: p.pos, start: startOf(o.g.ra, o.g.dec, dir), size: 8, color: o.au ? look.accent : look.ruleStrong, solid: false, known: p.known };
       });
-      const near = items.filter((it) => it.known);
       layer.galaxies.add(points(items));
-      if (near.length) layer.galaxies.add(sightLines(near, look.accentDim, 0.1));
       gal.forEach((o, i) => {
+        const it = items[i];
+        if (it.known) rays.push({ kind: 'galaxies', start: it.start, pos: it.pos, color: look.accent, strength: 0.45, tail: tailAt(it.pos), score: 15 });
         const sub = o.au ? tv('vr.galaxyAt', { z: fmt(o.g.z, 4), mpc: fmt(o.mpc, 0) }) : `z ${fmt(o.g.z, 4)} · ${tv('vr.unknown')}`;
         if (o.au && objTags.filter((x) => x.kind === 'galaxies').length < 2) {
-          objTags.push({ pos: items[i].pos, kind: 'galaxies', priority: 7, tone: 'accent', title: o.g.name, sub });
+          objTags.push({ pos: it.pos, kind: 'galaxies', priority: 7, tone: 'accent', title: o.g.name, sub });
         }
-        pickables.push({
-          pos: items[i].pos, kind: o.au ? 'galaxies' : 'unknown',
+        pick({
+          key: `galaxy:${o.g.name}`, pos: it.pos, start: it.start, kind: o.au ? 'galaxies' : 'unknown', color: look.accent, known: it.known,
           card: () => ({
             title: o.g.name,
             rows: [tv('vr.cardGalaxy'), o.au ? tv('vr.cardGalaxyAt', { z: fmt(o.g.z, 4), mpc: fmt(o.mpc, 0) }) : sub, `${formatRA(o.g.ra)}  ${formatDec(o.g.dec)}`],
@@ -579,7 +792,38 @@ export function mountInDepth(plate, { sky, field }) {
         });
       });
     }
+
+    // The rays: as many as stay readable, the rest said in a line; each kind on its own switch.
+    const narrow = root.clientWidth < 440;
+    const { drawn, total } = capRays(rays, narrow ? MAX_RAYS.narrow : MAX_RAYS.wide);
+    for (const kind of ['stars', 'bodies', 'galaxies']) {
+      const mine = drawn.filter((r) => r.kind === kind);
+      if (!mine.length) continue;
+      layer[kind].add(...rayLines(mine), glints(mine));
+      // A star's ±1σ along its ray, for the rays drawn.
+      const bars = mine.flatMap((r) => r.bar ?? []);
+      if (bars.length) layer[kind].add(late(lines(bars, look.ink, 0.5)));
+    }
+    raysNote.hidden = drawn.length >= total;
+    raysNote.textContent = t('indepth.raysShown', { n: drawn.length, m: total });
+    raysNote.title = t('indepth.raysWhy');
+
+    // What has no distance: stubs only, and one name saying how many.
+    const stubCut = capRays(stubs, narrow ? MAX_STUBS.narrow : MAX_STUBS.wide).drawn;
+    if (stubCut.length && plateCorners) {
+      layer.unknown.add(...rayLines(stubCut));
+      const br = plateCorners[1];
+      const l = Math.hypot(...br);
+      objTags.push({
+        pos: br.map((x) => x * (1 + STUB_M / l)), kind: 'unknown', priority: 6.5, tone: 'neutral',
+        title: t('indepth.stubs', { n: unknown.length }),
+      });
+    }
+    // The growth waits for the stars, the bulk of it, so it is seen once and whole.
+    if ((rays.length || stubs.length) && got?.status.gaia !== 'asking') startIntro();
+
     setObjectTags(objTags);
+    refocus();
     drawLegend();
   }
 
@@ -661,7 +905,7 @@ export function mountInDepth(plate, { sky, field }) {
     legend.style.maxBlockSize = `${Math.max(80, kinds.offsetTop - legend.offsetTop - 6)}px`;
     legend.style.setProperty('--room', `${Math.max(160, corner.offsetLeft + reset.offsetLeft - legend.offsetLeft - 6)}px`);
     // The corner panels are room no name may take.
-    for (const panel of [legend, kinds, reset, how]) {
+    for (const panel of [legend, kinds, reset, how, raysNote]) {
       if (panel.hidden || !panel.offsetWidth) continue;
       const r = panel.getBoundingClientRect();
       boxes.push({ x: r.left - box0.left, y: r.top - box0.top, w: r.width, h: r.height });
@@ -671,18 +915,23 @@ export function mountInDepth(plate, { sky, field }) {
       const on = !g.kind || shown[g.kind];
       tmp.copy(g.pos).project(camera);
       const px = (tmp.x * 0.5 + 0.5) * W;
-      const y = (-tmp.y * 0.5 + 0.5) * H - g.h / 2;
-      // Right of its point, else left of it where the right edge is near.
+      const py = (-tmp.y * 0.5 + 0.5) * H;
+      // Right of its point, else left of it where the right edge is near. The field's own
+      // object and the plate may also go above or below, held inside the plate: on a narrow
+      // or crowded one they are the names that must not drop out.
+      const mid = Math.max(2, Math.min(W - g.w - 2, px - g.w / 2));
+      const spots = [[px + 7, py - g.h / 2], [px - 7 - g.w, py - g.h / 2]];
+      if (g.priority >= 11) spots.push([mid, py - g.h - 6], [mid, py + 6]);
       let spot = null;
-      for (const x of on && tmp.z < 1 ? [px + 7, px - 7 - g.w] : []) {
+      for (const [x, y] of on && tmp.z < 1 ? spots : []) {
         const box = { x: x - 2, y: y - 2, w: g.w + 4, h: g.h + 4 };
         const inside = x > 0 && y > 0 && x + g.w < W && y + g.h < H;
         const hit = boxes.some((b) => b.x < box.x + box.w && box.x < b.x + b.w && b.y < box.y + box.h && box.y < b.y + b.h);
-        if (inside && !hit) { spot = { x, box }; break; }
+        if (inside && !hit) { spot = { x, y, box }; break; }
       }
       g.node.style.visibility = spot ? 'visible' : 'hidden';
       if (spot) {
-        g.node.style.transform = `translate(${Math.round(spot.x)}px, ${Math.round(y)}px)`;
+        g.node.style.transform = `translate(${Math.round(spot.x)}px, ${Math.round(spot.y)}px)`;
         boxes.push(spot.box);
       }
     }
@@ -733,7 +982,7 @@ export function mountInDepth(plate, { sky, field }) {
         chip.setAttribute('aria-pressed', String(shown[kind]));
         objects.children.forEach((g, i) => { g.visible = shown[KINDS[i]]; });
         tip.hidden = true;
-        invalidate();
+        refocus();
       });
       return chip;
     }));
@@ -806,7 +1055,10 @@ export function mountInDepth(plate, { sky, field }) {
   });
   canvas.addEventListener('pointermove', (e) => {
     const was = pointers.get(e.pointerId);
-    if (!was) return;
+    if (!was) {
+      if (e.pointerType === 'mouse' && !pointers.size) hover(e);
+      return;
+    }
     const dx = e.clientX - was.x;
     const dy = e.clientY - was.y;
     was.x = e.clientX;
@@ -831,6 +1083,12 @@ export function mountInDepth(plate, { sky, field }) {
   };
   canvas.addEventListener('pointerup', release);
   canvas.addEventListener('pointercancel', release);
+  canvas.addEventListener('pointerleave', (e) => {
+    if (e.pointerType !== 'mouse' || pointers.size || hot == null) return;
+    hot = null;
+    tip.hidden = true;
+    refocus();
+  });
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     const px = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
@@ -841,7 +1099,7 @@ export function mountInDepth(plate, { sky, field }) {
     if (step) { e.preventDefault(); turn(...step); return; }
     if (e.key === '+' || e.key === '=') { e.preventDefault(); setAlong(view.along + 0.3); }
     else if (e.key === '-') { e.preventDefault(); setAlong(view.along - 0.3); }
-    else if (e.key === 'Escape') tip.hidden = true;
+    else if (e.key === 'Escape') { tip.hidden = true; picked = null; refocus(); }
   });
   reset.addEventListener('click', () => { Object.assign(view, HOME); tip.hidden = true; invalidate(); });
 
@@ -857,29 +1115,109 @@ export function mountInDepth(plate, { sky, field }) {
     invalidate();
   }
 
-  /** A tap: the nearest point under the hand, its card beside it. */
-  function pick(e) {
-    const r = canvas.getBoundingClientRect();
-    const x = e.clientX - r.left;
-    const y = e.clientY - r.top;
+  /** The nearest thing to a point on the canvas, by where it stands or by its pixel on the photo, within `reach` pixels. */
+  function nearest(x, y, reach) {
+    const W = root.clientWidth;
+    const H = root.clientHeight;
     let best = null;
-    let bestD = (e.pointerType === 'touch' ? 1.5 : 1) * PICK_PX;
+    let bestD = reach;
     placeCamera();
     for (const p of pickables) {
       if (!shown[p.kind]) continue;
-      tmp.set(...p.pos).project(camera);
-      if (tmp.z >= 1) continue;
-      const d = Math.hypot((tmp.x * 0.5 + 0.5) * r.width - x, (-tmp.y * 0.5 + 0.5) * r.height - y);
-      if (d < bestD) { bestD = d; best = p; }
+      for (const at of [p.pos, p.start]) {
+        tmp.set(...at).project(camera);
+        if (tmp.z >= 1) continue;
+        const d = Math.hypot((tmp.x * 0.5 + 0.5) * W - x, (-tmp.y * 0.5 + 0.5) * H - y);
+        if (d < bestD) { bestD = d; best = p; }
+      }
     }
-    if (!best) { tip.hidden = true; return; }
-    const card = best.card();
+    return best;
+  }
+
+  /** Where a thing is on the canvas, in CSS pixels. */
+  function onScreen(at) {
+    placeCamera();
+    tmp.set(...at).project(camera);
+    return { x: (tmp.x * 0.5 + 0.5) * root.clientWidth, y: (-tmp.y * 0.5 + 0.5) * root.clientHeight };
+  }
+
+  /** A thing's card, beside the point (x, y). */
+  function showCard(p, x, y) {
+    const card = p.card();
     tip.replaceChildren(el('span', 'tip__title', card.title), ...card.rows.map((text) => el('span', 'tip__row', text)));
     tip.hidden = false;
     const w = tip.offsetWidth;
     const h = tip.offsetHeight;
-    tip.style.left = `${Math.max(6, Math.min(r.width - w - 6, x + 12))}px`;
-    tip.style.top = `${Math.max(6, Math.min(r.height - h - 6, y - h - 10))}px`;
+    tip.style.left = `${Math.max(6, Math.min(root.clientWidth - w - 6, x + 12))}px`;
+    tip.style.top = `${Math.max(6, Math.min(root.clientHeight - h - 6, y - h - 10))}px`;
+  }
+
+  /** What the hand is over (`hot`) and what was tapped (`picked`), by key: the first wins the highlight. */
+  let hot = null;
+  let picked = null;
+  const byKey = (key) => (key ? pickables.find((p) => p.key === key) ?? null : null);
+
+  /** Draw the highlight for the thing pointed at: its whole ray, a ring on its pixel, a ring where it stands. */
+  function refocus() {
+    disposeGroup(focus);
+    const p = byKey(hot) ?? byKey(picked);
+    if (p && shown[p.kind] && plateCorners) {
+      // A thing with no distance has only a direction: its line is dashed, to the far shell.
+      const ray = lines([...p.start, ...p.pos], p.color, p.known ? 0.95 : 0.6, { dashed: !p.known });
+      ray.material.depthTest = false;
+      ray.renderOrder = 9;
+      // The ring lies on the plate, a little wider than a bright star's image there.
+      const [bl, br, , tl] = plateCorners;
+      const ex = new THREE.Vector3(...br).sub(new THREE.Vector3(...bl));
+      const ey = new THREE.Vector3(...tl).sub(new THREE.Vector3(...bl));
+      const radius = 0.035 * Math.max(ex.length(), ey.length());
+      ex.normalize();
+      ey.normalize();
+      const ring = [];
+      const N = 40;
+      for (let k = 0; k < N; k++) {
+        for (const kk of [k, k + 1]) {
+          const a = (kk / N) * Math.PI * 2;
+          ring.push(...[0, 1, 2].map((i) => p.start[i] + radius * (Math.cos(a) * ex.getComponent(i) + Math.sin(a) * ey.getComponent(i))));
+        }
+      }
+      const onPhoto = lines(ring, p.color, 1);
+      onPhoto.material.depthTest = false;
+      onPhoto.renderOrder = 10;
+      const there = points([{ pos: p.pos, size: 22, color: p.color, solid: false }]);
+      there.material.depthTest = false;
+      there.renderOrder = 10;
+      focus.add(ray, onPhoto, there);
+    }
+    invalidate();
+  }
+
+  /** The mouse over the canvas: what it is near lights up, with its card. */
+  function hover(e) {
+    const r = canvas.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+    const best = nearest(x, y, PICK_PX);
+    const key = best?.key ?? null;
+    if (key === hot) return;
+    hot = key;
+    refocus();
+    if (best) { showCard(best, x, y); return; }
+    // Off everything: back to what was tapped, if anything.
+    const was = byKey(picked);
+    if (was && shown[was.kind]) { const at = onScreen(was.pos); showCard(was, at.x, at.y); } else tip.hidden = true;
+  }
+
+  /** A tap: the nearest thing under the hand, highlighted, its card beside it; a tap on nothing lets go. */
+  function pick(e) {
+    const r = canvas.getBoundingClientRect();
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+    const best = nearest(x, y, (e.pointerType === 'touch' ? 1.5 : 1) * PICK_PX);
+    picked = best?.key ?? null;
+    refocus();
+    if (best) showCard(best, x, y);
+    else tip.hidden = true;
   }
 
   /* ---- keeping up with the page ------------------------------------------ */
@@ -904,6 +1242,8 @@ export function mountInDepth(plate, { sky, field }) {
       for (const kind of ['gaia', 'bj', 'galaxies']) if (!got.status[kind] || got.status[kind] === 'failed') ask(kind);
       visitKey = '';
       tip.hidden = true;
+      hot = null;
+      picked = null;
     }
     updatePlate();
     // Another visit on the plate, or another answer from SkyBoT: the things move with it.
@@ -944,6 +1284,7 @@ export function mountInDepth(plate, { sky, field }) {
       document.removeEventListener('visibilitychange', onVisibility);
       disposeGroup(statics);
       disposeGroup(objects);
+      disposeGroup(focus);
       plateTex?.dispose();
       plateMat.dispose();
       renderer.dispose();

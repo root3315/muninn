@@ -7,11 +7,14 @@
  * sent in Russian opens in Russian.
  *
  *   #ra=269.44630&dec=4.76800&fov=0.3&band=D2&mode=single&v=4&marks=269.44,4.77;269.45,4.76
+ *
+ * The mode is one of MODES; `depth` is the field in depth (indepth.js), which
+ * holds one visit on its plate, so a link to it keeps `v` as single does.
  */
 
 export const FOV_CHOICES = [0.1, 0.15, 0.2, 0.3, 0.45, 0.6];
 export const SURVEY_CHOICES = ['off', 'gaia', 'wise', 'both'];
-export const MODES = ['blink', 'wipe', 'difference', 'single', 'stack'];
+export const MODES = ['blink', 'wipe', 'difference', 'single', 'stack', 'depth'];
 /** More than this many marks in a link is a link nobody can paste. */
 const MAX_MARKS = 40;
 

@@ -17,7 +17,13 @@
 .indepth__gl:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -2px; }
 
 /* Names over the corridor: placed by the script, never in the hand's way. */
-.indepth__tags { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.indepth__tags {
+  position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+  transition: opacity 0.4s ease-out;
+}
+/* While the rays grow out of the plate, the names wait for them. */
+.indepth__tags--wait { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { .indepth__tags { transition: none; } }
 .indepth__tag {
   position: absolute; left: 0; top: 0;
   display: grid; gap: 1px;
@@ -85,6 +91,12 @@
 .indepth__how {
   margin: 0; max-inline-size: 22ch; text-align: end;
   font-size: var(--text-2xs); line-height: 1.35; color: var(--color-neutral);
+  text-shadow: var(--shade-text);
+}
+/* How many rays are drawn, when not all are: quieter than the how. */
+.indepth__rays {
+  margin: 0; text-align: end;
+  font-size: var(--text-2xs); line-height: 1.35; color: var(--color-muted);
   text-shadow: var(--shade-text);
 }
 /* On a narrow plate the panel carries the how, and the corner keeps only the button. */

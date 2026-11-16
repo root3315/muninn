@@ -323,7 +323,7 @@ function hashNow() {
   const held = heldVisit();
   return encodeHash({
     ra: state.ra, dec: state.dec, fov: state.fov, band: state.band, lang: getLanguage(),
-    name: state.label, survey: state.survey, mode: sky?.mode ?? null,
+    name: state.label, survey: state.survey, mode: modeNow(),
     // A named object's motion, when the name came with one and is not a preset's.
     pm: state.target?.key == null && Number.isFinite(state.target?.pmRA) ? [state.target.pmRA, state.target.pmDE] : null,
     visit: state.wantVisit ?? held,
@@ -347,6 +347,9 @@ function writeHash() {
 }
 
 const readHash = () => decodeHash(location.hash);
+
+/** The mode as chosen: the depth view draws over a single visit, but a link names it as depth. */
+const modeNow = () => (inDepthChosen() ? 'depth' : sky?.mode ?? null);
 
 /**
  * The visit held on screen, as its place in the archive's own list of the
@@ -1846,12 +1849,14 @@ function startPlayback() {
  * code's own pauses (a theme change, a new field), which should leave the
  * choice alone.
  */
-function selectMode(mode) {
-  // The depth view holds one visit too: a step changes its plate, not the mode.
-  if (mode === 'single' && inDepthChosen()) return;
+function selectMode(mode, { asked = false } = {}) {
+  // The depth view holds one visit too: a step changes its plate, not the mode
+  // (unless a link going back asks for single by name).
+  if (mode === 'single' && inDepthChosen() && !asked) return;
+  const was = modeNow();
   const radio = document.querySelector(`input[name="mode"][value="${mode}"]`);
   if (radio && !radio.checked) radio.checked = true;
-  if (sky.mode !== mode) applyMode(mode);
+  if (was !== mode) applyMode(mode);
 }
 
 /** The user wants the visits to run. */
@@ -5549,7 +5554,7 @@ function showInDepth(on) {
     if (inDepth || !inDepthChosen()) return;
     inDepth = m.mountInDepth($('plate'), {
       sky,
-      field: () => ({ ra: state.ra, dec: state.dec, target: state.target, key: presetAt(state.ra, state.dec)?.key ?? null }),
+      field: () => ({ ra: state.ra, dec: state.dec, target: state.target, label: state.label, key: presetAt(state.ra, state.dec)?.key ?? null }),
     });
   }).catch((err) => {
     console.error(err);
@@ -5854,7 +5859,7 @@ function wire() {
       return;
     }
     if (next.survey !== state.survey) chooseSurvey(next.survey);
-    if (next.mode && sky.mode !== next.mode) selectMode(next.mode);
+    if (next.mode && modeNow() !== next.mode) selectMode(next.mode, { asked: true });
     const moved = state.ra == null
       || Math.abs(deltaRA(next.position.ra, state.ra)) > 1e-4
       || Math.abs(next.position.dec - state.dec) > 1e-4
