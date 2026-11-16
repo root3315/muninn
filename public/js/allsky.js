@@ -2,8 +2,9 @@
  * allsky.js — the whole-sky page: the SPHEREx DR1 cube to turn, zoom and read
  * by wavelength, and a way from any point of it into the tool's own frames.
  *
- * It opens on the whole sky at once, the Mollweide map; a click goes in at
- * that point, onto the sphere, and zooming far enough out comes back.
+ * It opens inside the sphere, facing where the front page faces, at the
+ * front page's width. The whole sky at once, the Mollweide map, is a button
+ * away; a click on the map goes back in at that point.
  *
  * The page keeps its place in the address — #ra=…&dec=…&fov=…&view=…, and
  * map=1 on the map — so a link opens the same sky. `view` is `colour` or a
@@ -23,8 +24,8 @@ const $ = (id) => document.getElementById(id);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const touch = matchMedia('(pointer: coarse)').matches;
 
-/** Where the sphere opens when nothing says otherwise: the galactic centre, wide. */
-const OPENING = { ra: 266.4, dec: -29.0, fov: 100 };
+/** Where the sphere opens when nothing says otherwise: where the front page's sky does. */
+const OPENING = { ra: 266, dec: -12, fov: 78 };
 /** The field a click on the map goes in to. */
 const DIVE_FOV = 40;
 /** The field the tool opens with, degrees. */
@@ -57,8 +58,7 @@ function readHash() {
     dec: placed ? dec : OPENING.dec,
     fov: Number.isFinite(fov) ? Math.min(FOV_MAX, Math.max(FOV_MIN, fov)) : OPENING.fov,
     view: view !== null && view !== 'colour' && FRAMES.includes(frame) ? frame : 'colour',
-    // A link to a place opens at the place; a bare link opens on the whole sky.
-    map: p.get('map') === '1' || !placed ? 1 : 0,
+    map: p.get('map') === '1' ? 1 : 0,
   };
 }
 
@@ -249,7 +249,7 @@ function animate(to, ms = 1300, { arc = true } = {}) {
 function dive(at, fov = DIVE_FOV) {
   // The sphere is set to the point while the map is still in front of it, so
   // what comes through the map as it fades is the place that was chosen.
-  view.set({ ra: at.ra, dec: at.dec, fov: Math.min(FOV_MAX, fov * 3) });
+  view.set({ ra: at.ra, dec: at.dec, fov: Math.min(FOV_MAX, fov * 2.5) });
   animate({ ra: at.ra, dec: at.dec, fov, map: 0 }, 1100, { arc: false });
 }
 
@@ -268,10 +268,6 @@ $('whole').addEventListener('click', () => {
 function zoomAt(factor, px, py) {
   if (inMap()) return;
   const s = view.state;
-  if (factor > 1 && s.fov >= FOV_MAX - 1e-6) {
-    surface();
-    return;
-  }
   const before = view.skyAt(px, py);
   view.set({ fov: s.fov * factor });
   const after = view.skyAt(px, py);
@@ -390,7 +386,7 @@ function release(e) {
     prev = now;
     const s = view.state;
     view.set({ ra: s.ra + v.ra * dt, dec: s.dec + v.dec * dt });
-    const k = Math.exp(-dt / 380);
+    const k = Math.exp(-dt / 200);
     v = { ra: v.ra * k, dec: v.dec * k };
     if (Math.hypot(v.ra, v.dec) * 16 > s.fov / 4000) coast = requestAnimationFrame(glide);
     else writeHash();
@@ -423,10 +419,6 @@ canvas.addEventListener('keydown', (e) => {
   };
   if (!moves[e.key]) return;
   e.preventDefault();
-  if (e.key === '-' && s.fov >= FOV_MAX - 1e-6) {
-    surface();
-    return;
-  }
   view.set(moves[e.key]);
   writeHash();
 });
@@ -438,8 +430,7 @@ $('zoom-in').addEventListener('click', () => {
 });
 $('zoom-out').addEventListener('click', () => {
   if (!view || inMap()) return;
-  if (view.state.fov >= FOV_MAX - 1e-6) surface();
-  else animate({ fov: view.state.fov * 2 }, 450, { arc: false });
+  animate({ fov: Math.min(FOV_MAX, view.state.fov * 2) }, 450, { arc: false });
 });
 
 /* ---- the hint ---------------------------------------------------------- */

@@ -2,9 +2,10 @@
  * view.js — the whole sky in WebGL 2, two ways.
  *
  * The sphere: the observer stands at the centre of the celestial sphere and
- * looks out, east on the left with north up, as on any sky chart. The
- * stereographic projection keeps small shapes true at every width, so a
- * constellation looks itself at 130° and at half a degree.
+ * looks out through a camera, east on the left with north up, as on any sky
+ * chart — the same perspective as the sky on the tool's front page, so the
+ * two feel like one place. A straight line on the sky stays straight, and the
+ * field opens up to 108°, as the front page's does.
  *
  * The map: the whole sky at once on one Mollweide ellipse in galactic
  * coordinates, the Milky Way along the middle, the way all-sky surveys are
@@ -25,23 +26,31 @@
 
 import { vecOf, radecOf, tileMesh, tileCentre } from './healpix.js';
 import {
-  ALLSKY_ORDER, ALLSKY_TILE, ALLSKY_COLUMNS, TILE_PX, allskySlot, allskyUrl, tileUrl, orderFor, tileDegrees,
+  ALLSKY_ORDER, ALLSKY_TILE, ALLSKY_COLUMNS, TILE_PX, HIPS_BASE, allskySlot, allskyUrl, allskyFallback, tileUrl, orderFor, tileDegrees,
 } from './hips.js';
 import { GALACTIC, mollweide, mollweideInverse, toGalactic, fromGalactic } from './maps.js';
 
 const DEG = Math.PI / 180;
 export const FOV_MIN = 0.4;
-export const FOV_MAX = 130;
-/** Tiles whose middle is this far behind the observer are not drawn: stereographic runs to infinity at the antipode. */
-const BEHIND = -0.55;
+export const FOV_MAX = 108;
+/**
+ * A camera sees only what is in front of it: a tile whose middle is closer
+ * than this to the side of the view (cosine from the axis) is not drawn, as
+ * its far corners would be behind the lens.
+ */
+const FRONT = 0.15;
 const WANT_MAX = 140;
 const LOADS_AT_ONCE = 6;
 const KEEP_TILES = 260;
 const RETRY_MS = 8000;
 /** How long a newly arrived image takes to come up, ms. */
 const FADE_MS = 320;
-/** How far down the Allsky's mipmaps the sphere reads it. */
-const ALLSKY_BIAS = 0.75;
+/**
+ * How far down the Allsky's mipmaps the sphere reads it: IRSA's own, made of
+ * single pixels, far enough to average their noise out; the site's averaged
+ * ones hardly at all, so the stars stay sharp.
+ */
+const ALLSKY_BIAS = { picked: 1.25, averaged: 0.35 };
 const ALLSKY_COUNT = 12 * 4 ** ALLSKY_ORDER;
 const ATLAS_W = ALLSKY_COLUMNS * ALLSKY_TILE;
 const ATLAS_H = Math.ceil(ALLSKY_COUNT / ALLSKY_COLUMNS) * ALLSKY_TILE;
@@ -79,8 +88,8 @@ uniform vec3 uN;
 uniform vec2 uScale;
 out vec2 vUv;
 void main() {
-  float d = 1.0 + dot(aPos, uC);
-  vec2 p = vec2(-dot(aPos, uE), dot(aPos, uN)) * 2.0 / max(d, 1e-4);
+  float d = dot(aPos, uC);
+  vec2 p = vec2(-dot(aPos, uE), dot(aPos, uN)) / max(d, 1e-3);
   gl_Position = vec4(p * uScale, 0.0, 1.0);
   vUv = aUv;
 }`;
@@ -225,17 +234,16 @@ export function basisOf(ra, dec) {
 
 const dot = (u, v) => u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
 
-/** Screen units per stereographic unit, for a field `fov` degrees across the shorter side. */
-export const scaleFor = (fov) => 1 / (2 * Math.tan((fov * DEG) / 4));
+/** Screen units per unit of the image plane, for a field `fov` degrees across the shorter side. */
+export const scaleFor = (fov) => 1 / Math.tan((fov * DEG) / 2);
 
-/** The direction under a stereographic screen offset (units of the shorter half-side, y up). */
+/** The direction under a screen offset (units of the shorter half-side, y up). */
 export function unproject(x, y, { C, E, N }, k) {
   const X = -x / k;
   const Y = y / k;
-  const r2 = X * X + Y * Y;
-  const s = 4 / (4 + r2);
-  const cz = (4 - r2) / (4 + r2);
-  return [0, 1, 2].map((i) => X * s * E[i] + Y * s * N[i] + cz * C[i]);
+  const v = [0, 1, 2].map((i) => X * E[i] + Y * N[i] + C[i]);
+  const n = Math.hypot(...v);
+  return v.map((c) => c / n);
 }
 
 /** Percentiles of the red channel of an image, from its histogram. */
@@ -246,11 +254,22 @@ function levelsOf(bitmap) {
   const { data } = ctx.getImageData(0, 0, bitmap.width, bitmap.height);
   const hist = new Uint32Array(256);
   let n = 0;
-  // Only pixels with data: the mosaic's unused cells and the blanked cores are transparent.
-  for (let i = 0; i < data.length; i += 4) {
-    if (data[i + 3] === 0) continue;
-    hist[data[i]]++;
-    n++;
+  // The Allsky image is made by taking pixels, not averaging them, so each
+  // carries a full pixel's noise; the screen shows it read down the mipmap,
+  // averaged. The levels are read the way it is shown: in blocks of 2 × 2.
+  // Only blocks with data count: the mosaic's unused cells and the blanked
+  // cores are transparent.
+  const w = bitmap.width;
+  for (let y = 0; y + 1 < bitmap.height; y += 2) {
+    for (let x = 0; x + 1 < w; x += 2) {
+      const i = (y * w + x) * 4;
+      const j = i + w * 4;
+      if (!data[i + 3] || !data[i + 7] || !data[j + 3] || !data[j + 7]) continue;
+      // Blank is 0 in the site's own Allsky, which has no alpha.
+      if (!data[i] && !data[i + 4] && !data[j] && !data[j + 4]) continue;
+      hist[(data[i] + data[i + 4] + data[j] + data[j + 4] + 2) >> 2]++;
+      n++;
+    }
   }
   const pct = (q) => {
     let s = 0;
@@ -260,12 +279,12 @@ function levelsOf(bitmap) {
     }
     return 1;
   };
-  // The floor: a third of the sky's noise above its median, so empty sky is
-  // dark instead of grain, and anything that stands above the noise shows.
-  // The top: the brightest thousandth, so stars and nebulae are not all
+  // The floor: most of one noise sigma above the median sky, so empty sky is
+  // dark instead of grain, and what stands above the noise shows.
+  // The top: the brightest two thousandths, so stars and nebulae are not all
   // clipped to one white.
   const sigma = pct(0.5) - pct(0.16);
-  return { lo: pct(0.5) + sigma * 0.3, hi: Math.max(pct(0.999), pct(0.5) + 0.05) };
+  return { lo: pct(0.5) + sigma * 0.8, hi: Math.max(pct(0.998), pct(0.5) + 0.05) };
 }
 
 /**
@@ -323,14 +342,14 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
   }
 
   // The Allsky mosaic: every order-3 tile pointing into its 64-pixel cell of
-  // one image, a texel in from the edge so the filter, one mipmap level down,
-  // never reaches the neighbouring cell.
+  // one image, two texels in from the edge so the filter, read down to the
+  // second mipmap level, never reaches the neighbouring cell.
   const ALLSKY_STEPS = 4;
   const allskyMesh = (() => {
     const side = ALLSKY_STEPS + 1;
     const positions = new Float32Array(ALLSKY_COUNT * side * side * 3);
     const uv = new Float32Array(ALLSKY_COUNT * side * side * 2);
-    const inset = 1 / ALLSKY_TILE;
+    const inset = 2 / ALLSKY_TILE;
     for (let n = 0; n < ALLSKY_COUNT; n++) {
       const m = tileMesh(ALLSKY_ORDER, n, ALLSKY_STEPS);
       positions.set(m.positions, n * side * side * 3);
@@ -420,7 +439,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
   function want(url, priority, { allsky = false } = {}) {
     let img = images.get(url);
     if (!img) {
-      img = { state: 'queued', tex: null, used: use, priority, readyAt: 0, retryAt: 0, allsky };
+      img = { state: 'queued', tex: null, used: use, priority, readyAt: 0, retryAt: 0, allsky, averaged: !/^https?:/.test(url) };
       images.set(url, img);
       queue.push(url);
     } else if (img.state === 'failed' && performance.now() > img.retryAt) {
@@ -439,8 +458,18 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
    * the relay cannot help.
    */
   let relayWorks = Boolean(relay);
-  async function fetchImage(url) {
-    if (relayWorks) {
+  async function fetchImage(url, img = null) {
+    const fallback = allskyFallback(url);
+    if (fallback) {
+      // The site's own averaged Allsky; if it is not there, IRSA's.
+      try {
+        const res = await fetch(url);
+        if (res.ok && (res.headers.get('content-type') ?? '').startsWith('image/')) return res.blob();
+      } catch { /* IRSA's, then */ }
+      if (img) img.fellBack = true;
+      return fetchImage(fallback);
+    }
+    if (relayWorks && url.startsWith(HIPS_BASE)) {
       try {
         const res = await fetch(relay(url));
         if (res.ok && (res.headers.get('content-type') ?? '').startsWith('image/')) return res.blob();
@@ -461,9 +490,13 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     img.state = 'loading';
     loading++;
     try {
-      const bitmap = await createImageBitmap(await fetchImage(url), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+      const bitmap = await createImageBitmap(await fetchImage(url, img), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
       if (disposed) return;
-      if (img.allsky) img.levels = levelsOf(bitmap);
+      if (img.allsky) {
+        img.levels = levelsOf(bitmap);
+        // Averaged or picked is a property of what came, not of what was asked for.
+        img.averaged = img.averaged && !img.fellBack;
+      }
       img.tex = makeTexture(bitmap, img.allsky ? 2 : 9);
       bitmap.close?.();
       img.state = 'ready';
@@ -562,17 +595,19 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
 
   function onScreen(centre, radiusDeg, cam) {
     const cz = dot(centre, cam.C);
-    if (cz < BEHIND) return false;
-    const d = 1 + cz;
-    const x = (-dot(centre, cam.E) * 2 / d) * cam.k * cam.sx;
-    const y = (dot(centre, cam.N) * 2 / d) * cam.k * cam.sy;
-    const reach = radiusDeg * DEG * (2 / d) * cam.k * Math.max(cam.sx, cam.sy) * 1.15;
+    if (cz < FRONT) return false;
+    const x = (-dot(centre, cam.E) / cz) * cam.k * cam.sx;
+    const y = (dot(centre, cam.N) / cz) * cam.k * cam.sy;
+    // The tile's reach on the screen: its radius, magnified as the camera
+    // magnifies toward the edge of a wide field.
+    const reach = (radiusDeg * DEG / (cz * cz)) * cam.k * Math.max(cam.sx, cam.sy);
     return Math.abs(x) <= 1 + reach && Math.abs(y) <= 1 + reach;
   }
 
   function visibleTiles(order, cam) {
     const c = centresOf(order);
-    const radius = tileDegrees(order);
+    // From a tile's middle to its corner: about three quarters of its side.
+    const radius = tileDegrees(order) * 0.75;
     const out = [];
     for (let n = 0; n < c.length / 3; n++) {
       const v = [c[n * 3], c[n * 3 + 1], c[n * 3 + 2]];
@@ -598,7 +633,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
       gl.drawElements(gl.TRIANGLES, (end - runStart) * allskyMesh.perTile, gl.UNSIGNED_INT, runStart * allskyMesh.perTile * 4);
       runStart = -1;
     };
-    const radius = tileDegrees(ALLSKY_ORDER);
+    const radius = tileDegrees(ALLSKY_ORDER) * 0.75;
     for (let n = 0; n < ALLSKY_COUNT; n++) {
       if (onScreen(allskyCentres[n], radius, cam)) {
         if (runStart < 0) runStart = n;
@@ -620,19 +655,24 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     const sky = fetch ? layerOf(frames.map(allskyUrl), -1) : { imgs: frames.map((f) => images.get(allskyUrl(f))) };
     const skyReady = sky.imgs.every((i) => i?.state === 'ready');
     out.wanted += frames.length;
-    if (!skyReady) return out;
-    out.have += frames.length;
-    out.base = true;
-    const f0 = fadeOf(sky.imgs, now) * alpha;
-    if (f0 < 1) out.fading = true;
     useSphere(cam);
-    bindLayer(sphere, sky.imgs, f0);
-    // The Allsky's pixels each carry their own noise, and spread over a wide
-    // field they show as grain. Read a little down the mipmap, the grain
-    // averages out and the light stays; the sharp tiles above are read as they are.
-    gl.uniform1f(sphere.u.Bias, ALLSKY_BIAS);
-    drawAllsky(cam);
-    gl.uniform1f(sphere.u.Bias, 0);
+    if (skyReady) {
+      out.have += frames.length;
+      out.base = true;
+      const f0 = fadeOf(sky.imgs, now) * alpha;
+      if (f0 < 1) out.fading = true;
+      bindLayer(sphere, sky.imgs, f0);
+      // The Allsky's pixels each carry their own noise, and spread over a wide
+      // field they show as grain. Read a little down the mipmap, the grain
+      // averages out and the light stays; the sharp tiles above are read as they are.
+      gl.uniform1f(sphere.u.Bias, sky.imgs.every((i) => i.averaged) ? ALLSKY_BIAS.averaged : ALLSKY_BIAS.picked);
+      drawAllsky(cam);
+      gl.uniform1f(sphere.u.Bias, 0);
+    } else if (!fetch) {
+      return out;
+    }
+    // Without its Allsky a tile is still drawn, at levels that pass IRSA's stretch through.
+    const levels = skyReady ? sky.imgs : frames.map(() => ({ levels: { lo: 0.06, hi: 0.9 } }));
 
     const target = orderFor(state.fov / cam.short);
     if (target === null) return out;
@@ -648,7 +688,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
         if (f < 1) out.fading = true;
         // Levels always from the Allsky of the same frames, so a tile and the
         // sky around it are set alike.
-        bindLayer(sphere, imgs, f, sky.imgs);
+        bindLayer(sphere, imgs, f, levels);
         const mesh = tileVao(order, n);
         gl.bindVertexArray(mesh.vao);
         gl.drawElements(gl.TRIANGLES, mesh.perTile, gl.UNSIGNED_INT, 0);
@@ -706,9 +746,9 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
             if (run.length > 1) out.push(run);
             run = [];
           }
-        } else if (dot(v, cam.C) > BEHIND + 0.1) {
-          const d = 1 + dot(v, cam.C);
-          p = [(-dot(v, cam.E) * 2 / d) * cam.k * cam.sx, (dot(v, cam.N) * 2 / d) * cam.k * cam.sy];
+        } else if (dot(v, cam.C) > 0.05) {
+          const d = dot(v, cam.C);
+          p = [(-dot(v, cam.E) / d) * cam.k * cam.sx, (dot(v, cam.N) / d) * cam.k * cam.sy];
         }
         if (!p) {
           if (run.length > 1) out.push(run);
@@ -862,10 +902,10 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
         return { x: (frame.cx + m.x * frame.s) / cam.dpr, y: (cam.h - frame.cy - m.y * frame.s) / cam.dpr };
       }
       const v = vecOf(ra, dec);
-      const d = 1 + dot(v, cam.C);
-      if (d < 1) return null;
-      const x = (-dot(v, cam.E) * 2 / d) * (cam.short / 2);
-      const y = (dot(v, cam.N) * 2 / d) * (cam.short / 2);
+      const d = dot(v, cam.C);
+      if (d < 0.05) return null;
+      const x = (-dot(v, cam.E) / d) * (cam.short / 2);
+      const y = (dot(v, cam.N) / d) * (cam.short / 2);
       return { x: (cam.w / 2 + x * cam.k) / cam.dpr, y: (cam.h / 2 - y * cam.k) / cam.dpr };
     },
     redraw,
