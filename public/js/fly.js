@@ -267,7 +267,7 @@ function nameLabels() {
     b.type = 'button';
     b.className = `as-band${s.target ? ' fly-chip--target' : ''}`;
     b.textContent = nameOf(s);
-    b.addEventListener('click', () => flyTo(s));
+    b.addEventListener('click', () => { flyTo(s); openCardLater(s); });
     chips.append(b);
   }
 }
@@ -481,6 +481,7 @@ function openCard(entry) {
   rows.push([t('fly.cardHere'), distanceText(len(sub(p, cam.eye)))]);
   if (s.key === 'wise0855') {
     const seenTo = shells();
+    rows.unshift([t('fly.cardVerdict'), t('fly.verdict', { n: seenTo[1].visits })]);
     rows.push([t('fly.cardW2'), t('fly.w2', { ab: fmt(WISE0855_AB, 1) })]);
     rows.push([t('fly.cardOne'), t('fly.limitOne', { ab: fmt(D6_ONE_VISIT_AB, 1), d: distanceText(seenTo[0].pc) })]);
     rows.push([t('fly.cardStack'), t('fly.limitStack', { n: seenTo[1].visits, ab: fmt(seenTo[1].limit, 1), d: distanceText(seenTo[1].pc) })]);
@@ -654,10 +655,10 @@ function buildReach() {
     ]), ink: [1, 0.72, 0.4, 0.55], key: 'reach' },
   ]);
   marks = [
-    { pos: eclipticPoint(one.pc, 90, 30), text: () => t('fly.shellOne', { d: distanceText(one.pc) }) },
-    { pos: eclipticPoint(stack.pc, 90, 30), text: () => t('fly.shellStack', { n: stack.visits, d: distanceText(stack.pc) }) },
-    { pos: eclipticPoint(30 * AU, 0), text: () => t('fly.neptune') },
-    { pos: eclipticPoint(PLANET_NINE_AU[1] * AU, 0), text: () => t('fly.p9Ring') },
+    { at: () => onSphere(one.pc), text: () => t('fly.shellOne', { d: distanceText(one.pc) }) },
+    { at: () => onSphere(stack.pc), text: () => t('fly.shellStack', { n: stack.visits, d: distanceText(stack.pc) }) },
+    { at: () => onRing(30 * AU), text: () => t('fly.neptune') },
+    { at: () => onRing(PLANET_NINE_AU[1] * AU), text: () => t('fly.p9Ring') },
   ];
   $('marks').replaceChildren(...marks.map((m) => {
     const el = document.createElement('span');
@@ -667,15 +668,41 @@ function buildReach() {
   }));
 }
 
+/**
+ * Where a word for a sphere round the Sun goes: the point of it a little
+ * above the middle of the view, so the eye finds it whichever way it looks.
+ */
+function onSphere(r) {
+  const d = norm(add(cam.F, cam.U, 0.35));
+  // |eye + d t| = r, the far crossing.
+  const bq = dot(cam.eye, d);
+  const disc = bq * bq - (dot(cam.eye, cam.eye) - r * r);
+  if (disc < 0) return null;
+  return add(cam.eye, d, -bq + Math.sqrt(disc));
+}
+
+/** Where a word for a ring in the planets' plane goes: its point nearest the middle of the view. */
+function onRing(r) {
+  let best = null;
+  let bestK = -Infinity;
+  for (let l = 0; l < 360; l += 5) {
+    const p = eclipticPoint(r, l);
+    const k = dot(norm(sub(p, cam.eye)), cam.F);
+    if (k > bestK) { bestK = k; best = p; }
+  }
+  return best;
+}
+
 function placeMarks() {
   const b = basis();
   for (const m of marks) {
-    const at = view.reach ? screenOf(m.pos, b, proj) : null;
+    const pos = view.reach ? m.at() : null;
+    const at = pos ? screenOf(pos, b, proj) : null;
     // A mark on top of a star's label would be read as neither.
     const crowded = at && labels.some(({ s, el }) => {
       if (el.hidden) return false;
       const p = screenOf(placeOf(s), b, proj);
-      return p && Math.abs(p.x - at.x) < 140 && Math.abs(p.y - at.y) < 18;
+      return p && Math.abs(p.x - at.x) < 60 && Math.abs(p.y - at.y) < 14;
     });
     m.el.hidden = !at || crowded;
     if (!at || crowded) continue;

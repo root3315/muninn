@@ -98,3 +98,8 @@
 }
 .fly-mark[hidden] { display: none; }
 #read-note:empty { display: none; }
+
+/* On or off at a glance: a toggle that is on is filled. */
+.as-dock .as-toggle[aria-pressed="true"] { background: var(--color-accent); color: var(--color-accent-ink); }
+/* The verdict is what the card is for. */
+.fly-card__rows > div:first-child dd { font-weight: 600; }
