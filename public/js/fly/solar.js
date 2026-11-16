@@ -146,16 +146,31 @@ export function orbits(date = new Date(), steps = 180) {
     }
     out[key] = pts;
   }
+  out.moon = moonOrbit(date, steps);
+  return out;
+}
+
+/**
+ * The Moon's orbit round the Earth from a date through one sidereal month,
+ * parsecs, relative to the Earth: from the same series that places it, so it
+ * carries the orbit's tilt of about 5.1° to the ecliptic and its eccentricity.
+ */
+export function moonOrbit(date = new Date(), steps = 180) {
   const moon = [];
   for (let k = 0; k <= steps; k++) {
     const d = new Date(date.getTime() + (27.3217 * 86400000 * k) / steps);
     moon.push(toEquatorial(moonGeocentric(d)).map((c) => c * AU_PC));
   }
-  out.moon = moon;
-  return out;
+  return moon;
 }
 
-/** What is known of each planet, for its card and the Sun's: a (AU), year (days), moons known (IAU/JPL, 2025). */
+/**
+ * What is known of each planet, for its card and the Sun's: a (AU), year
+ * (days), moons known (JPL Solar System Dynamics' list of planetary
+ * satellites and the IAU Minor Planet Center's announcements, as of
+ * MOONS_AS_OF: Saturn's 274 since March 2025, Uranus's 29th, S/2025 U1,
+ * found by JWST and announced in August 2025).
+ */
 export const FACTS = {
   mercury: { a: 0.387, year: 87.97, day: 58.65, moons: 0, g: 3.7, t: '−173…427 °C' },
   venus: { a: 0.723, year: 224.70, day: -243.02, moons: 0, g: 8.87, t: '464 °C' },
@@ -164,6 +179,9 @@ export const FACTS = {
   mars: { a: 1.524, year: 686.98, day: 1.026, moons: 2, g: 3.71, t: '−140…20 °C' },
   jupiter: { a: 5.203, year: 4332.6, day: 0.4135, moons: 97, g: 24.79, t: '−145 °C' },
   saturn: { a: 9.537, year: 10759, day: 0.444, moons: 274, g: 10.44, t: '−178 °C' },
-  uranus: { a: 19.19, year: 30687, day: -0.718, moons: 28, g: 8.87, t: '−224 °C' },
+  uranus: { a: 19.19, year: 30687, day: -0.718, moons: 29, g: 8.87, t: '−224 °C' },
   neptune: { a: 30.07, year: 60190, day: 0.671, moons: 16, g: 11.15, t: '−214 °C' },
 };
+
+/** The day the moon counts in FACTS were last checked against JPL's list. */
+export const MOONS_AS_OF = '2025-08-19';

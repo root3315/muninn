@@ -116,8 +116,7 @@
 /* A system from above: its orbits to scale and its habitable zone. */
 .fly-system__box { margin: 0 0 var(--space-xs); }
 .fly-system { display: block; inline-size: 100%; max-inline-size: 15rem; margin-inline: auto; }
-.fly-system__hz { fill: oklch(72% 0.12 150 / 0.22); }
-.fly-system__hz-in { fill: var(--gate-veil-deep, #0b0d14); }
+.fly-system__hz { fill: none; stroke: oklch(72% 0.12 150 / 0.24); }
 .fly-system__star { fill: oklch(92% 0.08 85); }
 .fly-system__orbit { fill: none; stroke: oklch(82% 0.11 165 / 0.6); stroke-width: 0.8; }
 .fly-system__planet { fill: oklch(92% 0.04 165); stroke: oklch(20% 0.02 250); stroke-width: 0.8; }
@@ -134,3 +133,30 @@
 
 /* The Sun's planets' orbits drawn round a star, for scale. */
 .fly-mark--scale { color: oklch(88% 0.05 245); }
+
+/* The clock: stop and start, a pace, the way back to now, and the moment shown when it is not now. */
+.fly-time { flex-wrap: wrap; row-gap: var(--space-3xs); }
+.fly-time__play { min-inline-size: var(--hit); justify-content: center; }
+.fly-time__rates { display: inline-flex; flex-wrap: wrap; gap: var(--space-3xs); }
+.fly-rate { font-size: var(--text-xs); }
+.fly-time [hidden] { display: none; }
+.fly-time__date { margin: 0; color: var(--color-counter); }
+.fly-time__date:empty { display: none; }
+
+/* What the picked body goes round: ringed in the colour of the orbit drawn. */
+.fly-centre {
+  position: absolute; inset-inline-start: 0; inset-block-start: 0;
+  inline-size: 30px; block-size: 30px; margin: -15px 0 0 -15px;
+  border: 1.5px solid oklch(80% 0.14 70); border-radius: 50%;
+  box-shadow: 0 0 0 4px oklch(80% 0.14 70 / 0.18);
+  pointer-events: none; will-change: transform;
+}
+.fly-centre[hidden] { display: none; }
+.fly-mark--drift { color: oklch(84% 0.12 55); }
+
+/* A body's kin in its card: each a way to its own card. */
+.fly-kin { display: flex; flex-wrap: wrap; gap: var(--space-3xs); margin-block-start: var(--space-3xs); }
+.fly-kin__go { margin-inline-start: 0; }
+
+/* The habitable zone: the optimistic one paler round the conservative one. */
+.fly-system__hz-opt { fill: none; stroke: oklch(72% 0.12 150 / 0.11); }

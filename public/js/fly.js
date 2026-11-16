@@ -10,7 +10,7 @@
  * The address keeps where you are: #x=…&y=…&z=… in parsecs.
  */
 
-import { setLanguage, getLanguage, t, applyTranslations, fmt } from './i18n.js';
+import { setLanguage, getLanguage, t, applyTranslations, fmt, formatDay } from './i18n.js';
 import { starColour, direction } from './gate.js';
 import { encodeHash } from './hash.js';
 import { embedded, goTo } from './embed.js';
@@ -21,7 +21,8 @@ import { RELIEF, reliefScale } from './fly/relief.js';
 import { createSkyView } from './allsky/view.js';
 import { HIPS_BASE, COLOUR_FRAMES } from './allsky/hips.js';
 import { temperatureOf, luminosityOf, radiusOf, vMinusW2, R_SUN_PC, T_SUN } from './fly/stars.js';
-import { solarSystem, orbits as solarOrbits, bodyAxes, FACTS, AU_PC } from './fly/solar.js';
+import { solarSystem, orbits as solarOrbits, moonOrbit, bodyAxes, FACTS, MOONS_AS_OF, AU_PC } from './fly/solar.js';
+import { orbitOf, offsetAt, anomalyAt, ellipseEnds, skyFrame, habitableZone, zoneOf, matchHosts, skyVelocity } from './fly/orbits.js';
 import { shells, planetNineShortfall, WISE0855_AB, WISE0855_PC, D6_ONE_VISIT_AB, PLANET_NINE_V, PLANET_NINE_AU, PLANET_NINE_MAX_BETA } from './fly/reach.js';
 
 const $ = (id) => document.getElementById(id);
@@ -407,7 +408,7 @@ const radiusPc = (s) => (s.index >= 0 ? stars.rad[s.index] : s.radius ?? 1) * R_
 
 /** Fly to a star, stopping a few of its own radii from it. */
 function flyTo(s) {
-  closeCard();
+  hideCard();
   carried = null;
   const to = placeOf(s);
   const away = len(sub(cam.eye, to));
@@ -490,6 +491,9 @@ function steer(dt) {
       // Arrived: slow enough to fly round the star rather than past it.
       factor = 0.5;
       if (autopilot.body >= 0) carried = { index: autopilot.body, offset: sub(cam.eye, posOf(autopilot.body)) };
+      // Another star's planet goes on moving too: the camera keeps beside it.
+      const beside = autopilot.follow?.();
+      if (beside) carried = { at: autopilot.follow, offset: sub(cam.eye, beside) };
       autopilot = null;
       writeHash();
     }
@@ -595,15 +599,17 @@ function loadRelief(key) {
   reliefWorker.postMessage({ url, meta, key, seaLevel: key === 'earth' ? 0 : null });
 }
 
-/** A body's map key and its axes now (the axes worked out again each second). */
+/** A body's map key and its axes at the moment shown. */
 function surfaceOf(i) {
   const key = stars.bodyKey?.get(i);
   if (!key || !surfaceInfo[key]) return {};
-  if (performance.now() - axesAt > 1000) {
+  // Worked out again for each second the clock moves on: every frame when it races.
+  const at = simMs();
+  if (Math.abs(at - axesAt) > 1000) {
     axesOf.clear();
-    axesAt = performance.now();
+    axesAt = at;
   }
-  if (!axesOf.has(key)) axesOf.set(key, bodyAxes(key));
+  if (!axesOf.has(key)) axesOf.set(key, bodyAxes(key, new Date(at)));
   return { map: key, axes: axesOf.get(key), ...(key === 'earth' ? { air: [0.05, 0.11, 0.3] } : {}) };
 }
 
@@ -819,14 +825,85 @@ function placeLabels() {
 /* ---- time ------------------------------------------------------------ */
 
 /*
- * The planets and the Moon move as they do, now: their positions are worked
- * out for this moment, every frame, from the same orbital elements. Time runs
- * at its own pace and no other; the stars' own motions are too slow to see.
+ * The planets and the Moon move as they do: their positions are worked out
+ * for the moment shown, from the same orbital elements. That moment is now,
+ * unless the clock below is asked for another pace: ❚❚ stops it, ▶ runs it
+ * at a day, a week, a month or a year a second, and "now" brings it back.
+ * The planets, the Moon, other stars' planets and the orbit picked all go by
+ * it. The stars' own motions are too slow to see even at a year a second.
  */
+const RATES = [['fly.rateReal', 1], ['fly.rateDay', 86400], ['fly.rateWeek', 7 * 86400], ['fly.rateMonth', 30.436875 * 86400], ['fly.rateYear', 365.25 * 86400]];
+/** live: the real now; otherwise `at` (ms since 1970) when the clock was last set, at `from` (page ms), running at `rate` while playing. */
+const clock = { live: true, playing: true, rate: 1, at: 0, from: 0 };
+/** The moment shown, milliseconds since 1970. */
+function simMs() {
+  if (clock.live) return Date.now();
+  return clock.playing ? clock.at + (performance.now() - clock.from) * clock.rate : clock.at;
+}
+/** The moment shown as a Julian date. */
+const JD = () => simMs() / 86400000 + 2440587.5;
+/** Whether the clock runs faster than real time: then every frame moves the bodies, not four a second. */
+const racing = () => !clock.live && clock.playing && clock.rate > 1;
+
+function setClock(change) {
+  clock.at = simMs();
+  clock.from = performance.now();
+  Object.assign(clock, change);
+  if (clock.live) clock.rate = 1;
+  showClock();
+  if (stars && space) moveBodies();
+  wake();
+}
+
+/** The clock's buttons as they are, and the moment shown whenever it is not now. */
+function showClock() {
+  const play = $('time-play');
+  play.textContent = clock.playing ? '❚❚' : '▶';
+  play.setAttribute('aria-label', t(clock.playing ? 'fly.timePause' : 'fly.timePlay'));
+  play.title = play.getAttribute('aria-label');
+  // The pace it runs at is lit; a stopped clock has none.
+  for (const b of $('time-rates').children) b.setAttribute('aria-pressed', String(clock.playing && Number(b.dataset.rate) === clock.rate));
+  $('time-now').hidden = clock.live;
+  showDate();
+}
+
+function showDate() {
+  const el = $('time-date');
+  if (clock.live) {
+    setText(el, '');
+    return;
+  }
+  const d = new Date(simMs());
+  const year = d.getUTCFullYear();
+  // JPL's elements hold from 1800 to 2050; outside that the planets drift from their true places.
+  const rough = year < 1800 || year > 2050 ? ` · ${t('fly.timeRough')}` : '';
+  setText(el, `${formatDay(d, { year: true })} ${d.toISOString().slice(11, 16)} UT${rough}`);
+}
+
+function buildClock() {
+  $('time-rates').replaceChildren(...RATES.map(([key, rate]) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'as-toggle fly-rate';
+    b.dataset.rate = String(rate);
+    b.dataset.key = key;
+    b.textContent = t(key);
+    b.addEventListener('click', () => {
+      // Real time from where the clock stands is real time; at the real now it is the live clock again.
+      const atNow = Math.abs(simMs() - Date.now()) < 2000;
+      setClock(rate === 1 && atNow ? { live: true, playing: true } : { live: false, playing: true, rate });
+    });
+    return b;
+  }));
+  showClock();
+}
+$('time-play').addEventListener('click', () => setClock(clock.playing ? { live: false, playing: false } : { playing: true }));
+$('time-now').addEventListener('click', () => setClock({ live: true, playing: true }));
+
 /** The bodies' positions as sent to the renderer, one array kept for it. */
 let bodiesXyz = null;
 function moveBodies() {
-  const bodies = solarSystem(new Date());
+  const bodies = solarSystem(new Date(simMs()));
   const first = stars.firstBody;
   if (bodiesXyz?.length !== bodies.length * 3) bodiesXyz = new Float32Array(bodies.length * 3);
   const xyz = bodiesXyz;
@@ -836,15 +913,20 @@ function moveBodies() {
   });
   space.movePositions(first, xyz);
   bodiesChanged++;
-  // A camera riding with the Earth or the Moon is carried with it, near it.
-  if (carried) {
-    const now = posOf(carried.index);
-    cam.eye = add(now, carried.offset);
-  }
+  carry();
 }
 
-/** The body the camera stopped beside, so time moving it does not leave the camera behind. */
+/**
+ * The body the camera stopped beside, so time moving it does not leave the
+ * camera behind: { index } for a planet or the Moon, { at() } for another
+ * star's planet, and the camera's offset from it.
+ */
 let carried = null;
+function carry() {
+  if (!carried) return;
+  const now = carried.at ? carried.at() : posOf(carried.index);
+  if (now) cam.eye = add(now, carried.offset);
+}
 
 /**
  * Inside the front page this layer is hidden most of the time, and a hidden
@@ -883,8 +965,9 @@ function flying() {
 }
 
 // The planets move slowly enough that four times a second is real time.
+// A stopped clock moves nothing; a racing one moves them every frame.
 setInterval(() => {
-  if (paused || !space || !stars) return;
+  if (paused || !space || !stars || racing() || (!clock.live && !clock.playing)) return;
   moveBodies();
   wake();
 }, 250);
@@ -903,6 +986,11 @@ function frame(now) {
   // the parsec it starts with, and a W held from the sky flew the first frame
   // at half a parsec a second, out past Neptune. From beside the Earth the
   // first step is a few hundred km/s.
+  if (racing()) {
+    moveBodies();
+    showDate();
+  }
+  carry();
   scanBodies();
   steer(dt);
   lastNear = nearestStar();
@@ -917,27 +1005,55 @@ function frame(now) {
   placeSystemLabels();
   drawScale(near);
   drawSolarOrbits();
+  drawPicked();
   placeMarks();
   readout();
-  if (autopilot || pullOut || flying()) requestAnimationFrame(frame);
+  if (autopilot || pullOut || flying() || racing()) requestAnimationFrame(frame);
   else looping = false;
 }
 
 /* ---- a star's card ----------------------------------------------------- */
 
-/** The star under a point of the canvas: the brightest-looking within a few pixels. */
+/**
+ * What is under a point of the canvas. A disc drawn there first, the nearest;
+ * then a body within a few pixels (the Sun, a planet or the Moon from inside
+ * the Solar System, WISE 0855, another star's planet or a host drawn from
+ * the Archive), the nearest on the screen; and only then a star, the
+ * brightest-looking within a few pixels. A body is what a press near it
+ * means, not the background star beside it.
+ * Returns { index } for a catalogue star or body, { sys, pl } for another
+ * star's planet, { sys } for a host, or null.
+ */
+const PICK_PX = 14;
 function pickAt(px, py) {
   const b = basis();
-  // On the near star's disc: that star.
-  for (const ln of lastNear ?? []) {
-    const c = screenOf(ln.pos, b, proj);
-    const d = len(sub(ln.pos, cam.eye));
-    const rPx = (ln.rpc / d) * proj.focal[1] * (proj.h / proj.dpr) / 2;
-    if (c && Math.hypot(c.x - px, c.y - py) <= Math.max(rPx, 0)) return ln.index;
+  const pxPerRad = proj.focal[1] * (proj.h / proj.dpr) / 2;
+  const discsHere = [
+    ...(lastNear ?? []).map((n) => ({ pos: n.pos, rpc: n.rpc, got: { index: n.index } })),
+    ...(inSystem?.spheres ?? []).map((n) => ({ pos: n.pos, rpc: n.rpc, got: n.planet ? { sys: inSystem.sys, pl: n.planet } : { sys: n.host } })),
+  ].map((n) => ({ ...n, d: len(sub(n.pos, cam.eye)) })).sort((p, q) => p.d - q.d);
+  for (const n of discsHere) {
+    const c = screenOf(n.pos, b, proj);
+    if (c && Math.hypot(c.x - px, c.y - py) <= (n.rpc / n.d) * pxPerRad) return n.got;
   }
+  let near = null;
+  let nearPx = PICK_PX;
+  const consider = (pos, got) => {
+    const at = screenOf(pos, b, proj);
+    const dpx = at ? Math.hypot(at.x - px, at.y - py) : Infinity;
+    if (dpx < nearPx) { nearPx = dpx; near = got; }
+  };
+  // From among the stars the planets are one point with the Sun: the Sun is meant.
+  const inside = len(cam.eye) < 0.01;
+  for (let i = stars.firstBody; inside && i < stars.mag.length; i++) consider(posOf(i), { index: i });
+  consider(posOf(sunIndex), { index: sunIndex });
+  if (stars.dark >= 0) consider(posOf(stars.dark), { index: stars.dark });
+  for (const o of inSystem?.now ?? []) if (o.pos) consider(o.pos, { sys: inSystem.sys, pl: o.pl });
+  if (inSystem && inSystem.sys.index < 0) consider(inSystem.sys.center, { sys: inSystem.sys });
+  if (near) return near;
   let best = -1;
   let bestScore = Infinity;
-  for (let i = 0; i < stars.mag.length; i++) {
+  for (let i = 0; i < stars.firstBody; i++) {
     const p = posOf(i);
     const at = screenOf(p, b, proj);
     if (!at) continue;
@@ -949,7 +1065,14 @@ function pickAt(px, py) {
     const score = dpx + 2 * m;
     if (score < bestScore) { bestScore = score; best = i; }
   }
-  return best;
+  return best >= 0 ? { index: best } : null;
+}
+
+/** Open what was pressed: a planet of another star, a host, or a catalogue star or body. */
+function openPick(got) {
+  if (got.pl) openPlanetCard(got.sys, got.pl);
+  else if (got.sys) openSystemCard(got.sys);
+  else openCard({ index: got.index });
 }
 
 function cardRow(k, v) {
@@ -963,6 +1086,29 @@ function cardRow(k, v) {
   return div;
 }
 
+/**
+ * The small bodies known to go round the Sun (family.json, counted by JPL's
+ * Small-Body Database on the day it says), loaded with the flight.
+ */
+let family = null;
+async function loadFamily() {
+  try {
+    const res = await fetch('data/fly/family.json');
+    if (res.ok) family = await res.json();
+  } catch { /* the cards say the planets alone */ }
+}
+const familyDate = () => formatDay(new Date(`${family.counted}T00:00:00Z`), { year: true });
+
+/** A planet's "goes round" row: the Sun with the other seven, each a button; the Moon, the Earth's one. */
+function planetKin(s) {
+  if (s.key === 'moon') return cardRow(t('fly.cardHeld'), t('fly.roundMoon'));
+  const others = ['mercury', 'venus', 'earth', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune']
+    .filter((key) => key !== s.key).map((key) => named.find((x) => x.key === key)).filter(Boolean);
+  const small = family ? ` ${t('fly.roundSmall', { ast: fmt(family.counts.asteroids, 0), comet: fmt(family.counts.comet, 0), date: familyDate() })}` : '';
+  return chipsRow(t('fly.cardHeld'), t('fly.roundPlanet', { n: others.length }) + small,
+    others.map((o) => ({ name: nameOf(o), open: () => openCard(o) })));
+}
+
 /** What is known of a star, or of a named place; `entry` is a named entry or { index }. */
 function openCard(entry) {
   const i = entry.index ?? -1;
@@ -972,9 +1118,12 @@ function openCard(entry) {
   let title = s.en ? nameOf(s) : `HIP ${stars.hip[i]}`;
   if (i === sunIndex) title = nameOf(named.find((x) => x.key === 'sun'));
   const rows = [];
+  /** What it goes round and with what: rows of their own, some with buttons. */
+  const kin = [];
   if (i !== sunIndex) rows.push([t('fly.cardSun'), distanceText(fromSun)]);
   rows.push([t('fly.cardHere'), distanceText(len(sub(p, cam.eye)))]);
   if (s.key === 'wise0855') {
+    kin.push(cardRow(t('fly.cardHeld'), t('fly.wiseRound')));
     const seenTo = shells();
     rows.unshift([t('fly.cardVerdict'), t('fly.verdict', { n: seenTo[1].visits })]);
     rows.push([t('fly.cardW2'), t('fly.w2', { ab: fmt(WISE0855_AB, 1) })]);
@@ -986,7 +1135,7 @@ function openCard(entry) {
     rows.push([t('fly.cardP9Bright'), t('fly.p9Bright', { lo: fmt(PLANET_NINE_V.bright, 1), hi: fmt(PLANET_NINE_V.faint, 1) })]);
     rows.push([t('fly.cardP9Gap'), t('fly.p9Gap', { x: fmt(planetNineShortfall(17.6), 0) })]);
   } else if (s.planet) {
-    rows.push([t('fly.cardHeld'), t(s.key === 'moon' ? 'fly.heldEarth' : 'fly.heldSun')]);
+    kin.push(planetKin(s));
     rows.push([t('fly.cardRadius'), t('fly.planetRadius', { km: fmt(s.km, 0), e: sig(s.km / 6371.0) })]);
     const f = FACTS[s.key];
     if (f) {
@@ -994,7 +1143,7 @@ function openCard(entry) {
       rows.push([t('fly.cardDay'), t(f.day < 0 ? 'fly.dayRetro' : 'fly.dayLen', { d: fmt(Math.abs(f.day), Math.abs(f.day) < 2 ? 3 : 1) })]);
       rows.push([t('fly.cardGravity'), t('fly.gravity', { g: fmt(f.g, 2) })]);
       rows.push([t('fly.cardSurfaceT'), f.t]);
-      if (s.key !== 'moon') rows.push([t('fly.cardMoons'), String(f.moons)]);
+      if (s.key !== 'moon') rows.push([t('fly.cardMoons'), t('fly.moonsAsOf', { n: f.moons, date: formatDay(new Date(MOONS_AS_OF), { year: true }) })]);
       const m = surfaceInfo[s.key];
       if (m) rows.push([t('fly.cardMap'), `${t(MAP_KIND[s.key] ?? 'fly.mapTrue')} · ${m.credit}`]);
       const hm = heightInfo[s.key];
@@ -1019,6 +1168,13 @@ function openCard(entry) {
     const lum = stars.measured[i] ? stars.rad[i] ** 2 * (temperatureOf(bv) / T_SUN) ** 4 : luminosityOf(m, bv);
     rows.push([t('fly.cardLum'), t('fly.solar', { n: sig(lum) })]);
     if (i !== sunIndex) rows.push([t('fly.cardMag'), fmt(m + 5 * Math.log10(fromSun / 10), 2)]);
+    if (i !== sunIndex) {
+      kin.push(cardRow(t('fly.cardHeld'), t('fly.starRound')));
+      if (motion && i < motion.length / 2) {
+        const mu = Math.hypot(motion[i * 2], motion[i * 2 + 1]) / 1000;
+        kin.push(cardRow(t('fly.driftH'), t('fly.drift', { mu: fmt(mu, mu < 0.1 ? 3 : 2), y: fmt(DRIFT_YEARS, 0) })));
+      }
+    }
   } else if (s.radius) {
     rows.push([t('fly.cardRadius'), t('fly.radiusModel', { n: sig(s.radius) })]);
   }
@@ -1028,7 +1184,8 @@ function openCard(entry) {
     ? t('fly.dark')
     : s.key === 'p9' ? t('fly.p9Note')
     : i >= 0 && i !== sunIndex ? `HIP ${stars.hip[i]} · ${t('fly.cardSource')}` : '';
-  $('card-rows').replaceChildren(...rows.map(([k, v]) => cardRow(k, v)));
+  const drawRows = () => $('card-rows').replaceChildren(...(s.planet ? kin : []), ...rows.map(([k, v]) => cardRow(k, v)), ...(s.planet ? [] : kin));
+  drawRows();
   // SPHEREx looks from beside the Earth: a star's place on its sky is its
   // direction from the Sun. The Sun itself has none.
   // A planet moves across the sky: there is no one field of it to open.
@@ -1054,9 +1211,13 @@ function openCard(entry) {
   ev.hidden = !host;
   if (host) {
     rows.push([t('exo.has'), host.planets.map((pl) => pl.name).join(', ')]);
-    $('card-rows').replaceChildren(...rows.map(([k, v]) => cardRow(k, v)));
+    drawRows();
     ev.href = systemUrl([host.ra, host.dec, host.planets.length, host.host], host.host, getLanguage());
   }
+  // What it goes round, drawn: a planet's orbit, the Moon's, a star's drift.
+  if (s.planet) pick({ kind: s.key === 'moon' ? 'moon' : 'planet', key: s.key, index: i });
+  else if (i >= 0 && i < stars.firstBody && i !== sunIndex && i !== stars.dark) pick({ kind: 'star', index: i });
+  else pick(null);
   card = { s: { ...s, index: i } };
   $('card').hidden = false;
 }
@@ -1067,13 +1228,26 @@ function openCardLater(entry) {
   requestAnimationFrame(wait);
 }
 
-function closeCard() {
+/** Put the card away, keeping what was picked drawn: a flight to it hides the card until it arrives. */
+function hideCard() {
   card = null;
   $('card-exo').hidden = true;
   $('card').hidden = true;
 }
 
-$('card-fly').addEventListener('click', () => card && (card.s.sys ? flyToSystem(card.s.sys) : flyTo(card.s)));
+/** Close the card, and what was picked with it. */
+function closeCard() {
+  hideCard();
+  pick(null);
+}
+
+$('card-fly').addEventListener('click', () => {
+  if (!card) return;
+  const { s } = card;
+  if (s.pl) flyToExoPlanet(s.sys, s.pl);
+  else if (s.sys) flyToSystem(s.sys);
+  else flyTo(s);
+});
 $('card-close').addEventListener('click', closeCard);
 
 /* ---- input ------------------------------------------------------------- */
@@ -1107,8 +1281,8 @@ canvas.addEventListener('pointerup', (e) => {
   pointers.delete(e.pointerId);
   // A press that did not drag is a choice of star.
   if (p && p.moved < 5 && stars && proj) {
-    const i = pickAt(p.ox, p.oy);
-    if (i >= 0) openCard({ index: i });
+    const got = pickAt(p.ox, p.oy);
+    if (got) openPick(got);
     else closeCard();
   }
 });
@@ -1416,14 +1590,42 @@ function sameView(was, ...more) {
 
 const ORIGIN = [0, 0, 0];
 let solarPaths = null;
+/** The moments shown the planets' orbits and the Moon's were traced for, and a count of tracings. */
 let solarPathsAt = 0;
-/** The orbits' segment ends, from the Sun, and the Moon's, from the Earth; traced once an hour. */
+let moonPathAt = 0;
+let pathsTraced = 0;
+/** The orbits' segment ends, from the Sun, and the Moon's, from the Earth. */
 let solarEnds = null;
 let moonEnds = null;
 /** The same from the eye, rewritten only when the eye or the planets have moved. */
 let solarFromEye = null;
 let moonFromEye = null;
 let solarDrawnFor = null;
+
+/**
+ * The orbits for the moment shown. The planets' barely change in a month of
+ * it, and are traced again then; the Moon's is traced from the day shown
+ * through one month, so the Moon is on it, and again for each day the clock
+ * moves on: its orbit turns, a full turn of its perigee in nine years.
+ */
+function tracePaths() {
+  const at = simMs();
+  if (!solarPaths || Math.abs(at - solarPathsAt) > 30 * 86400000) {
+    solarPaths = solarOrbits(new Date(at));
+    solarPathsAt = at;
+    moonPathAt = at;
+    solarEnds = segmentEnds(Object.entries(solarPaths).filter(([key]) => key !== 'moon').map(([, pts]) => pts));
+    moonEnds = segmentEnds([solarPaths.moon]);
+    solarFromEye = new Float32Array(solarEnds.length);
+    moonFromEye = new Float32Array(moonEnds.length);
+    pathsTraced++;
+  } else if (Math.abs(at - moonPathAt) > 86400000) {
+    solarPaths.moon = moonOrbit(new Date(at));
+    moonPathAt = at;
+    moonEnds = segmentEnds([solarPaths.moon]);
+    pathsTraced++;
+  }
+}
 
 /** The planets' orbits within a few hundred AU of the Sun, the Moon's near the Earth: relative to the eye. */
 function drawSolarOrbits() {
@@ -1434,17 +1636,8 @@ function drawSolarOrbits() {
     solarDrawnFor = null;
     return;
   }
-  // The orbits barely change in an hour: traced again then.
-  if (!solarPaths || performance.now() - solarPathsAt > 3600000) {
-    solarPaths = solarOrbits();
-    solarPathsAt = performance.now();
-    solarEnds = segmentEnds(Object.entries(solarPaths).filter(([key]) => key !== 'moon').map(([, pts]) => pts));
-    moonEnds = segmentEnds([solarPaths.moon]);
-    solarFromEye = new Float32Array(solarEnds.length);
-    moonFromEye = new Float32Array(moonEnds.length);
-    solarDrawnFor = null;
-  }
-  const next = sameView(solarDrawnFor);
+  tracePaths();
+  const next = sameView(solarDrawnFor, pathsTraced);
   if (!next) return;
   solarDrawnFor = next;
   space.setLiveLines(fromEye(solarEnds, ORIGIN, solarFromEye), [0.75, 0.82, 1, 0.28], 'solar');
@@ -1467,7 +1660,7 @@ function openSolarCard() {
     return { s, f: FACTS[key], angle: Math.atan2(ecl[1], ecl[0]) };
   });
   const sys = {
-    host: nameOf(named.find((x) => x.key === 'sun')), starR: 1, teff: 5772,
+    host: nameOf(named.find((x) => x.key === 'sun')), starR: 1, teff: 5772, solar: true,
     planets: planets.map(({ s, f, angle }) => ({ name: nameOf(s), a: f.a, r: s.km / 6371, angle })),
   };
   closeCard();
@@ -1475,8 +1668,15 @@ function openSolarCard() {
   $('card-note').textContent = t('fly.solarNote');
   const rows = [
     [t('fly.cardTemp'), t('fly.kelvin', { n: fmt(5772, 0) })],
-    [t('fly.cardRadius'), t('fly.radiusMeasured', { n: '1,00' })],
+    [t('fly.cardRadius'), t('fly.radiusMeasured', { n: fmt(1, 2) })],
+    [t('fly.cardHeld'), t('fly.sunRound')],
   ];
+  if (family) {
+    const c = family.counts;
+    rows.push([t('fly.roundItH'), t('fly.sunFamily', {
+      neo: fmt(c.neo, 0), main: fmt(c.main, 0), trojan: fmt(c.trojan, 0), centaur: fmt(c.centaur, 0), tno: fmt(c.tno, 0), comet: fmt(c.comet, 0), date: familyDate(),
+    })]);
+  }
   const planetRow = ({ s, f }) => {
     const text = t('fly.planetLine', { a: fmt(f.a, f.a < 1 ? 3 : 2), y: fmt(f.year, f.year < 1000 ? 1 : 0), m: f.moons });
     const row = cardRow(nameOf(s), text);
@@ -1570,15 +1770,19 @@ function drawScale(nears) {
 /*
  * Every confirmed exoplanet system with a known distance (NASA Exoplanet
  * Archive, pscomppars), native here: the stars that have planets are marked,
- * and near one its planets are drawn at their real sizes on their real
- * orbits. Where a transit time was measured the planet is where it is now
- * (circular orbit, edge-on to the Sun, as a transit requires); elsewhere only
- * the orbit is drawn, with no planet put at a guessed place.
+ * and near one its planets are drawn at their real sizes on their measured
+ * orbits (orbits.js: the eccentricity and periastron where the Archive has
+ * them, the tilt where it has it, edge-on to the Sun where it does not).
+ * Where a transit or conjunction time was measured the planet is where it is
+ * at the moment shown; elsewhere only the orbit is drawn, with no planet put
+ * at a guessed place.
  */
 const R_EARTH_PC = 6371 / 3.0856775814913673e13;
 let exo = [];
 /** The system the camera is in, and what was drawn for it this frame. */
 let inSystem = null;
+/** The hosts matched by Hipparcos number and by place: how many of each, for the curious (window.flyHosts). */
+let hostMatch = null;
 
 async function loadSystems() {
   try {
@@ -1589,9 +1793,15 @@ async function loadSystems() {
     loadSurfaces();
     // A host that is a Hipparcos star is centred on the catalogue's star, so
     // its planets circle the disc drawn for it.
-    for (const sys of exo) {
-      sys.index = matchHost(sys);
+    if (!starCells) buildCells();
+    const hipIndex = new Map();
+    for (let i = 0; i < stars.firstBody - 2; i++) hipIndex.set(stars.hip[i], i);
+    const matched = matchHosts(exo, hipIndex, cellsNear, posOf);
+    hostMatch = { byHip: 0, byPlace: 0, none: 0 };
+    exo.forEach((sys, k) => {
+      sys.index = matched[k];
       sys.center = sys.index >= 0 ? posOf(sys.index) : sys.pos;
+      hostMatch[sys.index < 0 ? 'none' : sys.hip && hipIndex.get(sys.hip) === sys.index ? 'byHip' : 'byPlace']++;
       // The archive's radius is measured (or modelled from a spectrum); the
       // catalogue star's was estimated from its colour: the archive's is used.
       if (sys.index >= 0 && sys.starR > 0 && !stars.measured[sys.index]) {
@@ -1599,7 +1809,7 @@ async function loadSystems() {
         stars.measured[sys.index] = 1;
         bodiesChanged++;
       }
-    }
+    });
     buildExoLabels();
     wake();
   } catch { /* the flight goes on without them */ }
@@ -1630,34 +1840,41 @@ function buildCells() {
   }
 }
 
-/**
- * The Hipparcos star that is this host: within three arcminutes on the sky
- * (Hipparcos positions are for 1991, and the nearest stars have moved that
- * far since) and a fifth in distance.
- */
-function matchHost(sys) {
-  if (!starCells) buildCells();
-  const u = norm(sys.pos);
-  let best = -1;
-  let bestCos = Math.cos((180 / 3600) * Math.PI / 180);
-  const p = stars.pos;
+/** The catalogue stars in the degree cells round a system's place. */
+function cellsNear(sys) {
+  const out = [];
   for (const dra of [-1, 0, 1]) {
     for (const ddec of [-1, 0, 1]) {
       const list = starCells.get(cellKey(((sys.ra + dra) % 360 + 360) % 360, sys.dec + ddec));
-      if (!list) continue;
-      for (const i of list) {
-        const x = p[i * 3];
-        const y = p[i * 3 + 1];
-        const z = p[i * 3 + 2];
-        const d = Math.hypot(x, y, z);
-        if (Math.abs(d - sys.pc) > 0.2 * sys.pc) continue;
-        const c = (x * u[0] + y * u[1] + z * u[2]) / d;
-        if (c > bestCos) { bestCos = c; best = i; }
-      }
+      if (list) out.push(...list);
     }
   }
-  return best;
+  return out;
 }
+
+/* ---- a star's drift ------------------------------------------------------ */
+
+/**
+ * The Hipparcos proper motions (motion.bin, built by build-fly-motion.mjs):
+ * µα·cos δ and µδ, mas a year, per catalogue star in stars.bin's order.
+ * Loaded after the flight is up; a star picked before has its drift drawn
+ * once they arrive.
+ */
+let motion = null;
+async function loadMotion() {
+  try {
+    const res = await fetch('data/fly/motion.bin');
+    if (!res.ok) return;
+    const buf = await res.arrayBuffer();
+    if (buf.byteLength !== (stars.firstBody - 2) * 4) return;
+    motion = new Int16Array(buf);
+    if (picked?.kind === 'star' && !picked.ends) pick(picked);
+    if (card && !card.s.sys && card.s.index >= 0 && !card.s.planet) openCard(card.s);
+  } catch { /* the drift is left out */ }
+}
+
+/** How many years each way a star's drift is drawn. */
+const DRIFT_YEARS = 10000;
 
 let exoLabels = [];
 function buildExoLabels() {
@@ -1711,33 +1928,33 @@ function placeExoLabels() {
   for (; k < exoLabels.length; k++) setHidden(exoLabels[k], true);
 }
 
-const JD = () => Date.now() / 86400000 + 2440587.5;
-
 /**
- * The system's planets now: on a circle of their semi-major axis, in the
- * plane that holds the line of sight from the Sun (a transit needs it edge-on)
- * and the celestial north as near as it can, at the phase of their measured
- * transit time; [] places for those without one.
+ * The system's planets at the moment shown: each with its orbit (orbits.js)
+ * and, where a transit or conjunction time is known, where it is on it. The
+ * array and the places are kept on the system and written over in place.
  */
 function systemNow(sys) {
-  const c = sys.center;
-  const toSun = norm(sub([0, 0, 0], c));
-  let side = cross(toSun, [0, 0, 1]);
-  if (len(side) < 1e-6) side = cross(toSun, [1, 0, 0]);
-  side = norm(side);
+  if (!sys.now) {
+    sys.frame = skyFrame(sys.center);
+    sys.now = sys.planets.map((pl) => ({ pl, orbit: pl.a > 0 ? orbitOf(pl) : null, pos: null, at: [0, 0, 0] }));
+  }
   const jd = JD();
-  return sys.planets.map((pl) => {
-    if (!(pl.a > 0)) return { pl, pos: null };
-    const r = pl.a * AU;
-    let pos = null;
-    if (pl.tc && pl.p > 0) {
-      // At transit the planet is between its star and the Sun.
-      const phase = (((jd - pl.tc) / pl.p) % 1 + 1) % 1;
-      const ang = 2 * Math.PI * phase;
-      pos = add(add(c, toSun, r * Math.cos(ang)), side, r * Math.sin(ang));
-    }
-    return { pl, pos, r, toSun, side };
-  });
+  for (const o of sys.now) {
+    o.pos = null;
+    if (!o.orbit) continue;
+    const f = anomalyAt(o.orbit, o.pl.tc, o.pl.p, jd);
+    if (f == null) continue;
+    offsetAt(o.orbit, f, sys.frame, o.at);
+    for (let k = 0; k < 3; k++) o.at[k] = sys.center[k] + o.at[k] * AU;
+    o.pos = o.at;
+  }
+  return sys.now;
+}
+
+/** The frame a system's orbits are drawn in: towards the Sun, and across. */
+function frameOf(sys) {
+  if (!sys.frame) systemNow(sys);
+  return sys.frame;
 }
 
 /** The system the camera is in: the nearest within a thousand AU of its star. */
@@ -1753,19 +1970,15 @@ function systemHere() {
   return best;
 }
 
-/** A system's orbits as segment ends, 96 to a circle, parsecs from the Sun. */
-function orbitEnds(sys, now) {
-  const pts = [];
-  for (const o of now) {
-    if (!o.r) continue;
-    for (let k = 0; k < 96; k++) {
-      const a0 = (k / 96) * 2 * Math.PI;
-      const a1 = ((k + 1) / 96) * 2 * Math.PI;
-      pts.push(add(add(sys.center, o.toSun, o.r * Math.cos(a0)), o.side, o.r * Math.sin(a0)));
-      pts.push(add(add(sys.center, o.toSun, o.r * Math.cos(a1)), o.side, o.r * Math.sin(a1)));
-    }
-  }
-  return Float64Array.from(pts.flat());
+const ORBIT_STEPS = 128;
+
+/** A system's orbits as segment ends, parsecs from the Sun: ellipses, traced once. */
+function orbitEnds(sys) {
+  const drawn = systemNow(sys).filter((o) => o.orbit);
+  const per = ORBIT_STEPS * 6;
+  const out = new Float64Array(drawn.length * per);
+  drawn.forEach((o, k) => ellipseEnds(o.orbit, sys.frame, sys.center, AU, ORBIT_STEPS, out.subarray(k * per, (k + 1) * per)));
+  return out;
 }
 
 /** The eye and the system the orbits were last moved to. */
@@ -1781,11 +1994,11 @@ function drawSystem() {
     return [];
   }
   const now = systemNow(sys);
-  // The orbits are circles that stay as they are: traced once for a system,
-  // and moved to the eye (in double precision, before they become single)
-  // only when the eye has moved.
+  // The orbits stay as they are: traced once for a system, and moved to the
+  // eye (in double precision, before they become single) only when the eye
+  // has moved.
   if (!sys.orbitEnds) {
-    sys.orbitEnds = orbitEnds(sys, now);
+    sys.orbitEnds = orbitEnds(sys);
     sys.orbitFromEye = new Float32Array(sys.orbitEnds.length);
   }
   const next = sameView(systemDrawnFor, sys.host);
@@ -1797,7 +2010,7 @@ function drawSystem() {
   const spheres = [];
   // A host the catalogue lacks is drawn here, at its archive radius.
   if (sys.index < 0 && sys.starR) {
-    spheres.push({ index: -1, pos: sys.center, rpc: sys.starR * R_SUN_PC, col: starCol, lit: false });
+    spheres.push({ index: -1, pos: sys.center, rpc: sys.starR * R_SUN_PC, col: starCol, lit: false, host: sys });
   }
   for (const o of now) {
     if (!o.pos || !(o.pl.r > 0)) continue;
@@ -1835,24 +2048,18 @@ function placeSystemLabels() {
   });
 }
 
-/**
- * The habitable zone of a star, AU: where a planet like the Earth could keep
- * liquid water on its surface. Kopparapu et al. (2013), the conservative
- * limits (runaway greenhouse inside, maximum greenhouse outside), with the
- * effective fluxes' temperature dependence; L from the star's radius and
- * temperature.
- */
-export function habitableZone(rSun, teff) {
-  if (!(rSun > 0) || !(teff > 2600 && teff < 7200)) return null;
-  const L = rSun ** 2 * (teff / T_SUN) ** 4;
-  const t = teff - 5780;
-  const seff = (s0, a, b, c, d) => s0 + a * t + b * t ** 2 + c * t ** 3 + d * t ** 4;
-  const inner = seff(1.0385, 1.2456e-4, 1.4612e-8, -7.6345e-12, -1.7511e-15);
-  const outer = seff(0.3507, 5.9578e-5, 1.6707e-9, -3.0058e-12, -5.1925e-16);
-  return { inner: Math.sqrt(L / inner), outer: Math.sqrt(L / outer), L };
+/** The habitable zone's words under a diagram, with the star's temperature when it lay outside the fit. */
+function zoneNote(hz, teff) {
+  if (!hz) return '';
+  const words = t('fly.diagramHz', { i: fmt(hz.inner, 2), o: fmt(hz.outer, 2), oi: fmt(hz.optInner, 2), oo: fmt(hz.optOuter, 2) });
+  return hz.clamped ? `${words} ${t('fly.hzClamped', { t: fmt(teff, 0) })}` : words;
 }
 
-/** The system seen from above: its orbits to scale, its habitable zone, and where each planet is now. */
+/**
+ * The system seen from above: its orbits to scale (ellipses where the
+ * eccentricity is measured, with the star at a focus), its habitable zone,
+ * conservative and optimistic, and where each planet is at the moment shown.
+ */
 function systemDiagram(sys) {
   const NS = 'http://www.w3.org/2000/svg';
   const el = (name, attrs) => {
@@ -1862,24 +2069,51 @@ function systemDiagram(sys) {
   };
   const svg = el('svg', { viewBox: '-110 -110 220 220', class: 'fly-system', role: 'img' });
   const hz = habitableZone(sys.starR, sys.teff);
-  const widest = Math.max(...sys.planets.map((pl) => pl.a || 0), hz ? hz.outer * 0.6 : 0, 0.01);
+  const widest = Math.max(...sys.planets.map((pl) => (pl.a || 0) * (1 + (pl.e > 0 ? Math.min(pl.e, 0.97) : 0))), hz ? hz.outer * 0.6 : 0, 0.01);
   const scale = 100 / widest;
-  if (hz && hz.inner * scale < 105) {
-    svg.append(el('circle', { r: Math.min(hz.outer * scale, 104), class: 'fly-system__hz' }));
-    svg.append(el('circle', { r: hz.inner * scale, class: 'fly-system__hz-in' }));
+  if (hz && hz.optInner * scale < 105) {
+    // Each zone a ring, from its inner edge to its outer one: the conservative
+    // zone, and the optimistic one paler on either side of it.
+    const band = (from, to, cls) => {
+      const r0 = Math.min(from * scale, 104);
+      const r1 = Math.min(to * scale, 104);
+      if (r1 > r0) svg.append(el('circle', { r: ((r0 + r1) / 2).toFixed(2), 'stroke-width': (r1 - r0).toFixed(2), class: cls }));
+    };
+    band(hz.optInner, hz.inner, 'fly-system__hz-opt');
+    band(hz.inner, hz.outer, 'fly-system__hz');
+    band(hz.outer, hz.optOuter, 'fly-system__hz-opt');
   }
   svg.append(el('circle', { r: 3.5, class: 'fly-system__star' }));
   const jd = JD();
   for (const pl of sys.planets) {
     if (!(pl.a > 0)) continue;
-    const r = pl.a * scale;
-    svg.append(el('circle', { r, class: 'fly-system__orbit' }));
-    if ((pl.tc && pl.p > 0) || pl.angle != null) {
-      // At transit the planet is between its star and the Sun: the bottom of
-      // the drawing. The Sun's planets come with their own angle.
-      const ang = pl.angle != null ? Math.PI / 2 - pl.angle : 2 * Math.PI * ((((jd - pl.tc) / pl.p) % 1 + 1) % 1);
-      const x = r * Math.sin(ang);
-      const y = r * Math.cos(ang);
+    const orbit = pl.angle == null ? orbitOf(pl) : null;
+    const a = pl.a * scale;
+    // Seen from above the planets' plane: the periastron at ω from the node,
+    // the star at the focus; the Sun's planets come as circles.
+    if (orbit && orbit.e > 0) {
+      const b = a * Math.sqrt(1 - orbit.e * orbit.e);
+      const cx = -a * orbit.e * Math.cos(orbit.w);
+      const cy = -a * orbit.e * Math.sin(orbit.w);
+      svg.append(el('ellipse', { cx: cx.toFixed(2), cy: cy.toFixed(2), rx: a.toFixed(2), ry: b.toFixed(2), transform: `rotate(${(orbit.w * 180 / Math.PI).toFixed(1)} ${cx.toFixed(2)} ${cy.toFixed(2)})`, class: 'fly-system__orbit' }));
+    } else {
+      svg.append(el('circle', { r: a, class: 'fly-system__orbit' }));
+    }
+    let x = null;
+    let y = null;
+    if (pl.angle != null) {
+      x = a * Math.cos(pl.angle);
+      y = a * Math.sin(pl.angle);
+    } else {
+      // At conjunction the planet is between its star and the Sun: the bottom of the drawing.
+      const f = anomalyAt(orbit, pl.tc, pl.p, jd);
+      if (f != null) {
+        const r = (a * (1 - orbit.e * orbit.e)) / (1 + orbit.e * Math.cos(f));
+        x = r * Math.cos(orbit.w + f);
+        y = r * Math.sin(orbit.w + f);
+      }
+    }
+    if (x != null) {
       const dot = el('circle', { cx: x.toFixed(2), cy: y.toFixed(2), r: Math.max(2, Math.min(6, Math.sqrt(pl.r || 1) * 1.5)), class: 'fly-system__planet' });
       const title = el('title', {});
       title.textContent = pl.name;
@@ -1889,26 +2123,74 @@ function systemDiagram(sys) {
   }
   const scaleNote = document.createElement('p');
   scaleNote.className = 'fly-system__note';
-  scaleNote.textContent = hz
-    ? t('exo.diagramHz', { a: fmt(widest, widest < 1 ? 2 : 1), i: fmt(hz.inner, 2), o: fmt(hz.outer, 2) })
-    : t('exo.diagram', { a: fmt(widest, widest < 1 ? 2 : 1) });
+  scaleNote.textContent = [
+    t('fly.diagram', { a: fmt(widest, widest < 1 ? 2 : 1) }),
+    zoneNote(hz, sys.teff),
+    sys.solar ? '' : t('fly.diagramWhere'),
+  ].filter(Boolean).join(' ');
   const box = document.createElement('figure');
   box.className = 'fly-system__box';
   box.append(svg, scaleNote);
   return box;
 }
 
+/** A row whose value ends in buttons: each opens that body's card. */
+function chipsRow(k, v, chips) {
+  const row = cardRow(k, v);
+  if (!chips.length) return row;
+  const box = document.createElement('span');
+  box.className = 'fly-kin';
+  for (const { name, open } of chips) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'fly-planet-go fly-kin__go';
+    b.textContent = name;
+    b.addEventListener('click', open);
+    box.append(b);
+  }
+  row.querySelector('dd').append(box);
+  return row;
+}
+
+/**
+ * The other stars of a planet host's system that have planets of their own
+ * (55 Cnc and 55 Cnc B): hosts within half a degree on the sky and a tenth
+ * in distance. The Archive gives only how many stars a system has.
+ */
+function companionsOf(sys) {
+  if (!(sys.stars > 1)) return [];
+  const u = norm(sys.pos);
+  const cos = Math.cos(0.5 * Math.PI / 180);
+  return exo.filter((o) => o !== sys && Math.abs(o.pc - sys.pc) < 0.1 * sys.pc && dot(norm(o.pos), u) > cos);
+}
+
+/** The row for a host's companions, where it has any. */
+function companionsRow(sys) {
+  if (!(sys.stars > 1)) return null;
+  const others = companionsOf(sys);
+  return chipsRow(t('fly.companionsH'), t(others.length ? 'fly.companions' : 'fly.companionsNone', { n: sys.stars }),
+    others.map((o) => ({ name: o.host, open: () => openSystemCard(o) })));
+}
+
+/** A planet's radius as the card says it: measured, or the Archive's estimate from its mass. */
+function exoRadius(pl, long) {
+  if (pl.rEst) return t(long ? 'fly.radiusEstLong' : 'fly.radiusEst', { r: fmt(pl.r, pl.r < 10 ? 1 : 0) });
+  return long ? t('exo.radiusLong', { r: fmt(pl.r, pl.r < 10 ? 2 : 1), j: fmt(pl.r / 11.21, 2) }) : t('exo.radius', { r: fmt(pl.r, pl.r < 10 ? 1 : 0) });
+}
+
 /** A system's card: its planets, and the way to ExoVision for the rest. */
 function openSystemCard(sys) {
-  closeCard();
+  hideCard();
+  pick(null);
   $('card-title').textContent = sys.host;
-  $('card-note').textContent = t('exo.note');
+  $('card-note').textContent = t('fly.exoNote');
   const rows = [[t('fly.cardSun'), distanceText(sys.pc)]];
   if (sys.teff) rows.push([t('fly.cardTemp'), t('fly.kelvin', { n: fmt(sys.teff, 0) })]);
+  if (sys.starR) rows.push([t('fly.cardRadius'), t('fly.starArchive', { n: sig(sys.starR), ref: sys.starRef ?? t('fly.starComposite') })]);
   const planetRows = [];
   for (const pl of sys.planets) {
     const bits = [];
-    if (pl.r) bits.push(t('exo.radius', { r: fmt(pl.r, pl.r < 10 ? 1 : 0) }));
+    if (pl.r) bits.push(exoRadius(pl, false));
     if (pl.a) bits.push(t('exo.orbit', { a: fmt(pl.a, pl.a < 1 ? 3 : 2) }));
     if (pl.p) bits.push(t('exo.period', { p: fmt(pl.p, pl.p < 10 ? 2 : 0) }));
     if (pl.t) bits.push(t('exo.teq', { t: fmt(pl.t, 0) }));
@@ -1925,7 +2207,8 @@ function openSystemCard(sys) {
     row.querySelector('dt').append(' ', go);
     return row;
   };
-  $('card-rows').replaceChildren(systemDiagram(sys), ...rows.map(([k, v]) => cardRow(k, v)), ...planetRows.map(planetRow));
+  $('card-rows').replaceChildren(systemDiagram(sys), ...rows.map(([k, v]) => cardRow(k, v)),
+    ...[companionsRow(sys)].filter(Boolean), ...planetRows.map(planetRow));
   const frames = $('card-frames');
   frames.hidden = false;
   const url = new URL('./', location.href);
@@ -1938,26 +2221,17 @@ function openSystemCard(sys) {
   $('card').hidden = false;
 }
 
-/** The plane a system's orbits are drawn in: towards the Sun, and across. */
-function systemFrame(sys) {
-  const toSun = norm(sub([0, 0, 0], sys.center));
-  let side = cross(toSun, [0, 0, 1]);
-  if (len(side) < 1e-6) side = cross(toSun, [1, 0, 0]);
-  side = norm(side);
-  return { toSun, side, up: norm(cross(toSun, side)) };
-}
-
 /**
  * Fly into a system: to a point above the plane of its orbits, high enough
  * that the widest is whole on the screen, looking down at the star, so the
  * star and every planet are seen together.
  */
 function flyToSystem(sys) {
-  closeCard();
+  hideCard();
   carried = null;
-  const widest = Math.max(...sys.planets.map((pl) => pl.a || 0), 0.02) * AU;
+  const widest = Math.max(...sys.planets.map((pl) => (pl.a || 0) * (1 + (pl.e > 0 ? Math.min(pl.e, 0.97) : 0))), 0.02) * AU;
   const height = Math.max(widest / Math.tan((FOV * Math.PI) / 360) * 1.35, (sys.starR || 1) * R_SUN_PC * 10);
-  const { up, toSun } = systemFrame(sys);
+  const { up, toSun } = frameOf(sys);
   // From above and a little to the Sun's side, so the orbits are ellipses, not lines.
   const to = add(add(sys.center, up, height * 0.92), toSun, height * 0.4);
   autopilot = {
@@ -1969,52 +2243,185 @@ function flyToSystem(sys) {
   requestAnimationFrame(wait);
 }
 
+/** Where one of a system's planets is at the moment shown; null where that is not known. */
+const exoPlace = (sys, pl) => systemNow(sys).find((o) => o.pl === pl)?.pos ?? null;
+
 /** One of a system's planets: the camera goes to it, and its card is shown. */
 function flyToExoPlanet(sys, pl) {
-  const now = systemNow(sys).find((o) => o.pl === pl);
-  if (!now?.pos || !(pl.r > 0)) {
+  const at = exoPlace(sys, pl);
+  if (!at || !(pl.r > 0)) {
     flyToSystem(sys);
+    const wait = () => (autopilot ? requestAnimationFrame(wait) : openPlanetCard(sys, pl));
+    requestAnimationFrame(wait);
     return;
   }
-  closeCard();
+  hideCard();
   carried = null;
   const rp = pl.r * R_EARTH_PC;
   // Lit from its star: approached from the star's side, a little off it, so its day side shows with a phase.
-  const fromStar = norm(sub(now.pos, sys.center));
-  const { up } = systemFrame(sys);
-  const dir = norm(add(add(fromStar.map((c) => -c), up, 0.6), now.side ?? [0, 0, 1], 0.5));
-  const to = add(now.pos, dir, rp * 7);
+  const fromStar = norm(sub(at, sys.center));
+  const { up, node } = frameOf(sys);
+  const dir = norm(add(add(fromStar.map((c) => -c), up, 0.6), node, 0.5));
+  const to = add(at, dir, rp * 7);
   autopilot = {
-    from: cam.eye, to, look: now.pos, stop: rp * 7, t0: performance.now(), body: -1,
-    ms: reduceMotion ? 1 : 3000 + 400 * Math.log10(1 + len(sub(now.pos, cam.eye)) / (rp * 7)),
-    follow: () => systemNow(sys).find((o) => o.pl === pl)?.pos,
+    from: cam.eye, to, look: [...at], stop: rp * 7, t0: performance.now(), body: -1,
+    ms: reduceMotion ? 1 : 3000 + 400 * Math.log10(1 + len(sub(at, cam.eye)) / (rp * 7)),
+    follow: () => exoPlace(sys, pl),
   };
   wake();
   const wait = () => (autopilot ? requestAnimationFrame(wait) : openPlanetCard(sys, pl));
   requestAnimationFrame(wait);
 }
 
-/** A planet of another star: what is known of it. */
+/** The words for how a planet's orbit is drawn: what was measured, and what was not. */
+function orbitWords(pl) {
+  const o = orbitOf(pl);
+  return [
+    o.eKnown ? t('fly.shapeE', { e: fmt(o.e, 2) }) : t('fly.shapeENone'),
+    o.e > 0 ? (o.wKnown ? t('fly.shapeW', { w: fmt(pl.w, 0) }) : t('fly.shapeWNone')) : '',
+    o.iKnown ? t('fly.shapeI', { i: fmt(pl.i, 1) }) : t('fly.shapeINone'),
+  ].filter(Boolean).join(' · ');
+}
+
+/** A planet of another star: what is known of it, what it goes round, and with what. */
 function openPlanetCard(sys, pl) {
-  closeCard();
+  hideCard();
+  pick({ kind: 'exo', sys, pl });
   $('card-title').textContent = pl.name;
-  $('card-note').textContent = t('exo.planetNote', { host: sys.host });
+  const transit = pl.method === 'Transit';
+  const timed = Number.isFinite(pl.tc) && pl.p > 0;
+  $('card-note').textContent = t(!timed ? 'fly.exoNoteNoTime' : transit ? 'fly.exoNoteTransit' : 'fly.exoNoteConj', { host: sys.host, method: pl.method ?? '—' });
   const rows = [];
-  if (pl.r) rows.push([t('fly.cardRadius'), t('exo.radiusLong', { r: fmt(pl.r, pl.r < 10 ? 2 : 1), j: fmt(pl.r / 11.21, 2) })]);
+  const others = sys.planets.filter((x) => x !== pl);
+  const kin = chipsRow(t('fly.cardHeld'), others.length
+    ? t('fly.roundWith', { host: sys.host, n: others.length })
+    : t('fly.roundAlone', { host: sys.host }),
+  others.map((x) => ({ name: x.letter ?? x.name, open: () => openPlanetCard(sys, x) })));
+  if (pl.r) rows.push([t('fly.cardRadius'), exoRadius(pl, true)]);
   if (pl.a) rows.push([t('exo.orbitH'), t('exo.orbitLong', { a: fmt(pl.a, 3) })]);
+  if (pl.a) rows.push([t('fly.shapeH'), orbitWords(pl)]);
   if (pl.p) rows.push([t('exo.periodH'), t('exo.periodLong', { p: fmt(pl.p, pl.p < 10 ? 3 : 1) })]);
-  if (pl.e != null) rows.push([t('exo.eccH'), fmt(pl.e, 2)]);
+  if (timed) rows.push([t(transit ? 'fly.tcTransit' : 'fly.tcConj'), formatDay(new Date((pl.tc - 2440587.5) * 86400000), { year: true })]);
   if (pl.t) rows.push([t('exo.teqH'), t('fly.kelvin', { n: fmt(pl.t, 0) })]);
-  const hz = habitableZone(sys.starR, sys.teff);
-  if (hz && pl.a) rows.push([t('exo.hzH'), t(pl.a < hz.inner ? 'exo.hzIn' : pl.a > hz.outer ? 'exo.hzOut' : 'exo.hzYes')]);
+  const zone = zoneOf(habitableZone(sys.starR, sys.teff), pl.a);
+  if (zone) rows.push([t('exo.hzH'), t({ hot: 'exo.hzIn', cold: 'exo.hzOut', in: 'fly.hzIn', opt: 'fly.hzOpt' }[zone])]);
   rows.push([t('exo.foundH'), t('exo.found', { method: pl.method ?? '—', year: pl.year ?? '—' })]);
-  $('card-rows').replaceChildren(...rows.map(([k, v]) => cardRow(k, v)));
+  $('card-rows').replaceChildren(kin, ...rows.map(([k, v]) => cardRow(k, v)), ...[companionsRow(sys)].filter(Boolean));
   $('card-frames').hidden = true;
   const ev = $('card-exo');
   ev.hidden = false;
   ev.href = systemUrl([sys.ra, sys.dec, sys.planets.length, sys.host], sys.host, getLanguage());
-  card = { s: { key: `sys:${sys.host}`, sys, index: sys.index } };
+  card = { s: { key: `sys:${sys.host}`, sys, pl, index: sys.index } };
   $('card').hidden = false;
+}
+
+/* ---- what goes round what -------------------------------------------- */
+
+/*
+ * The body picked last, and what its card says it goes round, drawn in space
+ * until the card is closed: a planet's orbit round the Sun, the Moon's round
+ * the Earth, another star's planet's round its star, each with the body it
+ * goes round ringed; and a star, whose turn round the Galaxy takes hundreds
+ * of millions of years, its drift across the sky ten thousand years each way.
+ * The lines are traced once for the pick and moved to the eye when it moves.
+ */
+let picked = null;
+let pickedDrawnFor = null;
+let pickedShown = false;
+const PICK_INK = [1, 0.74, 0.3, 0.95];
+const DRIFT_INK = [1, 0.66, 0.38, 0.8];
+
+/** Pick a body, or none: { kind: 'planet' | 'moon', index, key } | { kind: 'exo', sys, pl } | { kind: 'star', index }. */
+function pick(next) {
+  picked = next;
+  pickedDrawnFor = null;
+  if (!next) return;
+  if (next.kind === 'exo') {
+    const o = systemNow(next.sys).find((x) => x.pl === next.pl);
+    next.ends = o?.orbit ? ellipseEnds(o.orbit, next.sys.frame, next.sys.center, AU, ORBIT_STEPS * 2) : null;
+    next.base = () => ORIGIN;
+    next.centre = () => next.sys.center;
+    next.ink = PICK_INK;
+  } else if (next.kind === 'planet' || next.kind === 'moon') {
+    next.traced = -1;
+    next.ink = PICK_INK;
+    const earth = named.find((x) => x.key === 'earth');
+    next.base = next.kind === 'moon' ? () => posOf(earth.index) : () => ORIGIN;
+    next.centre = next.base;
+  } else if (next.kind === 'star') {
+    next.ends = null;
+    next.ink = DRIFT_INK;
+    next.base = () => ORIGIN;
+    next.centre = null;
+    if (motion && next.index < motion.length / 2) {
+      const p = posOf(next.index);
+      const v = skyVelocity(p, motion[next.index * 2], motion[next.index * 2 + 1]);
+      next.ends = Float64Array.from([...add(p, v, -DRIFT_YEARS), ...add(p, v, DRIFT_YEARS)]);
+      next.mu = Math.hypot(motion[next.index * 2], motion[next.index * 2 + 1]) / 1000;
+    }
+  }
+  if (next.ends) next.fromEye = new Float32Array(next.ends.length);
+  wake();
+}
+
+/** The ring on the body the picked one goes round (its name is on its own label and in the card), and the drift's two ends. */
+let pickedEls = null;
+function pickedLabels() {
+  if (pickedEls) return pickedEls;
+  const box = $('pick-labels');
+  const make = (cls) => {
+    const el = document.createElement('span');
+    el.className = cls;
+    el.hidden = true;
+    box.append(el);
+    return el;
+  };
+  pickedEls = { centre: make('fly-centre'), from: make('fly-mark fly-mark--drift'), to: make('fly-mark fly-mark--drift') };
+  return pickedEls;
+}
+
+function drawPicked() {
+  const p = picked;
+  const els = pickedLabels();
+  if (p && (p.kind === 'planet' || p.kind === 'moon')) {
+    tracePaths();
+    if (p.traced !== pathsTraced) {
+      p.ends = segmentEnds([solarPaths[p.kind === 'moon' ? 'moon' : p.key]]);
+      p.fromEye = new Float32Array(p.ends.length);
+      p.traced = pathsTraced;
+      pickedDrawnFor = null;
+    }
+  }
+  if (!p || !p.ends) {
+    if (pickedShown) {
+      space.setLiveLines(null, null, 'picked');
+      pickedShown = false;
+    }
+    pickedDrawnFor = null;
+    setHidden(els.centre, true);
+    setHidden(els.from, true);
+    setHidden(els.to, true);
+    return;
+  }
+  const base = p.base();
+  const next = sameView(pickedDrawnFor, ...base);
+  if (next) {
+    pickedDrawnFor = next;
+    space.setLiveLines(fromEye(p.ends, base, p.fromEye), p.ink, 'picked');
+    pickedShown = true;
+  }
+  const b = basis();
+  const centre = p.centre ? screenOf(p.centre(), b, proj) : null;
+  setHidden(els.centre, !centre);
+  if (centre) setPlace(els.centre, centre);
+  const ends = p.kind === 'star' ? [[els.from, -DRIFT_YEARS, 0], [els.to, DRIFT_YEARS, 3]] : [[els.from], [els.to]];
+  for (const [el, years, o] of ends) {
+    const at = years ? screenOf([p.ends[o], p.ends[o + 1], p.ends[o + 2]], b, proj) : null;
+    setHidden(el, !at);
+    if (!at) continue;
+    setText(el, t('fly.driftEnd', { y: `${years < 0 ? '−' : '+'}${fmt(Math.abs(years), 0)}` }));
+    setPlace(el, at);
+  }
 }
 
 /* ---- language and start ----------------------------------------------- */
@@ -2026,7 +2433,13 @@ function applyLanguage() {
   $('hint').textContent = t(matchMedia('(pointer: coarse)').matches ? 'fly.hintTouch' : 'fly.hint');
   if (named.length) nameLabels();
   if (starCount) $('source').textContent = t('fly.source', { n: fmt(starCount, 0) });
-  if (card) openCard(card.s);
+  buildClock();
+  if (card) {
+    const { s } = card;
+    if (s.pl) openPlanetCard(s.sys, s.pl);
+    else if (s.sys) openSystemCard(s.sys);
+    else openCard(s);
+  }
   wake();
 }
 $('lang').addEventListener('click', () => {
@@ -2063,6 +2476,8 @@ if (!space) {
   buildReach();
   if (pendingLook) lookFromEarth(pendingLook.ra, pendingLook.dec);
   loadSystems();
+  loadFamily();
+  loadMotion();
   applyLanguage();
   setTimeout(() => { $('hint').dataset.gone = 'true'; }, 9000);
   moveBodies();

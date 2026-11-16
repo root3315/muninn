@@ -20,6 +20,7 @@
 <link rel="modulepreload" href="js/fly/reach.js">
 <link rel="modulepreload" href="js/fly/solar.js">
 <link rel="modulepreload" href="js/fly/relief.js">
+<link rel="modulepreload" href="js/fly/orbits.js">
 <link rel="modulepreload" href="js/exovision.js">
 <link rel="modulepreload" href="js/catalog.js">
 <link rel="modulepreload" href="js/ephemeris.js">
@@ -52,6 +53,7 @@
   <div class="fly-labels" id="marks"></div>
   <div class="fly-labels" id="sys-labels"></div>
   <div class="fly-labels" id="scale-labels"></div>
+  <div class="fly-labels" id="pick-labels"></div>
   <p class="as-sky__hint" id="hint"></p>
   <p class="as-sky__nogl" id="nogl" hidden data-i18n="allsky.noGl"></p>
 
@@ -86,6 +88,13 @@
         <button type="button" class="as-toggle" id="faster" data-i18n-label="fly.faster" data-i18n-title="fly.faster">+</button>
       </span>
       <p class="as-read num" id="read" aria-live="off"></p>
+    </div>
+    <div class="as-dock__row fly-time" role="group" data-i18n-label="fly.timeH">
+      <span class="as-wave__name" data-i18n="fly.timeH"></span>
+      <button type="button" class="as-toggle fly-time__play" id="time-play"></button>
+      <span class="fly-time__rates" id="time-rates"></span>
+      <button type="button" class="as-toggle" id="time-now" hidden data-i18n="fly.timeNow"></button>
+      <p class="as-read num fly-time__date" id="time-date" aria-live="polite"></p>
     </div>
     <div class="as-dock__row as-dock__row--read">
       <p class="as-read" id="read-note"></p>

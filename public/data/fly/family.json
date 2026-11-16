@@ -1,0 +1,14 @@
+{
+ "source": "JPL Small-Body Database Query API",
+ "counted": "2026-11-16",
+ "counts": {
+  "neo": 43321,
+  "main": 1481222,
+  "trojan": 16473,
+  "centaur": 1090,
+  "tno": 8341,
+  "comet": 1805,
+  "asteroids": 1581007,
+  "open": 2290
+ }
+}
