@@ -351,6 +351,8 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
    * or the GPU is wanted elsewhere). Until then they are empty.
    */
   let aniso = null;
+  /** The anisotropy to ask for, read once per context: a getParameter waits on the GPU, and was paid on every image. */
+  let anisoLevel = 0;
   let sphere = null;
   let map = null;
   let line = null;
@@ -465,7 +467,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAX_LEVEL, maxLevel);
     gl.generateMipmap(gl.TEXTURE_2D);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
-    if (aniso) gl.texParameterf(gl.TEXTURE_2D, aniso.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(4, gl.getParameter(aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+    if (aniso) gl.texParameterf(gl.TEXTURE_2D, aniso.TEXTURE_MAX_ANISOTROPY_EXT, anisoLevel);
     return tex;
   }
 
@@ -495,6 +497,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
     gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
     aniso = gl.getExtension('EXT_texture_filter_anisotropic');
+    anisoLevel = aniso ? Math.min(4, gl.getParameter(aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT)) : 0;
     sphere = compile(gl, SPHERE_VS, SPHERE_FS, ['aPos', 'aUv']);
     map = compile(gl, MAP_VS, MAP_FS, []);
     line = compile(gl, LINE_VS, LINE_FS, ['aPos']);
@@ -629,7 +632,18 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
 
   function evict() {
     // A failed image nobody asks for any more is forgotten, not kept to retry.
-    for (const [url, v] of images) if (v.state === 'failed' && v.used < use - 1) images.delete(url);
+    // Counted in the same pass: most frames are under budget, and then
+    // nothing is listed or sorted at all.
+    let idleTiles = 0;
+    let idleAllskies = 0;
+    for (const [url, v] of images) {
+      if (v.state === 'failed' && v.used < use - 1) images.delete(url);
+      else if (v.state === 'ready' && v.used < use - 1) {
+        if (v.allsky) idleAllskies++;
+        else idleTiles++;
+      }
+    }
+    if (idleTiles <= KEEP_TILES && idleAllskies <= KEEP_ALLSKIES && meshes.size <= MESHES_KEPT) return;
     // What is on screen now, or was a frame ago, is never let go, whatever the budget.
     const ready = [...images.entries()].filter(([, v]) => v.state === 'ready' && v.used < use - 1);
     const allskies = ready.filter(([, v]) => v.allsky);
@@ -657,12 +671,24 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
 
   /* ---- drawing --------------------------------------------------------- */
 
+  /**
+   * The canvas's size in CSS pixels, kept by the resize observer below.
+   * Reading it from the element in every frame, and twice for every pointer
+   * reading, made the browser lay the page out again whenever anything had
+   * been written to it in between.
+   */
+  let cssSize = null;
+  const measure = () => {
+    cssSize = { w: canvas.clientWidth, h: canvas.clientHeight };
+  };
+
   function camera() {
     // A phone's screen has three device pixels to the point and a GPU a
     // fraction of a desktop's: the sky is drawn at one and a half, and scaled.
     const dpr = Math.min(window.devicePixelRatio || 1, COARSE ? 1.5 : 2);
-    const w = Math.max(1, Math.round(canvas.clientWidth * dpr));
-    const h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+    if (!cssSize) measure();
+    const w = Math.max(1, Math.round(cssSize.w * dpr));
+    const h = Math.max(1, Math.round(cssSize.h * dpr));
     if (canvas.width !== w || canvas.height !== h) {
       canvas.width = w;
       canvas.height = h;
@@ -709,6 +735,25 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     gl.uniform1f(u.Alpha, alpha);
   }
 
+  /**
+   * A tile's addresses for a set of frames, made once. The same strings every
+   * frame, rather than new ones built for each tile on screen, are also
+   * quicker to look up: a string remembers its own hash.
+   */
+  const urlSets = new WeakMap();
+  function tileUrls(frames, order, n) {
+    let set = urlSets.get(frames);
+    if (!set) urlSets.set(frames, (set = new Map()));
+    const key = order * 65536 + n;
+    let urls = set.get(key);
+    if (!urls) {
+      // A long pan at the finest order passes thousands of tiles: start over rather than keep them all.
+      if (set.size > 4096) set.clear();
+      set.set(key, (urls = frames.map((f) => tileUrl(order, n, f))));
+    }
+    return urls;
+  }
+
   const fadeOf = (imgs, now) => Math.min(1, ...imgs.map((i) => (now - i.readyAt) / FADE_MS));
 
   function onScreen(centre, radiusDeg, cam) {
@@ -727,8 +772,13 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     // From a tile's middle to its corner: about three quarters of its side.
     const radius = tileDegrees(order) * 0.75;
     const out = [];
+    const v = [0, 0, 0];
+    // Every tile of the order is tested, twelve thousand at the finest: one
+    // vector reused for all of them, not one made and dropped for each.
     for (let n = 0; n < c.length / 3; n++) {
-      const v = [c[n * 3], c[n * 3 + 1], c[n * 3 + 2]];
+      v[0] = c[n * 3];
+      v[1] = c[n * 3 + 1];
+      v[2] = c[n * 3 + 2];
       if (onScreen(v, radius, cam)) out.push({ n, near: -dot(v, cam.C) });
     }
     out.sort((a, b) => a.near - b.near);
@@ -805,7 +855,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     for (let order = ALLSKY_ORDER; order <= target; order++) {
       const levels = tileLevels;
       for (const { n, near } of visibleTiles(order, cam)) {
-        const urls = frames.map((f) => tileUrl(order, n, f));
+        const urls = tileUrls(frames, order, n);
         const imgs = urls.map((u) => (fetch && order === target ? want(u, near) : images.get(u)));
         if (fetch && order === target) out.wanted += imgs.length;
         if (!imgs.every((i) => i?.state === 'ready')) continue;
@@ -1011,7 +1061,8 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     gl.disable(gl.BLEND);
     gl.bindVertexArray(null);
     if (result.fading || previous.length) redraw();
-    const failed = [...images.values()].filter((i) => i.state === 'failed' && i.used >= use).length;
+    let failed = 0;
+    for (const i of images.values()) if (i.state === 'failed' && i.used >= use) failed++;
     onChange({ wanted: result.wanted, have: result.have, failed });
   }
 
@@ -1029,7 +1080,10 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     draw();
   }
 
-  new ResizeObserver(redraw).observe(canvas);
+  new ResizeObserver(() => {
+    measure();
+    redraw();
+  }).observe(canvas);
 
   /*
    * A phone's browser may take the GPU from a page (in the background, or
@@ -1069,6 +1123,11 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
 
   return {
     get state() { return { ...state, frames: [...state.frames] }; },
+    /** The canvas in CSS pixels, as last measured: no layout is read for it. */
+    get size() {
+      if (!cssSize) measure();
+      return { ...cssSize };
+    },
     set({ ra = state.ra, dec = state.dec, fov = state.fov, map: mix = state.map, basis = null } = {}) {
       // A camera given whole, as the flight's is, which may turn about its
       // own axis: C ahead, E to the screen's left, N up. Its centre stands in

@@ -400,6 +400,18 @@ function hideHint() {
 
 /* ---- reading the sky --------------------------------------------------- */
 
+/**
+ * Writes that happen after every frame, made only when the value is new: an
+ * attribute set to what it already was still makes the browser work out the
+ * page's style again, and on the body that is the whole page.
+ */
+function setText(el, text) {
+  if (el.textContent !== text) el.textContent = text;
+}
+function setData(el, key, value) {
+  if (el.dataset[key] !== value) el.dataset[key] = value;
+}
+
 let lastRead = null;
 function showRead(px, py) {
   lastRead = px === null || px === undefined ? null : [px, py];
@@ -408,7 +420,7 @@ function showRead(px, py) {
   const map = inMap();
   const at = lastRead ? view.skyAt(px, py) : (map ? null : { ra: s.ra, dec: s.dec });
   if (!at) {
-    if (map) $('read').textContent = '';
+    if (map) setText($('read'), '');
     return;
   }
   const g = galacticOf(at.ra, at.dec);
@@ -416,7 +428,7 @@ function showRead(px, py) {
   const where = narrow.matches
     ? `${formatRA(at.ra).slice(0, 8)} ${formatDec(at.dec).slice(0, 8)} · ${t('allsky.gal', { l: fmt(g.l, 0), b: fmt(g.b, 0) })}`
     : `${formatRA(at.ra)}  ${formatDec(at.dec)}  ·  ${t('allsky.gal', { l: fmt(g.l, 1), b: fmt(g.b, 1) })}`;
-  $('read').textContent = map ? where : `${where}  ·  ${t('allsky.fov')} ${fovText(s.fov)}`;
+  setText($('read'), map ? where : `${where}  ·  ${t('allsky.fov')} ${fovText(s.fov)}`);
 }
 
 function fovText(fov) {
@@ -451,13 +463,17 @@ function nameRings() {
 
 function placeRings() {
   if (!view) return;
-  const w = canvas.clientWidth;
-  const h = canvas.clientHeight;
+  const { w, h } = view.size;
   for (const f of fields) {
     const p = view.screenOf(f.ra, f.dec);
     const inside = p && p.x > -40 && p.y > -40 && p.x < w + 40 && p.y < h + 40;
-    f.el.hidden = !inside;
-    if (inside) f.el.style.transform = `translate(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px)`;
+    if (f.el.hidden !== !inside) f.el.hidden = !inside;
+    if (!inside) continue;
+    const move = `translate(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px)`;
+    if (f.move !== move) {
+      f.move = move;
+      f.el.style.transform = move;
+    }
   }
 }
 
@@ -484,8 +500,8 @@ function afterDraw({ wanted, have, failed }) {
   placeRings();
   const s = view.state;
   const map = s.map >= 0.5;
-  $('reticle').dataset.on = String(!map && s.fov <= 20);
-  document.body.dataset.map = String(map);
+  setData($('reticle'), 'on', String(!map && s.fov <= 20));
+  setData(document.body, 'map', String(map));
   if (map !== wasMap) {
     wasMap = map;
     $('open').disabled = map;
@@ -493,10 +509,10 @@ function afterDraw({ wanted, have, failed }) {
     sayHint();
   }
   const status = $('status');
-  if (failed) status.textContent = t('allsky.failed', { n: failed });
-  else if (have < wanted) status.textContent = t('allsky.loading', { n: have, m: wanted });
-  else status.textContent = '';
-  status.dataset.bad = String(failed > 0);
+  if (failed) setText(status, t('allsky.failed', { n: failed }));
+  else if (have < wanted) setText(status, t('allsky.loading', { n: have, m: wanted }));
+  else setText(status, '');
+  setData(status, 'bad', String(failed > 0));
   if (lastRead) showRead(...lastRead);
   else showRead(null);
 }

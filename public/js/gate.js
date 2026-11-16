@@ -237,7 +237,8 @@ export async function loadStars(url = 'data/sky/stars.json') {
  *   spikeTo  the faintest that gets diffraction spikes
  */
 /** Whether the reader has asked for less motion; read each time, it can change. */
-const REDUCED = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+const REDUCED_QUERY = typeof matchMedia === 'function' ? matchMedia('(prefers-reduced-motion: reduce)') : null;
+const REDUCED = () => Boolean(REDUCED_QUERY?.matches);
 
 const TIERS = [
   { dpr: 2, haze: 9000, band: 8, glowTo: 5.0, spikeTo: 2.7 },
@@ -298,6 +299,8 @@ export class Gate {
         this.surveyCube = true;
         this.cubeAt = performance.now();
         this.canvas.closest('.gate')?.classList.add('gate--cube');
+        // The rings wait for this; a sky standing still would not draw them.
+        this.requestDraw();
         this.onSurvey();
       },
     });
@@ -484,6 +487,8 @@ export class Gate {
     this.box = { width: w * dpr, height: h * dpr, dpr, cssW: w, cssH: h };
     this.canvas.width = this.box.width;
     this.canvas.height = this.box.height;
+    // Setting the size clears the canvas: whatever was on it has to be drawn again.
+    this.dirty = true;
     this.buildBasis();
   }
 
@@ -633,7 +638,7 @@ export class Gate {
   /** How far the surveyed band has come in over the model, 0 to 1. */
   surveyShare() {
     if (!this.survey) return 0;
-    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return 1;
+    if (REDUCED()) return 1;
     return Math.min(1, (performance.now() - this.surveyAt) / SURVEY_FADE_MS);
   }
 
@@ -825,6 +830,7 @@ export class Gate {
     const { ctx } = this;
     const { width, height, dpr } = this.box;
     const f = this.flight;
+    this.markDrawn();
     this.buildBasis(f ? f.fov : this.cam.fov);
     const focal = this.focal;
     // Where things were a fifth of a second ago, for the trails.
@@ -1019,6 +1025,48 @@ export class Gate {
     this.drawArrival(ctx);
   }
 
+  /** What this frame was drawn from, so the loop can tell when nothing has changed since. */
+  markDrawn() {
+    this.dirty = false;
+    this.drawnRa = this.cam.ra;
+    this.drawnDec = this.cam.dec;
+    this.drawnFov = this.cam.fov;
+    this.drawnAt = performance.now();
+  }
+
+  /** Whether the camera has moved since the last frame was drawn. */
+  moved() {
+    return this.cam.ra !== this.drawnRa || this.cam.dec !== this.drawnDec || this.cam.fov !== this.drawnFov;
+  }
+
+  /**
+   * A frame for something the reader did: a drag, a wheel, a pinch. Drawn by
+   * the loop, once, however many events came in that frame — drawing on each
+   * event as well as in the loop painted the sky twice a frame. With no loop
+   * running (less motion asked for, or stopped) it is drawn at once.
+   */
+  requestDraw() {
+    if (this.running && this.raf && !REDUCED()) this.dirty = true;
+    else this.draw();
+  }
+
+  /**
+   * Whether the reticle needs a frame of its own. It settles over its first
+   * second and then only breathes, a slow swell over three and a half seconds
+   * that twenty frames a second carry as smoothly as sixty; off the screen it
+   * needs none. Letting go fades it out at full rate.
+   */
+  reticleWants(now) {
+    if (this.leaving) return true;
+    const s = this.selected;
+    if (!s || !this.box) return false;
+    s.v ??= direction(s.ra, s.dec);
+    if (!this.at(s.v[0], s.v[1], s.v[2])) return false;
+    const m = 60 * this.box.dpr;
+    if (this.px < -m || this.px > this.box.width + m || this.py < -m || this.py > this.box.height + m) return false;
+    return (now - s.since) < 1200 || now - (this.drawnAt ?? 0) >= 50;
+  }
+
   /**
    * One trail, from where the point was (`px`, `py`, just projected) to where
    * it is now, no longer than `trailMax`: the far end is pulled in along the
@@ -1052,13 +1100,18 @@ export class Gate {
     const { accent, counter, ink } = this.paint;
 
     ctx.lineWidth = 1.2 * dpr;
-    ctx.font = `${12 * dpr}px ${this.paint.body}`;
+    // A font is parsed each time it is set; the string, at least, is made once.
+    if (this.fontFor !== dpr) {
+      this.fontFor = dpr;
+      this.font = `${12 * dpr}px ${this.paint.body}`;
+    }
+    ctx.font = this.font;
     ctx.textBaseline = 'middle';
 
     for (const tgt of this.targets) {
-      const p = this.projectV(tgt.v);
-      if (!p) continue;
-      const [x, y] = p;
+      if (!this.at(tgt.v[0], tgt.v[1], tgt.v[2])) continue;
+      const x = this.px;
+      const y = this.py;
       if (x < -60 || x > width + 60 || y < -30 || y > height + 30) continue;
       const near = this.hit?.item === tgt;
       const colour = tgt.kind === 'planet' ? counter : accent;
@@ -1078,7 +1131,7 @@ export class Gate {
         // A dark edge under the letters: a star behind a name struck it through.
         ctx.lineJoin = 'round';
         ctx.lineWidth = 2 * dpr;
-        ctx.strokeStyle = this.tint(this.paint.well, 0.7);
+        ctx.strokeStyle = this.paint.labelEdge;
         // Past the reticle's ticks when this is the one picked, so the name and
         // the crosshair do not cross.
         const lx = x + (this.isSelected(tgt) ? 40 : r / dpr + 7) * dpr;
@@ -1202,7 +1255,8 @@ export class Gate {
       fade = 1 - out * out;
     }
     if (!s) return;
-    const p = this.projectV(direction(s.ra, s.dec));
+    s.v ??= direction(s.ra, s.dec);
+    const p = this.projectV(s.v);
     if (!p) return;
     const { dpr } = this.box;
     const age = still ? 10 : (now - s.since) / 1000;
@@ -1216,8 +1270,8 @@ export class Gate {
 
     // A small glow on the object itself, not a wash over the sky around it.
     const glow = ctx.createRadialGradient(p[0], p[1], 0, p[0], p[1], r * 0.7);
-    glow.addColorStop(0, this.tint(this.paint.accent, (0.22 + 0.08 * breath) * shown));
-    glow.addColorStop(1, this.tint(this.paint.accent, 0));
+    glow.addColorStop(0, `${this.paint.accentRgba}${(0.22 + 0.08 * breath) * shown})`);
+    glow.addColorStop(1, `${this.paint.accentRgba}0)`);
     ctx.globalCompositeOperation = 'lighter';
     ctx.fillStyle = glow;
     ctx.fillRect(p[0] - r, p[1] - r, r * 2, r * 2);
@@ -1254,18 +1308,21 @@ export class Gate {
   }
 
   /** A CSS colour with its alpha replaced; the palette is hex or rgb(). */
-  tint(color, alpha) {
+  tint(color, alpha) { return `${this.tintPrefix(color)}${alpha})`; }
+
+  /** The same colour up to its alpha, `rgba(r,g,b,`: read from the palette once, not every frame. */
+  tintPrefix(color) {
     const hex = /^#([0-9a-f]{6})$/i.exec(color);
     if (hex) {
       const n = parseInt(hex[1], 16);
-      return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${alpha})`;
+      return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},`;
     }
     const rgb = /rgba?\(([^)]+)\)/.exec(color);
     if (rgb) {
       const [r, g, b] = rgb[1].split(/[\s,/]+/).map(Number);
-      return `rgba(${r},${g},${b},${alpha})`;
+      return `rgba(${r},${g},${b},`;
     }
-    return `rgba(108,196,240,${alpha})`;
+    return 'rgba(108,196,240,';
   }
 
   /** A ring around whatever the pointer is nearest to. */
@@ -1273,7 +1330,8 @@ export class Gate {
     if (!this.hit) return;
     const s = this.selected;
     if (s && Math.abs(s.ra - this.hit.ra) < 1e-6 && Math.abs(s.dec - this.hit.dec) < 1e-6) return;
-    const p = this.projectV(direction(this.hit.ra, this.hit.dec));
+    this.hit.v ??= direction(this.hit.ra, this.hit.dec);
+    const p = this.projectV(this.hit.v);
     if (!p) return;
     ctx.strokeStyle = this.paint.ink;
     ctx.lineWidth = this.box.dpr;
@@ -1334,6 +1392,11 @@ export class Gate {
     probe.fillRect(0, 0, 1, 1);
     const [r, g, b] = probe.getImageData(0, 0, 1, 1).data;
     this.paint.wellRgb = [r / 255, g / 255, b / 255];
+    // The colours a frame would otherwise rebuild from the palette every time:
+    // the dark edge under a name, and the accent ready to take an opacity.
+    this.paint.labelEdge = this.tint(this.paint.well, 0.7);
+    this.paint.accentRgba = this.tintPrefix(this.paint.accent);
+    this.fontFor = null;
   }
 
   /* ---------------------------------------------------------- pointing */
@@ -1363,7 +1426,7 @@ export class Gate {
         return;
       }
       this.drag = { at: this.pointer, ra: this.cam.ra, dec: this.cam.dec, moved: 0 };
-      this.canvas.style.cursor = 'grabbing';
+      this.setCursor('grabbing');
     });
 
     this.canvas.addEventListener('pointermove', (e) => {
@@ -1385,7 +1448,7 @@ export class Gate {
           }
           this.cam.fov = Math.max(this.fovMin, Math.min(FOV_MAX, want));
           this.findHit();
-          this.draw();
+          this.requestDraw();
         }
         return;
       }
@@ -1400,7 +1463,7 @@ export class Gate {
         this.cam.ra = ((this.drag.ra + dx * perPx) % 360 + 360) % 360;
         this.cam.dec = Math.max(-88, Math.min(88, this.drag.dec + dy * perPx));
         if (this.hit) { this.hit = null; this.onName?.(null); }
-        this.draw();
+        this.requestDraw();
         return;
       }
       this.findHit();
@@ -1413,7 +1476,7 @@ export class Gate {
       if (!this.drag) return;
       const { moved } = this.drag;
       this.drag = null;
-      this.canvas.style.cursor = 'grab';
+      this.setCursor('grab');
       // A drag is not a press. A thumb wobbles further than a cursor does.
       if (moved < (this.coarse ? 10 : 4)) { this.findHit(); this.press(); }
     };
@@ -1433,7 +1496,7 @@ export class Gate {
       // The wheel zooms, and only zooms: flying is the keys' (see bindKeys).
       this.cam.fov = Math.max(this.fovMin, Math.min(FOV_MAX, this.cam.fov * Math.exp(e.deltaY * 0.0012)));
       this.findHit();
-      this.draw();
+      this.requestDraw();
     }, { passive: false });
   }
 
@@ -1473,16 +1536,15 @@ export class Gate {
     let bestD = (this.coarse ? 40 : 24) * this.box.dpr;
 
     for (const tgt of this.targets) {
-      const p = this.projectV(tgt.v);
-      if (!p) continue;
-      const d = Math.hypot(p[0] - px, p[1] - py);
+      if (!this.at(tgt.v[0], tgt.v[1], tgt.v[2])) continue;
+      const d = Math.hypot(this.px - px, this.py - py);
       if (d < bestD) { bestD = d; best = { ...tgt, item: tgt }; }
     }
     if (!best) {
+      const { sv } = this;
       for (const [i, entry] of this.named) {
-        const p = this.projectV([this.sv[i * 3], this.sv[i * 3 + 1], this.sv[i * 3 + 2]]);
-        if (!p) continue;
-        const d = Math.hypot(p[0] - px, p[1] - py);
+        if (!this.at(sv[i * 3], sv[i * 3 + 1], sv[i * 3 + 2])) continue;
+        const d = Math.hypot(this.px - px, this.py - py);
         if (d < bestD) {
           bestD = d;
           best = {
@@ -1501,7 +1563,14 @@ export class Gate {
     const changed = best?.label !== this.hit?.label;
     this.hit = best;
     if (changed) { this.onName?.(best); this.draw(); }
-    if (!this.drag) this.canvas.style.cursor = best ? 'pointer' : 'grab';
+    if (!this.drag) this.setCursor(best ? 'pointer' : 'grab');
+  }
+
+  /** The pointer's shape, written only when it changes: a style write each move dirtied the page's style for nothing. */
+  setCursor(shape) {
+    if (this.cursor === shape) return;
+    this.cursor = shape;
+    this.canvas.style.cursor = shape;
   }
 
   /* -------------------------------------------------------------- dive */
@@ -1598,7 +1667,12 @@ export class Gate {
       // redrawing now and then; a moving one gets every display frame, since
       // thirty a second is where a slow pan starts to judder.
       const still = g.speed < 0.002 && !this.selected && !this.leaving && !this.drag;
-      if (still && now - last < 100) { this.raf = requestAnimationFrame(tick); return; }
+      if (still && now - last < 100) {
+        // Nothing moves by itself; what the reader asked for is still drawn now.
+        if (this.dirty) this.draw();
+        this.raf = requestAnimationFrame(tick);
+        return;
+      }
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
       // The sweep: a slow turn with a gentle nod, the way an instrument in
@@ -1641,6 +1715,12 @@ export class Gate {
         }
       }
 
+      // A sky that has not moved, with no reticle settling or breathing on it,
+      // is the frame already on screen: nothing is drawn, and nothing timed.
+      if (!this.dirty && !this.moved() && !this.reticleWants(now)) {
+        this.raf = requestAnimationFrame(tick);
+        return;
+      }
       const t0 = performance.now();
       this.draw();
       // A rolling average rather than one reading: a single slow frame is a
