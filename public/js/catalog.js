@@ -603,6 +603,25 @@ export function smallBodyOrbit(des) {
   return orbits.get(key);
 }
 
+/**
+ * The asteroids and comets on nearly a body's orbit (orbit.js NEAR_BOX), from
+ * JPL's Small-Body Database through the relay: { count, rows, scale }.
+ * Asked once a page for each orbit.
+ */
+const neighbours = new Map();
+
+export function orbitNeighbours(k) {
+  const query = `a=${k.a.toFixed(5)}&e=${k.e.toFixed(5)}&i=${k.i.toFixed(4)}`;
+  if (!neighbours.has(query)) {
+    // Up to four questions at JPL in a row: twice a catalogue's time.
+    const asked = fromRelay(`api/sbdb-near?${query}`, null, 2 * CATALOG_DEADLINE_MS)
+      .then(({ count, rows, scale }) => ({ count, rows: rows ?? [], scale }));
+    asked.catch(() => neighbours.delete(query));
+    neighbours.set(query, asked);
+  }
+  return neighbours.get(query);
+}
+
 /* ------------------------------------------------------------- fixed sources */
 
 /**

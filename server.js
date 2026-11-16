@@ -18,7 +18,8 @@
  * Small-Body Database and Horizons the same way (/api/smallbody): the relay
  * reads a designation out of the text and asks only for that. A marked
  * body's orbit comes from the same database (/api/sbdb), asked by the
- * designation SkyBoT or JPL gave it.
+ * designation SkyBoT or JPL gave it, and the bodies on nearly the same orbit
+ * from its query service (/api/sbdb-near), asked by three checked numbers.
  *
  * No dependencies. `node server.js` and open the address it prints.
  */
@@ -39,7 +40,7 @@ import { parseCsv } from './public/js/csv.js';
 import { CATALOGUES, ROW_CAP, coneQuery, renameRow, mastGaiaRows, columnsTag } from './public/js/overlay.js';
 import { sbIdentUrl, parseSbIdent } from './public/js/sbident.js';
 import { smallBodyQuery, SBDB_TEXT, sbdbUrl, readSbdb, horizonsUrl, readHorizons } from './public/js/smallbody.js';
-import { sbdbOrbitUrl, readOrbit } from './public/js/orbit.js';
+import { sbdbOrbitUrl, readOrbit, nearBox, nearQueryUrl, readNear, NEAR_ROWS } from './public/js/orbit.js';
 import { archivesQuery, neossatQuery, neossatFilesQuery, readNeossat, ARCHIVE_RADIUS } from './public/js/archives.js';
 import {
   ROW, searchIndex, footprintMeetsCone, frameFromIndexRow, indexRowFromObscore, capLikeIrsa,
@@ -1498,6 +1499,52 @@ async function askOrbit(des, key) {
   return { ok: true, cached: false, ...payload };
 }
 
+/* ------------------------------------------- bodies on nearly the same orbit */
+
+/** Tries at a smaller box before the rows JPL sent are taken as they are. */
+const NEAR_NARROWINGS = 3;
+
+/**
+ * Every asteroid and comet JPL's Small-Body Database has on nearly the orbit
+ * of a marked body, for its card (orbit.js NEAR_BOX: a within 2 %, e within
+ * 0.03, i within 1.5°).
+ *
+ *   a, e, i   the marked body's semi-major axis (AU), eccentricity and
+ *             inclination (°). Checked as plain numbers; the question to
+ *             JPL is written from them alone.
+ *
+ * Answers { count, rows, scale }: how many bodies the box holds, and the
+ * rows of a box shrunk by `scale` until it holds no more than JPL is asked
+ * to send, so that the closest are among them. A main-belt box holds
+ * thousands; it takes two or three questions.
+ */
+async function handleSbdbNear(url, req, res) {
+  const k = { a: param(url, 'a'), e: param(url, 'e'), i: param(url, 'i') };
+  if (!(k.a > 0.1 && k.a < 1000) || !(k.e >= 0 && k.e < 1) || !(k.i >= 0 && k.i <= 180)) {
+    return json(res, 400, { ok: false, error: 'a (AU), e (0 to 1) and i (degrees) must be numbers of a closed orbit' });
+  }
+  if (overLimit(req, namesAsked, NAMES_PER_MINUTE)) {
+    return json(res, 429, { ok: false, error: 'Too many names from here; wait a minute.' });
+  }
+  const box = nearBox(k);
+  const key = `sbnear_${createHash('sha1').update(JSON.stringify(box)).digest('hex').slice(0, 20)}`;
+  return relay(res, key, () => askNear(k, key), 'names');
+}
+
+async function askNear(k, key) {
+  const wide = readNear(await jplJson(nearQueryUrl(nearBox(k)), 'SBDB query'));
+  let found = wide;
+  let scale = 1;
+  for (let n = 0; n < NEAR_NARROWINGS && found.count > NEAR_ROWS; n++) {
+    // The box's volume goes as the cube of its scale: aim a little under the rows wanted.
+    scale *= 0.85 * Math.cbrt(NEAR_ROWS / found.count);
+    found = readNear(await jplJson(nearQueryUrl(nearBox(k, scale)), 'SBDB query'));
+  }
+  const payload = { count: wide.count, rows: found.rows, scale: Number(scale.toFixed(4)), via: 'JPL' };
+  await writeCache(key, payload);
+  return { ok: true, cached: false, ...payload };
+}
+
 /** A JPL API's JSON. A busy JPL answers with an HTML page instead: that is an error, not "not found". */
 async function jplJson(target, what) {
   const res = await withTimeout(target, SMALL_BODY_TIMEOUT_MS);
@@ -1756,6 +1803,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/sbident') return await handleSbIdent(url, res);
     if (url.pathname === '/api/smallbody') return await handleSmallBody(url, req, res);
     if (url.pathname === '/api/sbdb') return await handleSbdb(url, req, res);
+    if (url.pathname === '/api/sbdb-near') return await handleSbdbNear(url, req, res);
     if (url.pathname === '/api/wise') return await handleWise(url, res);
     if (url.pathname === '/api/archives') return await handleArchives(url, res);
     if (url.pathname === '/api/targets') {

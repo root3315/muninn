@@ -101,6 +101,18 @@ test('names relay: only an asteroid or comet name or designation goes to JPL', a
   assert.equal((await get('/api/smallbody')).status, 400);
 });
 
+test('same-orbit relay: only three numbers of a closed orbit go to JPL', async () => {
+  for (const query of [
+    '', 'a=3.1', 'a=3.1&e=0.08', 'a=abc&e=0.08&i=12', 'a=3.1&e=1.2&i=12', 'a=3.1&e=0.08&i=200',
+    'a=-3&e=0.08&i=12', 'a=0&e=0.08&i=12', 'a=3e2&e=0.08&i=12', 'a=3.1&e=0.08&i=12%7C',
+    `a=3.1&e=0.08&i=${encodeURIComponent('12|RG|0|180')}`, 'a=3.1&e=0.08&i=Infinity',
+  ]) {
+    const res = await get(`/api/sbdb-near?${query}`);
+    assert.equal(res.status, 400, query);
+    assert.equal((await res.json()).ok, false);
+  }
+});
+
 test('a malformed request line is a 400, and the server is still there', async () => {
   const status = await new Promise((resolve, reject) => {
     const req = request({ host: '127.0.0.1', port: PORT, path: '//' }, (res) => { res.resume(); resolve(res.statusCode); });

@@ -144,3 +144,123 @@ export function sketchReach(k) {
   const refs = referencesFor(k);
   return Math.max(Number.isFinite(k?.Q) ? k.Q : 0, ...refs.map((p) => p.a));
 }
+
+/* ------------------------------------------- who else goes round the same way */
+
+const SBDB_QUERY_API = 'https://ssd-api.jpl.nasa.gov/sbdb_query.api';
+
+/**
+ * How near an orbit must be to count as "nearly the same": the semi-major
+ * axis within 2 %, the eccentricity within 0.03, the inclination within
+ * 1.5°. A box in a, e and i, the three elements the planets change slowest;
+ * the node and the perihelion turn round in thousands of years and are left
+ * to the D-criterion below.
+ */
+export const NEAR_BOX = { a: 0.02, e: 0.03, i: 1.5 };
+/** Rows JPL is asked for at most: the closest are picked from these. */
+export const NEAR_ROWS = 200;
+
+/**
+ * The a, e, i ranges round an orbit, `scale` times NEAR_BOX: rounded so the
+ * same body always asks the same question, and kept to what an orbit can be.
+ */
+export function nearBox({ a, e, i }, scale = 1) {
+  const round = (x, places) => Number(x.toFixed(places));
+  return {
+    a: [round(a * (1 - NEAR_BOX.a * scale), 4), round(a * (1 + NEAR_BOX.a * scale), 4)],
+    e: [round(Math.max(0, e - NEAR_BOX.e * scale), 4), round(Math.min(0.9999, e + NEAR_BOX.e * scale), 4)],
+    i: [round(Math.max(0, i - NEAR_BOX.i * scale), 2), round(Math.min(180, i + NEAR_BOX.i * scale), 2)],
+  };
+}
+
+/**
+ * The SBDB Query API's question for every body in a box: their names, the
+ * elements the D-criterion and the sketch need, and their class. Only
+ * numbers go into the constraint, all of them from nearBox.
+ */
+export function nearQueryUrl(box, limit = NEAR_ROWS) {
+  const range = (field, [lo, hi]) => `${field}|RG|${lo}|${hi}`;
+  const url = new URL(SBDB_QUERY_API);
+  url.search = new URLSearchParams({
+    fields: 'full_name,pdes,a,e,q,i,om,w,class',
+    'sb-cdata': JSON.stringify({ AND: [range('a', box.a), range('e', box.e), range('i', box.i)] }),
+    limit: String(limit),
+  }).toString();
+  return url.href;
+}
+
+/**
+ * JPL's answer read: how many bodies the box holds in all, and the rows it
+ * sent, each { des, name, a, e, q, i, om, w, cls }. Rows without the
+ * elements an orbit needs are dropped.
+ */
+export function readNear(body) {
+  const fields = Array.isArray(body?.fields) ? body.fields : [];
+  const at = Object.fromEntries(fields.map((f, n) => [f, n]));
+  const rows = (Array.isArray(body?.data) ? body.data : []).map((r) => ({
+    des: String(r[at.pdes] ?? '').trim(),
+    name: String(r[at.full_name] ?? '').trim(),
+    a: num(r[at.a]), e: num(r[at.e]), q: num(r[at.q]),
+    i: num(r[at.i]), om: num(r[at.om]), w: num(r[at.w]),
+    cls: String(r[at.class] ?? ''),
+  })).filter((b) => b.des && [b.a, b.e, b.q, b.i, b.om, b.w].every(Number.isFinite));
+  return { count: Number.isFinite(Number(body?.count)) ? Number(body.count) : rows.length, rows };
+}
+
+/**
+ * Southworth and Hawkins' D-criterion (1963), how far apart two orbits are:
+ * the differences in e and q, the angle between the two orbit planes, and
+ * the difference in where the perihelia point, weighted by the mean
+ * eccentricity. 0 is the same orbit; asteroid pairs and meteor streams are
+ * usually taken as related below about 0.1–0.2.
+ */
+export function dSH(k1, k2) {
+  const halfSin = (deg) => 2 * Math.sin((deg * RAD) / 2);
+  const dOm = k2.om - k1.om;
+  // The angle between the planes, I21, as 2 sin(I21 / 2).
+  const planes = Math.sqrt(halfSin(k2.i - k1.i) ** 2 + Math.sin(k1.i * RAD) * Math.sin(k2.i * RAD) * halfSin(dOm) ** 2);
+  const halfI21 = Math.asin(Math.min(1, planes / 2));
+  // The perihelia measured from the planes' common node; the term changes
+  // sign when the nodes are more than half a turn apart.
+  const turn = Math.abs(dOm) > 180 ? -1 : 1;
+  const nodeTerm = Math.cos(halfI21) > 1e-12
+    ? Math.asin(Math.max(-1, Math.min(1, Math.cos(((k2.i + k1.i) / 2) * RAD) * Math.sin((dOm / 2) * RAD) / Math.cos(halfI21))))
+    : 0;
+  const pi21 = (k2.w - k1.w) * RAD + 2 * turn * nodeTerm;
+  const perihelia = ((k1.e + k2.e) / 2) * 2 * Math.sin(pi21 / 2);
+  return Math.sqrt((k2.e - k1.e) ** 2 + (k2.q - k1.q) ** 2 + planes ** 2 + perihelia ** 2);
+}
+
+/** The bodies of a box nearest a body's orbit by D_SH, the body itself left out: [{ ...row, d }]. */
+export function closestOrbits(k, rows, n = 5) {
+  const own = String(k.des ?? '').trim().toLowerCase();
+  return rows
+    .filter((r) => r.des.toLowerCase() !== own)
+    .map((r) => ({ ...r, d: dSH(k, r) }))
+    .filter((r) => Number.isFinite(r.d))
+    .sort((x, y) => x.d - y.d)
+    .slice(0, n);
+}
+
+/** The Earth's distance from the Sun runs between these, AU. */
+const EARTH_PERIHELION = 0.9833;
+const EARTH_APHELION = 1.0167;
+
+/** Whether the orbit's span of distances from the Sun overlaps the Earth's: it crosses the Earth's orbit (seen from above). */
+export const crossesEarth = (k) => k.q < EARTH_APHELION && k.Q > EARTH_PERIHELION;
+
+/**
+ * Which of Jupiter's Lagrange points a Trojan goes round: 'L4', 60° ahead
+ * of Jupiter, or 'L5', 60° behind; null when it is near neither. Jupiter's
+ * mean longitude from Standish's mean elements (J2000 ecliptic, good to a
+ * fraction of a degree for these centuries), the body's from its own.
+ */
+export function trojanPoint(k, jd) {
+  const M = meanAnomaly(k, jd);
+  if (![k.om, k.w, M].every(Number.isFinite)) return null;
+  const jupiter = 34.39644051 + 3034.74612775 * ((jd - 2451545.0) / 36525);
+  const ahead = ((((k.om + k.w + M - jupiter) % 360) + 540) % 360) - 180;
+  if (ahead > 20 && ahead < 120) return 'L4';
+  if (ahead < -20 && ahead > -120) return 'L5';
+  return null;
+}
