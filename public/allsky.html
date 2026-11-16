@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en" data-band="D3">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Muninn — the whole sky in SPHEREx</title>
+<meta name="description" content="The whole sky as NASA SPHEREx saw it in its first data release: turn it, zoom in, walk through all 102 wavelengths, and open the real frames of any point.">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#171721">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23171721'/%3E%3Ccircle cx='11' cy='13' r='2.5' fill='%23e6f0f7'/%3E%3Ccircle cx='21' cy='19' r='2.5' fill='%2356c1f5'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://irsa.ipac.caltech.edu" crossorigin>
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/redesign.css">
+<link rel="stylesheet" href="css/allsky.css">
+</head>
+<body>
+
+<header class="bar">
+  <a class="bar__brand" href="./">Muninn</a>
+  <h1 class="bar__title" data-i18n="allsky.title"></h1>
+  <nav class="bar__acts">
+    <a class="bar__link" id="to-tool" href="./" data-i18n="allsky.tool"></a>
+    <button type="button" class="bar__lang" id="lang" data-i18n-label="lang.switch" data-i18n-title="lang.switch"></button>
+  </nav>
+</header>
+
+<main class="as-sky" id="sky">
+  <canvas class="as-sky__canvas" id="canvas" tabindex="0" role="img" data-i18n-label="allsky.canvas"></canvas>
+  <!-- The ready fields, as rings on the sky; placed by allsky.js on every redraw. -->
+  <div class="as-sky__rings" id="rings"></div>
+  <div class="as-sky__reticle" id="reticle" aria-hidden="true"></div>
+
+  <form class="as-find" id="find" role="search" autocomplete="off">
+    <label class="vh" for="find-input" data-i18n="allsky.find"></label>
+    <input class="as-find__input" id="find-input" type="search" spellcheck="false" data-i18n-ph="allsky.findPh">
+    <button class="as-find__go" type="submit" data-i18n="allsky.findGo"></button>
+    <p class="as-find__note" id="find-note" role="status"></p>
+  </form>
+
+  <p class="as-sky__hint" id="hint" data-i18n="allsky.hint"></p>
+  <p class="as-sky__nogl" id="nogl" hidden data-i18n="allsky.noGl"></p>
+
+  <div class="as-zoom">
+    <button type="button" class="as-zoom__key" id="zoom-in" data-i18n-label="allsky.zoomIn" data-i18n-title="allsky.zoomIn">+</button>
+    <button type="button" class="as-zoom__key" id="zoom-out" data-i18n-label="allsky.zoomOut" data-i18n-title="allsky.zoomOut">−</button>
+  </div>
+
+  <section class="as-dock" aria-labelledby="dock-lambda">
+    <div class="as-dock__row">
+      <fieldset class="as-bands" id="bands">
+        <legend class="vh" data-i18n="allsky.lambda"></legend>
+        <label class="as-band as-band--colour" data-i18n-title="allsky.colourWhen"><input type="radio" name="view" value="colour" checked><span data-i18n="allsky.colour"></span></label>
+        <label class="as-band" data-band="D1"><input type="radio" name="view" value="1"><span>D1</span></label>
+        <label class="as-band" data-band="D2"><input type="radio" name="view" value="2"><span>D2</span></label>
+        <label class="as-band" data-band="D3"><input type="radio" name="view" value="3"><span>D3</span></label>
+        <label class="as-band" data-band="D4"><input type="radio" name="view" value="4"><span>D4</span></label>
+        <label class="as-band" data-band="D5"><input type="radio" name="view" value="5"><span>D5</span></label>
+        <label class="as-band" data-band="D6"><input type="radio" name="view" value="6"><span>D6</span></label>
+      </fieldset>
+      <label class="as-toggle" data-i18n-title="allsky.gridWhen"><input type="checkbox" id="grid"><span data-i18n="allsky.grid"></span></label>
+      <button type="button" class="as-open" id="open" data-i18n-title="allsky.openWhen" data-i18n="allsky.open"></button>
+    </div>
+    <div class="as-dock__row as-dock__row--lambda">
+      <label class="as-wave" for="lambda">
+        <span class="as-wave__name" id="dock-lambda" data-i18n="allsky.lambda"></span>
+        <input class="as-wave__range" id="lambda" type="range" min="0" max="99" step="1" value="42">
+      </label>
+      <output class="as-wave__value num" id="lambda-value" for="lambda"></output>
+    </div>
+    <div class="as-dock__row as-dock__row--read">
+      <p class="as-read num" id="read" aria-live="off"></p>
+      <p class="as-read as-read--status" id="status" role="status"></p>
+      <p class="as-read as-read--credit" data-i18n="allsky.credit"></p>
+    </div>
+  </section>
+</main>
+
+<script type="module" src="js/allsky.js"></script>
+</body>
+</html>

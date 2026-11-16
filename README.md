@@ -10,6 +10,9 @@ megabytes at a time.
 - **Talk** (ten slides and an appendix; slide 2 reads real frames as you watch):
   <https://muninn.mydevbox.xyz/talk.html> · PDF [English](https://muninn.mydevbox.xyz/talk.pdf),
   [Russian](https://muninn.mydevbox.xyz/talk.ru.pdf)
+- **The whole sky:** <https://muninn.mydevbox.xyz/allsky.html> — IRSA's SPHEREx DR1 all-sky cube
+  (HiPS, 102 wavelengths) drawn in WebGL: turn and zoom the sky, walk through the wavelengths, see it
+  in colour from three real channels, and open the real frames of any point in the tool.
 - **VR:** press *Enter VR* on the sky or in a field in a headset's browser (Meta Quest 3 first, any
   WebXR headset), or open <https://muninn.mydevbox.xyz/vr.html> on a computer to look round with the mouse.
 - **Run it:** `node server.js`, then open <http://127.0.0.1:5173> (Node 18+, nothing to install).
