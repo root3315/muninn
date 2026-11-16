@@ -735,10 +735,11 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     }
     // Without its Allsky a tile is still drawn, at levels that pass IRSA's stretch through.
     const passThrough = frames.map(() => ({ levels: { lo: 0.06, hi: 0.9 } }));
-    // A tile's floor, from its Allsky's, set against the tiles' own grain.
-    const tileLevels = skyReady
-      ? sky.imgs.map((i) => ({ levels: { lo: Math.min(i.levels.median + i.levels.tileSigma * FLOOR_SIGMAS, i.levels.hi - 0.05), hi: i.levels.hi } }))
-      : passThrough;
+    // A tile is set at its Allsky's own levels, so the sharper picture lays
+    // over the coarse one without a seam: the same sky must not change
+    // brightness or colour as it sharpens. (A raised floor for the tiles hid
+    // their grain but made each one a darker, greener square.)
+    const tileLevels = skyReady ? sky.imgs : passThrough;
 
     const target = orderFor(state.fov / cam.short);
     if (target === null) return out;

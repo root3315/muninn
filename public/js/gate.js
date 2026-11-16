@@ -279,7 +279,7 @@ export class Gate {
    * @param {HTMLCanvasElement} canvas
    * @param {{onPick: (o: object) => void, onName: (o: object|null) => void}} hooks
    */
-  constructor(canvas, { onPick, onName, onSurvey = () => {}, onStepOut = null }) {
+  constructor(canvas, { onPick, onName, onSurvey = () => {}, onStepOut = null, onStepIn = null }) {
     this.canvas = canvas;
     // The band on the GPU, under this canvas, where WebGL 2 can be had; then
     // this canvas is clear between the stars so the band shows through it.
@@ -300,6 +300,8 @@ export class Gate {
     this.onSurvey = onSurvey;
     /** Called when the sky is zoomed out past its widest: the way out into space. */
     this.onStepOut = onStepOut;
+    /** Called when the sky is zoomed in past its narrowest: SPHEREx's own detail. */
+    this.onStepIn = onStepIn;
     this.outward = 0;
     /** The surveyed band, once it has arrived: `{ pixels, W, H }`. */
     this.survey = null;
@@ -1344,8 +1346,19 @@ export class Gate {
         const span = Math.hypot(a[0] - b[0], a[1] - b[1]);
         if (span > 8 && this.pinch.span > 8) {
           // Fingers apart is a narrower field: the sky comes toward you.
-          this.cam.fov = Math.max(FOV_MIN, Math.min(FOV_MAX,
-            (this.pinch.fov * this.pinch.span) / span));
+          const want = (this.pinch.fov * this.pinch.span) / span;
+          // Pinched past either end: out into space, or in to the detail.
+          if (want > FOV_MAX * 1.25 && this.onStepOut) {
+            this.pinch = null;
+            this.onStepOut({ ra: this.cam.ra, dec: this.cam.dec, fov: FOV_MAX });
+            return;
+          }
+          if (want < FOV_MIN * 0.75 && this.onStepIn) {
+            this.pinch = null;
+            this.onStepIn({ ra: this.cam.ra, dec: this.cam.dec, fov: FOV_MIN });
+            return;
+          }
+          this.cam.fov = Math.max(FOV_MIN, Math.min(FOV_MAX, want));
           this.draw();
         }
         return;
@@ -1397,6 +1410,14 @@ export class Gate {
         if (this.outward > 400) {
           this.outward = 0;
           this.onStepOut({ ra: this.cam.ra, dec: this.cam.dec, fov: this.cam.fov });
+        }
+        return;
+      }
+      if (this.onStepIn && e.deltaY < 0 && this.cam.fov <= FOV_MIN + 1e-6) {
+        this.outward += e.deltaY;
+        if (this.outward < -400) {
+          this.outward = 0;
+          this.onStepIn({ ra: this.cam.ra, dec: this.cam.dec, fov: this.cam.fov });
         }
         return;
       }

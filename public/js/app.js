@@ -13,7 +13,7 @@
  * the mission was built around is something you should be able to see.
  */
 
-import { openWorld, wireScale } from './world.js';
+import { openWorld, wireWorld } from './world.js';
 import { t, tIn, setLanguage, getLanguage, applyTranslations, fmt, fmtDate, fmtDay, fmtTime } from './i18n.js';
 import { skySigma, stackDepth, shortfall, limitAB, PLANET_NINE_V } from './depth.js';
 import { scoreSectors, standouts, SECTOR_COUNT } from './sectors.js';
@@ -4774,11 +4774,22 @@ function showSkyCredit() {
 const gateLook = () => ({ ra: gate?.cam?.ra ?? 266, dec: gate?.cam?.dec ?? -12, fov: gate?.cam?.fov ?? 78 });
 
 // The whole sky and the flight open over this page, not as pages of their own.
-wireScale({ look: gateLook, lang: getLanguage });
+wireWorld({
+  look: gateLook,
+  lang: getLanguage,
+  // Back from a layer, facing where it faced.
+  face: ({ ra, dec }) => {
+    if (!gate || !Number.isFinite(ra) || !Number.isFinite(dec)) return;
+    gate.cam.ra = ra;
+    gate.cam.dec = dec;
+    gate.draw();
+  },
+});
 
 async function buildGate() {
   gate = new Gate($('gate-sky'), {
     onStepOut: (look) => openWorld('fly', look, getLanguage()),
+    onStepIn: (look) => openWorld('allsky', look, getLanguage()),
     // A press shows what was pressed. The flight starts from the card.
     onPick: (hit) => { gate.select(hit); showCard(hit); },
     onName: nameOnSky,

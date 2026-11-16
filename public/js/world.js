@@ -56,27 +56,29 @@ export function closeWorld() {
 
 export const worldOpen = () => Boolean(layer && !layer.hidden);
 
-/** The front page's scale keys; `look` and `lang` say how to open a layer. */
+/** How the front page opens a layer, and what it does when one hands back a direction. */
 let lookNow = () => null;
 let langNow = () => null;
-export function wireScale({ look, lang }) {
+let faceNow = () => {};
+export function wireWorld({ look, lang, face }) {
   lookNow = look;
   langNow = lang;
-  for (const key of document.querySelectorAll('#scale .scale__key')) {
-    key.setAttribute('aria-pressed', String(key.dataset.scale === 'sky'));
-    key.addEventListener('click', () => goTo(key.dataset.scale));
-  }
+  faceNow = face;
 }
 
-function goTo(scale) {
-  if (scale === 'sky') closeWorld();
-  else openWorld(scale, lookNow(), langNow());
+function goTo(scale, look) {
+  if (scale === 'sky') {
+    if (look) faceNow(look);
+    closeWorld();
+  } else {
+    openWorld(scale, look ?? lookNow(), langNow());
+  }
 }
 
 addEventListener('message', (e) => {
   if (e.origin !== location.origin || !e.data || typeof e.data !== 'object') return;
   if (e.data.type === 'muninn:close') closeWorld();
-  if (e.data.type === 'muninn:scale' && ['sky', 'allsky', 'fly'].includes(e.data.scale)) goTo(e.data.scale);
+  if (e.data.type === 'muninn:scale' && ['sky', 'allsky', 'fly'].includes(e.data.scale)) goTo(e.data.scale, e.data.look);
   if (e.data.type === 'muninn:open' && typeof e.data.hash === 'string' && e.data.hash.startsWith('#')) {
     closeWorld();
     location.hash = e.data.hash;

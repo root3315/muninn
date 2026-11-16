@@ -14,7 +14,7 @@
 import { setLanguage, getLanguage, t, applyTranslations, fmt } from './i18n.js';
 import { parseCoordinates, resolveSesame, formatRA, formatDec } from './catalog.js';
 import { encodeHash } from './hash.js';
-import { openInTool, wireScale } from './embed.js';
+import { openInTool, embedded, goTo } from './embed.js';
 import { createSkyView, FOV_MIN, FOV_MAX } from './allsky/view.js';
 import { galacticOf } from './allsky/maps.js';
 import {
@@ -216,6 +216,11 @@ function dive(at, fov = DIVE_FOV) {
 function zoomAt(factor, px, py) {
   if (inMap()) return;
   const s = view.state;
+  // Opened from the front page and zoomed out past its widest: back to it.
+  if (embedded && factor > 1 && s.fov >= FOV_MAX - 1e-6) {
+    goTo('sky', { ra: s.ra, dec: s.dec });
+    return;
+  }
   const before = view.skyAt(px, py);
   view.set({ fov: s.fov * factor });
   const after = view.skyAt(px, py);
@@ -579,4 +584,3 @@ window.addEventListener('hashchange', () => {
   }
 });
 
-wireScale('allsky');

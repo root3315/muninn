@@ -24,8 +24,7 @@ in float aIr;
 uniform bool uIR;
 uniform float uFocalPx;
 uniform float uMaxPoint;
-uniform int uSkip;
-uniform int uSkip2;
+uniform int uSkip[12];
 uniform vec4 uNear;
 uniform vec3 uEye;
 uniform vec3 uR;
@@ -38,12 +37,16 @@ out vec3 vCol;
 out float vAlpha;
 out float vDisk;
 const float R_SUN_PC = ${695700 / 3.0856775814913673e13};
+bool skipped(int id) {
+  for (int k = 0; k < 12; k++) if (uSkip[k] == id) return true;
+  return false;
+}
 void main() {
   vec3 rel = aPos - uEye;
   float d = length(rel);
   vec3 c = vec3(dot(rel, uR), dot(rel, uU), dot(rel, uF));
   // The near star is drawn as a sphere instead, from exact coordinates.
-  if (c.z < 1e-6 || d < 1e-9 || gl_VertexID == uSkip || gl_VertexID == uSkip2) {
+  if (c.z <= 1e-3 * d || d < 1e-16 || skipped(gl_VertexID)) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     gl_PointSize = 0.0;
     return;
@@ -224,8 +227,11 @@ export function createSpace(canvas, { stars, sky }) {
 
   const vao = gl.createVertexArray();
   gl.bindVertexArray(vao);
+  let posBuffer = null;
   for (const [i, data, size] of [[0, stars.pos, 3], [1, stars.mag, 1], [2, stars.col, 3], [3, stars.rad, 1], [4, stars.ir, 1]]) {
-    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    const buf = gl.createBuffer();
+    if (i === 0) posBuffer = buf;
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf);
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
     gl.enableVertexAttribArray(i);
     gl.vertexAttribPointer(i, size, gl.FLOAT, false, 0, 0);
@@ -266,6 +272,11 @@ export function createSpace(canvas, { stars, sky }) {
      * closest to, { index, pos, rpc, col }, drawn as a sphere. Returns the
      * projection, for labels.
      */
+    /** New positions for stars from `first` on (the bodies that move: the planets and the Moon). */
+    movePositions(first, xyz) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, posBuffer);
+      gl.bufferSubData(gl.ARRAY_BUFFER, first * 12, xyz);
+    },
     /** Lines to draw every frame: [{ data: Float32Array of segment ends, ink: [r, g, b, a], key }]. */
     setLines(groups) {
       lineGroups = groups.map((g) => {
@@ -316,10 +327,11 @@ export function createSpace(canvas, { stars, sky }) {
       gl.uniform1f(starProg.u.Px, dpr);
       gl.uniform1f(starProg.u.FocalPx, (fy * h) / 2);
       gl.uniform1f(starProg.u.MaxPoint, maxPoint);
-      const nears = (Array.isArray(near) ? near : near ? [near] : []).slice(0, 2);
+      const nears = (Array.isArray(near) ? near : near ? [near] : []).slice(0, 12);
       // The spheres are drawn exactly; their points are left out of the star pass.
-      gl.uniform1i(starProg.u.Skip, nears[0]?.index ?? -1);
-      gl.uniform1i(starProg.u.Skip2, nears[1]?.index ?? -1);
+      const skip = new Int32Array(12).fill(-1);
+      nears.forEach((n, k) => { skip[k] = n.index; });
+      gl.uniform1iv(gl.getUniformLocation(starProg.program, 'uSkip[0]'), skip);
       const front = nears[0];
       gl.uniform4fv(starProg.u.Near, front
         ? [front.pos[0] - eye[0], front.pos[1] - eye[1], front.pos[2] - eye[2], front.rpc]
@@ -376,7 +388,9 @@ export function createSpace(canvas, { stars, sky }) {
 export function screenOf(p, { eye, R, U, F }, { focal, w, h, dpr }) {
   const rel = [p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]];
   const z = rel[0] * F[0] + rel[1] * F[1] + rel[2] * F[2];
-  if (z <= 1e-6) return null;
+  // In front of the eye at all: a body beside the camera is millionths of a
+  // parsec away, so no fixed distance can be the threshold.
+  if (z <= 1e-3 * Math.hypot(...rel)) return null;
   const x = (rel[0] * R[0] + rel[1] * R[1] + rel[2] * R[2]) / z * focal[0];
   const y = (rel[0] * U[0] + rel[1] * U[1] + rel[2] * U[2]) / z * focal[1];
   if (Math.abs(x) > 1.2 || Math.abs(y) > 1.2) return null;
