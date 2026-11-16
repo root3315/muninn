@@ -138,15 +138,63 @@ uniform float uRadius;
 uniform vec3 uCol;
 uniform bool uLit;
 uniform vec3 uSun;
+// Rings, in units of the body's radius: inner edge, outer edge, the gap's
+// inner and outer edges (all 0 for none), and the ring plane's pole.
+uniform vec4 uRing;
+uniform vec3 uPole;
 out vec4 outColour;
+
+/** Whether a point is in the body's shadow: the line from it to the Sun passes through the body. */
+bool shadowed(vec3 p) {
+  vec3 toSun = normalize(uSun - p);
+  vec3 c = uCentre - p;
+  float t = dot(c, toSun);
+  if (t <= 0.0) return false;
+  return dot(c, c) - t * t < uRadius * uRadius;
+}
+
+/** The rings seen along v: their colour and cover, and how far away; cover 0 where there are none. */
+vec4 rings(vec3 v, out float dist) {
+  dist = 1e30;
+  if (uRing.y <= 0.0) return vec4(0.0);
+  float den = dot(v, uPole);
+  if (abs(den) < 1e-9) return vec4(0.0);
+  float t = dot(uCentre, uPole) / den;
+  if (t <= 0.0) return vec4(0.0);
+  vec3 p = v * t;
+  float d = length(p - uCentre) / uRadius;
+  if (d < uRing.x || d > uRing.y || (d > uRing.z && d < uRing.w)) return vec4(0.0);
+  dist = t;
+  // Denser in the middle (the B ring), thinner at the edges; the side the
+  // Sun lights is brighter than the side away from it.
+  float dense = smoothstep(uRing.x, uRing.x + 0.25, d) * (d < uRing.z ? 0.95 : 0.7) * (1.0 - smoothstep(uRing.y - 0.08, uRing.y, d));
+  float lit = abs(dot(normalize(uSun - p), uPole)) * 0.75 + 0.25;
+  if (shadowed(p)) lit *= 0.12;
+  return vec4(uCol * 1.05 * lit, dense);
+}
+
 void main() {
   vec2 ndc = gl_FragCoord.xy / uSize * 2.0 - 1.0;
   vec3 v = normalize(uF + (ndc.x / uFocal.x) * uR + (ndc.y / uFocal.y) * uU);
   float along = dot(v, uCentre);
-  if (along <= 0.0) discard;
+  float ringDist;
+  vec4 ring = rings(v, ringDist);
+  if (along <= 0.0 && ring.a <= 0.0) discard;
   float miss2 = dot(uCentre, uCentre) - along * along;
   float r2 = uRadius * uRadius;
-  if (miss2 < r2) {
+  float hitDist = miss2 < r2 && along > 0.0 ? along - sqrt(r2 - miss2) : 1e30;
+  // Rings in front of the body are drawn over it; behind it, hidden by it.
+  if (ring.a > 0.0 && ringDist < hitDist) {
+    vec3 under = vec3(0.0);
+    if (hitDist < 1e29) {
+      vec3 hit = v * hitDist;
+      vec3 n = (hit - uCentre) / uRadius;
+      under = uCol * (0.02 + 0.98 * max(0.0, dot(n, normalize(uSun - hit))));
+    }
+    outColour = vec4(mix(under, ring.rgb, ring.a), hitDist < 1e29 ? 1.0 : ring.a);
+    return;
+  }
+  if (miss2 < r2 && along > 0.0) {
     if (uLit) {
       // A planet or the Moon: lit by the Sun from where the Sun is, so its
       // phase is the phase it has from here. A little ambient keeps the night
@@ -154,6 +202,18 @@ void main() {
       vec3 hit = v * (along - sqrt(r2 - miss2));
       vec3 n = (hit - uCentre) / uRadius;
       float day = max(0.0, dot(n, normalize(uSun - hit)));
+      // The rings' shadow on the body.
+      if (uRing.y > 0.0) {
+        vec3 toSun = normalize(uSun - hit);
+        float den = dot(toSun, uPole);
+        if (abs(den) > 1e-6) {
+          float t = dot(uCentre - hit, uPole) / den;
+          if (t > 0.0) {
+            float d = length(hit + toSun * t - uCentre) / uRadius;
+            if (d > uRing.x && d < uRing.y && !(d > uRing.z && d < uRing.w)) day *= 0.35;
+          }
+        }
+      }
       outColour = vec4(uCol * (0.02 + 0.98 * day), 1.0);
     } else {
       // A star: limb darkening, the edge dimmer than the middle.
@@ -161,6 +221,10 @@ void main() {
       outColour = vec4(uCol * (0.4 + 0.6 * mu), 1.0);
     }
   } else if (uLit) {
+    if (ring.a > 0.0) {
+      outColour = vec4(ring.rgb * ring.a, ring.a);
+      return;
+    }
     discard;
   } else {
     // A star's light scattered in the eye: added, not drawn over. Its reach
@@ -407,6 +471,8 @@ export function createSpace(canvas, { stars, sky }) {
           gl.uniform1f(nearProg.u.Radius, n.rpc);
           gl.uniform3fv(nearProg.u.Col, n.col);
           gl.uniform1i(nearProg.u.Lit, n.lit ? 1 : 0);
+          gl.uniform4fv(nearProg.u.Ring, n.ring ?? [0, 0, 0, 0]);
+          gl.uniform3fv(nearProg.u.Pole, n.pole ?? [0, 0, 1]);
           gl.uniform3fv(nearProg.u.Sun, sunFrom(n));
           gl.drawArrays(gl.TRIANGLES, 0, 3);
         }

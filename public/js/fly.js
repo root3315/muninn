@@ -159,6 +159,7 @@ async function loadStars() {
     lit[i] = 1;
   });
   stars.lit = lit;
+  stars.ringed = stored + 2 + bodies.findIndex((b) => b.key === 'saturn');
   const indexOfHip = new Map();
   for (let i = 0; i < stored; i++) indexOfHip.set(hipOf[i], i);
   const named = info.named.map((s) => ({
@@ -313,10 +314,24 @@ function flyTo(s) {
     : s.planet ? radiusPc(s) * STOP_RADII
       : Math.max(radiusPc(s) * STOP_RADII, 5 * AU_PC);
   const dir = norm(sub(to, cam.eye));
-  const end = away > stop ? add(to, dir, -stop) : cam.eye;
+  let end = away > stop ? add(to, dir, -stop) : cam.eye;
+  // A planet or the Moon is approached from sixty degrees off the Sun's side:
+  // its day side, its terminator and a sliver of night all show.
+  let offset = null;
+  if (s.planet) {
+    const toSun = norm(sub([0, 0, 0], to));
+    let across = cross(toSun, [0, 0, 1]);
+    if (len(across) < 1e-6) across = [1, 0, 0];
+    across = norm(across);
+    offset = norm(add(toSun.map((c) => c * 0.5), across, 0.866)).map((c) => c * stop);
+    // Saturn a little from above its rings, so they open out.
+    if (s.key === 'saturn') offset = norm(add(offset, SATURN_RINGS.pole, 0.45 * stop)).map((c) => c * stop * 1.6);
+    end = add(to, offset);
+  }
   if (s.key === 'wise0855') showReach();
   autopilot = {
     home: s.key === 'earth',
+    offset,
     // A planet moves while the camera flies to it: the end is followed.
     body: s.planet ? s.index : -1,
     from: cam.eye, to: end, look: to, stop, t0: performance.now(),
@@ -336,8 +351,12 @@ function steer(dt) {
   }
   if (autopilot && autopilot.body >= 0) {
     const to = posOf(autopilot.body);
-    const dir = norm(sub(to, autopilot.from));
-    autopilot.to = add(to, dir, -autopilot.stop);
+    if (autopilot.offset) {
+      autopilot.to = add(to, autopilot.offset);
+    } else {
+      const dir = norm(sub(to, autopilot.from));
+      autopilot.to = add(to, dir, -autopilot.stop);
+    }
     autopilot.look = to;
   }
   if (autopilot) {
@@ -389,6 +408,22 @@ function steer(dt) {
  * System, a planet from near it), and always the two largest, up to twelve.
  * The rest are too small to have a size on the screen and are points.
  */
+/**
+ * Saturn's rings, in units of its mean radius (58,232 km): the C ring's inner
+ * edge at 74,500 km to the A ring's outer edge at 136,780 km, with the
+ * Cassini division, 117,580–122,170 km, as a gap; in the plane of its
+ * equator, whose pole is at RA 40.589°, Dec 83.537° (IAU).
+ */
+const SATURN_RINGS = (() => {
+  const r = 58232;
+  const ra = 40.589 * Math.PI / 180;
+  const dec = 83.537 * Math.PI / 180;
+  return {
+    ring: [74500 / r, 136780 / r, 117580 / r, 122170 / r],
+    pole: [Math.cos(dec) * Math.cos(ra), Math.cos(dec) * Math.sin(ra), Math.sin(dec)],
+  };
+})();
+
 const TOP = 12;
 const topK = new Float64Array(TOP);
 const topI = new Int32Array(TOP);
@@ -451,6 +486,7 @@ function nearestStar() {
     rpc: stars.rad[i] * R_SUN_PC,
     col: [stars.col[i * 3], stars.col[i * 3 + 1], stars.col[i * 3 + 2]],
     lit: Boolean(stars.lit[i]),
+    ...(i === stars.ringed ? SATURN_RINGS : {}),
   }));
 }
 
@@ -1097,6 +1133,13 @@ function placeExoLabels() {
     if (d > 60) continue;
     const at = screenOf(sys.center, b, proj);
     if (!at) continue;
+    // Behind a nearer disc (a planet beside the camera): hidden by it.
+    if ((lastNear ?? []).some((n) => {
+      const dn = len(sub(n.pos, cam.eye));
+      if (dn >= d) return false;
+      const c = screenOf(n.pos, b, proj);
+      return c && Math.hypot(c.x - at.x, c.y - at.y) < (n.rpc / dn) * proj.focal[1] * (proj.h / proj.dpr) / 2 + 8;
+    })) continue;
     near.push({ sys, d, at });
   }
   near.sort((x, y) => x.d - y.d);
