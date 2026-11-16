@@ -263,3 +263,28 @@ export function motionPath(posAt, { dirOf, axis, coneRad, n = 33 }) {
     shortened: fLo > -1 || fHi < 1,
   };
 }
+
+/**
+ * A Gaia DR3 star's distance, as both depth views take it: the geometric
+ * distance (Bailer-Jones et al. 2021, `bj` Map id → { r, lo, hi } in pc)
+ * where it is itself known to 20 % (for a faint star it is mostly the
+ * prior, and that is not a measurement), else the parallax measured to 20 %.
+ * Returns `{ pc, lo, hi, src }`, src 'bj', 'plx' or null with pc null.
+ */
+export function starDistance(row, bj = null) {
+  const g0 = bj?.get(row.id);
+  const geom = g0 && (g0.hi - g0.lo) / (2 * g0.r) <= 0.2 ? g0 : null;
+  const plx = geom ? null : parallaxDistancePc(row.plx, row.plxErr);
+  return {
+    pc: geom?.r ?? plx?.pc ?? null,
+    lo: geom?.lo ?? plx?.lo ?? null,
+    hi: geom?.hi ?? plx?.hi ?? null,
+    src: geom ? 'bj' : plx ? 'plx' : null,
+  };
+}
+
+/** A galaxy's comoving distance from its redshift, `{ mpc, au }`, both null below MIN_REDSHIFT. */
+export function galaxyDistance(z) {
+  const mpc = z >= MIN_REDSHIFT ? redshiftDistanceMpc(z) : null;
+  return { mpc, au: mpc ? mpc * 1e6 * AU_PER_PC : null };
+}

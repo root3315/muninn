@@ -1668,6 +1668,7 @@ function syncScrub() {
   fillSlots();
   // The stack's line carries the season's own numbers, which change with it.
   if (sky?.mode === 'stack') refreshStack();
+  inDepth?.update();
   writeHash();
 }
 
@@ -1846,6 +1847,8 @@ function startPlayback() {
  * choice alone.
  */
 function selectMode(mode) {
+  // The depth view holds one visit too: a step changes its plate, not the mode.
+  if (mode === 'single' && inDepthChosen()) return;
   const radio = document.querySelector(`input[name="mode"][value="${mode}"]`);
   if (radio && !radio.checked) radio.checked = true;
   if (sky.mode !== mode) applyMode(mode);
@@ -2169,6 +2172,7 @@ async function refreshKnownObjects() {
 /** An answer came in, or failed to: everything that quotes SkyBoT says so again. */
 function catalogChanged() {
   reportKnownObjects();
+  inDepth?.update();
   nameMarks();
   renderMarks();
   renderHunt();
@@ -2763,12 +2767,12 @@ function renderMarks() {
       live: () => sky.marks.includes(m),
       onChange: renderMarks,
       showInSpace,
+      visits: (sky.visits ?? []).map((v) => v.frame.mjd),
+      current: sky.current?.frame.mjd ?? null,
     });
     body.append(...verdictNodes, ...[
       group('mark.kBody', ...bodyLines),
       group('mark.kWho', ...whoNodes),
-      visits: (sky.visits ?? []).map((v) => v.frame.mjd),
-      current: sky.current?.frame.mjd ?? null,
       group('mark.kLight', ...lightNodes),
       group('mark.kWhere', pos),
     ].filter(Boolean));
@@ -5016,7 +5020,7 @@ function pickInField(row) {
 
 /* --------------------------------------------------------------------- wiring */
 
-const MODE_HINT = { blink: 'mode.blinkHint', wipe: 'mode.wipeHint', difference: 'mode.diffHint', single: 'mode.singleHint' };
+const MODE_HINT = { blink: 'mode.blinkHint', wipe: 'mode.wipeHint', difference: 'mode.diffHint', single: 'mode.singleHint', depth: 'mode.depthHint' };
 
 /**
  * The line under the run for a mode. The stack's says what this season adds
@@ -5024,6 +5028,8 @@ const MODE_HINT = { blink: 'mode.blinkHint', wipe: 'mode.wipeHint', difference: 
  * band plus what averaging those visits buys.
  */
 function modeHint(mode) {
+  // The depth view leaves the plate on one visit: the sky says "single", the line says depth.
+  if (mode === 'single' && inDepthChosen()) return t(MODE_HINT.depth);
   if (mode === 'wipe' && state.reference) return referenceHint();
   if (mode !== 'stack') return t(MODE_HINT[mode] ?? MODE_HINT.blink);
   const band = sky?.current?.frame.band ?? '';
@@ -5523,8 +5529,38 @@ function gaiaHint() {
   return `${head}${cut} ${t('ref.gaiaUse')}`;
 }
 
+/*
+ * In depth: the visit on the plate, laid out in 3-D (indepth.js). The plate
+ * under it holds that one visit still, as "single" does. Its module, and
+ * three.js with it, is fetched the first time the mode is chosen, so the
+ * page does not carry them for everyone.
+ */
+let inDepth = null;
+let inDepthModule = null;
+function inDepthChosen() {
+  return document.querySelector('input[name="mode"][value="depth"]')?.checked === true;
+}
+
+function showInDepth(on) {
+  if (!on) { inDepth?.unmount(); inDepth = null; return; }
+  if (inDepth) { inDepth.update(); return; }
+  inDepthModule ??= import('./indepth.js');
+  inDepthModule.then((m) => {
+    if (inDepth || !inDepthChosen()) return;
+    inDepth = m.mountInDepth($('plate'), {
+      sky,
+      field: () => ({ ra: state.ra, dec: state.dec, target: state.target, key: presetAt(state.ra, state.dec)?.key ?? null }),
+    });
+  }).catch((err) => {
+    console.error(err);
+    inDepthModule = null;
+    $('mode-hint').textContent = t('indepth.loadFailed');
+  });
+}
+
 function applyMode(mode) {
-  sky.setMode(mode);
+  sky.setMode(mode === 'depth' ? 'single' : mode);
+  showInDepth(mode === 'depth');
   // A minus B is taken between two SPHEREx visits only: AllWISE or the Gaia
   // model as B would have been named in the picker while a visit was
   // subtracted. Difference goes back to a visit as B, and the picker says so.
@@ -5886,6 +5922,7 @@ function relabel() {
     showCard(cardHit.kind === 'field' && cardHit.key ? { ...cardHit, label: t(`preset.${cardHit.key}`) } : cardHit);
   }
   if (sky) { labelSky(); sky.draw(); }
+  inDepth?.relabel();
   readRunPaint();
   labelTheme();
   const otherLanguage = getLanguage() === 'en' ? 'RU' : 'EN';
