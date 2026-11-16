@@ -295,12 +295,26 @@ export class Gate {
     // the catalogue is then only for naming and pointing, not drawn.
     this.skySurvey = createSurveySky(canvas, {
       onFirstSky: () => {
-        this.survey = { cube: true };
-        this.surveyAt = performance.now();
+        this.surveyCube = true;
+        this.cubeAt = performance.now();
+        this.canvas.closest('.gate')?.classList.add('gate--cube');
         this.onSurvey();
       },
     });
-    this.bandLayer = this.skySurvey ? null : createBandLayer(canvas);
+    // Under it, the Milky Way as one picture (430 KB, drawn by the GPU): there
+    // from the first second, while SPHEREx's own sky is still arriving, so the
+    // page never opens on black.
+    this.bandLayer = createBandLayer(canvas);
+    // The picture waits, unseen, for the real Milky Way; the opening poster
+    // stands until then, and nothing invented is shown in between.
+    this.canvas.previousElementSibling?.classList.add('gate__band--wait');
+    if (this.skySurvey && this.bandLayer) {
+      // The picture under the survey's layer, and the survey's layer fading in over it.
+      const band = this.canvas.previousElementSibling;
+      const survey = band.previousElementSibling;
+      survey.before(band);
+      survey.classList.add('gate__band--survey');
+    }
     this.fovMin = this.skySurvey ? FOV_MIN_SURVEY : FOV_MIN;
     this.ctx = canvas.getContext('2d', { alpha: Boolean(this.skySurvey || this.bandLayer) });
     this.onPick = onPick;
@@ -604,6 +618,7 @@ export class Gate {
       }
       this.surveyAt = performance.now();
       this.onSurvey();
+      this.canvas.parentElement?.querySelector('.gate__band--wait')?.classList.remove('gate__band--wait');
       const step = () => {
         this.draw();
         if (this.surveyShare() < 1) requestAnimationFrame(step);
@@ -822,7 +837,12 @@ export class Gate {
     if (this.skySurvey) {
       ctx.clearRect(0, 0, width, height);
       this.skySurvey.draw({ ra: this.cam.ra, dec: this.cam.dec, fov: f ? f.fov : this.cam.fov, width: this.box.cssW, height: this.box.cssH });
-      if (!f) {
+      // Until the cube is up, the picture underneath stands in for it.
+      if (!this.surveyCube && this.bandLayer) {
+        this.bandLayer.draw({ basis: this.basis, focal, width, height, well: this.paint.wellRgb, mix: this.surveyShare() });
+      }
+      // The rings wait for the real sky, then come in over it.
+      if (!f && this.surveyCube) {
         this.drawTargets(ctx);
         this.drawSelected(ctx);
         this.drawHit(ctx);
@@ -1647,6 +1667,6 @@ export class Gate {
     if (!this.haze) this.buildHaze(this.quality.haze);
     if (!this.glows) this.buildGlows();
     this.draw();
-    if (!this.surveyAsked && !this.skySurvey) this.loadSurvey();
+    if (!this.surveyAsked) this.loadSurvey();
   }
 }

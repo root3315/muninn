@@ -4824,8 +4824,12 @@ async function buildGate() {
       kind: 'field', key: proven.key, ra: proven.ra, dec: proven.dec, fov: proven.fov,
       band: proven.band ?? 'all', label: t(`preset.${proven.key}`),
     };
-    showCard(hit);
     provenCard = hit;
+    // The first seconds belong to the sky; the proof comes in after them,
+    // unless the visitor has already picked something.
+    setTimeout(() => {
+      if (!$('gate').hidden && !cardHit && provenCard === hit && !document.querySelector('.gate-card:not([hidden])')) showCard(hit);
+    }, 5000);
   }
 }
 

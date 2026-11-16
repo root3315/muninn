@@ -25,6 +25,7 @@
 <!-- Which fields ship with their frame lists: the first question a link to a
      field asks, so it is on its way while the page is still being read. -->
 <link rel="preload" href="data/fields/index.json" as="fetch" crossorigin>
+<link rel="preload" href="img/opening.jpg" as="image" fetchpriority="high">
 <link rel="stylesheet" href="css/fonts.css">
 <!-- Every module, named up front: found one import at a time they arrive
      three round trips deep. -->
@@ -101,6 +102,8 @@
   it for the moment it takes to arrive, and the fine print says which is up.
 -->
 <section class="gate" id="gate" aria-label="The sky" data-i18n-label="aria.gate">
+  <!-- The opening view as one picture (the real survey, 70 KB): on screen before any script has run. -->
+  <div class="gate__sky gate__band gate__intro" aria-hidden="true"></div>
   <canvas class="gate__sky" id="gate-sky" aria-hidden="true"></canvas>
   <p class="scale-hint" data-i18n="scale.hint"></p>
   <div class="gate__vignette" aria-hidden="true"></div>
