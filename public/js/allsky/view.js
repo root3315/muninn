@@ -197,9 +197,25 @@ void main() {
   outColour = vec4(shade(raw), uAlpha * rim);
 }`;
 
+/*
+ * Lines on the sphere are given as directions and projected here, by the
+ * camera; on the map they come already placed (uMap), since the map never
+ * moves. Through w, the GPU clips a segment at the edge of the view itself.
+ */
 const LINE_VS = `#version 300 es
-in vec2 aPos;
-void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`;
+in vec3 aPos;
+uniform bool uMap;
+uniform vec3 uC;
+uniform vec3 uE;
+uniform vec3 uN;
+uniform vec2 uScale;
+void main() {
+  if (uMap) {
+    gl_Position = vec4(aPos.xy, 0.0, 1.0);
+  } else {
+    gl_Position = vec4(-dot(aPos, uE) * uScale.x, dot(aPos, uN) * uScale.y, 0.0, dot(aPos, uC));
+  }
+}`;
 
 const LINE_FS = `#version 300 es
 precision mediump float;
@@ -411,7 +427,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
   gl.bindVertexArray(lineVao);
   gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
   gl.enableVertexAttribArray(0);
-  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
   gl.bindVertexArray(null);
   const emptyVao = gl.createVertexArray();
 
@@ -779,87 +795,122 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     return 30;
   }
 
-  /** Lines on the sky, each a list of ICRS vectors, as screen polylines in clip space. */
-  function strokes(lines, cam, inMap) {
+  /** The ecliptic as directions: the plane the planets keep to, and the first place to look for one. */
+  const ECLIPTIC = (() => {
+    const eps = 23.4393 * DEG;
     const out = [];
-    const frame = inMap ? mapFrame(cam) : null;
-    for (const pts of lines) {
-      let run = [];
-      let last = null;
-      for (const v of pts) {
-        let p = null;
-        if (inMap) {
-          const g = toGalactic(v);
-          const { ra: l, dec: b } = radecOf(g);
-          const m = mollweide(l, b);
-          p = [(frame.cx + m.x * frame.s) / cam.w * 2 - 1, (frame.cy + m.y * frame.s) / cam.h * 2 - 1];
-          // The map's left and right edges are one meridian: a line crossing it breaks there.
-          if (last && Math.abs(p[0] - last[0]) > 0.5) {
-            if (run.length > 1) out.push(run);
-            run = [];
-          }
-        } else if (dot(v, cam.C) > 0.05) {
-          const d = dot(v, cam.C);
-          p = [(-dot(v, cam.E) / d) * cam.k * cam.sx, (dot(v, cam.N) / d) * cam.k * cam.sy];
-        }
-        if (!p) {
-          if (run.length > 1) out.push(run);
-          run = [];
-        } else {
-          run.push(p);
-        }
-        last = p;
-      }
-      if (run.length > 1) out.push(run);
+    for (let l = 0; l <= 360; l += 0.5) {
+      const lam = l * DEG;
+      out.push([Math.cos(lam), Math.sin(lam) * Math.cos(eps), Math.sin(lam) * Math.sin(eps)]);
     }
-    return out;
+    return [out];
+  })();
+
+  /**
+   * The grid of right ascension and declination, only where the camera can
+   * see it, its points spaced to the field: a few thousand points at any
+   * zoom, where the whole sky at a quarter-degree step was millions a frame.
+   */
+  function sphereGrid() {
+    const step = gridStep(state.fov);
+    const raStep = state.fov > 60 ? 30 : step;
+    const reach = Math.min(180, state.fov * 1.3);
+    const sample = Math.max(reach / 90, 0.002);
+    const dec0 = Math.max(-90, state.dec - reach);
+    const dec1 = Math.min(90, state.dec + reach);
+    const nearPole = Math.abs(state.dec) + reach >= 88;
+    const raHalf = nearPole ? 180 : Math.min(180, reach / Math.max(0.05, Math.cos(Math.max(Math.abs(dec0), Math.abs(dec1)) * DEG)));
+    const ra0 = state.ra - raHalf;
+    const ra1 = state.ra + raHalf;
+    const lines = [];
+    for (let dec = Math.ceil(dec0 / step) * step; dec <= dec1; dec += step) {
+      if (Math.abs(dec) >= 90) continue;
+      const pts = [];
+      const raSample = sample / Math.max(0.05, Math.cos(dec * DEG));
+      for (let ra = ra0; ra <= ra1 + 1e-9; ra += raSample) pts.push(vecOf(ra, dec));
+      lines.push(pts);
+    }
+    for (let ra = Math.ceil(ra0 / raStep) * raStep; ra <= ra1; ra += raStep) {
+      const pts = [];
+      for (let dec = dec0; dec <= dec1 + 1e-9; dec += sample) pts.push(vecOf(ra, dec));
+      lines.push(pts);
+    }
+    return lines;
+  }
+
+  /** The galaxy's own lines on the map, latitude every 30° and longitude every 60°. */
+  const GALACTIC_GRID = (() => {
+    const lines = [];
+    for (let b = -60; b <= 60; b += 30) {
+      const pts = [];
+      for (let l = 0; l <= 360; l += 1) pts.push(fromGalactic(vecOf(l, b)));
+      lines.push(pts);
+    }
+    for (let l = 0; l < 360; l += 60) {
+      const pts = [];
+      for (let b = -90; b <= 90; b += 1) pts.push(fromGalactic(vecOf(l, b)));
+      lines.push(pts);
+    }
+    return lines;
+  })();
+
+  /** Polylines as segment pairs, in one array: one upload, one draw. */
+  function segmentsOf(lines, place) {
+    const out = [];
+    for (const pts of lines) {
+      let prev = null;
+      for (const v of pts) {
+        const p = place(v);
+        if (p && prev) out.push(...prev, ...p);
+        prev = p;
+      }
+    }
+    return new Float32Array(out);
+  }
+
+  /** The map's lines, placed once per size of the map: it does not move. */
+  let mapLines = null;
+  function mapSegments(cam) {
+    const frame = mapFrame(cam);
+    const key = `${cam.w}x${cam.h}:${frame.cx}:${frame.cy}:${frame.s}`;
+    if (mapLines?.key === key) return mapLines;
+    let last = null;
+    const place = (v) => {
+      const { ra: l, dec: b } = radecOf(toGalactic(v));
+      const m = mollweide(l, b);
+      const p = [(frame.cx + m.x * frame.s) / cam.w * 2 - 1, (frame.cy + m.y * frame.s) / cam.h * 2 - 1, 0];
+      // The map's left and right edges are one meridian: a segment across it is not drawn.
+      const jump = last && Math.abs(p[0] - last[0]) > 0.5;
+      last = p;
+      return jump ? null : p;
+    };
+    const wrap = (lines) => segmentsOf(lines, (v) => place(v));
+    mapLines = { key, grid: wrap(GALACTIC_GRID), ecliptic: wrap(ECLIPTIC) };
+    return mapLines;
   }
 
   function drawLines(cam, inMap, alpha) {
-    const grid = [];
-    if (inMap) {
-      // On the map, the galaxy's own lines: latitude every 30°, longitude every 60°.
-      for (let b = -60; b <= 60; b += 30) {
-        const pts = [];
-        for (let l = 0; l <= 360; l += 1) pts.push(fromGalactic(vecOf(l, b)));
-        grid.push(pts);
-      }
-      for (let l = 0; l < 360; l += 60) {
-        const pts = [];
-        for (let b = -90; b <= 90; b += 1) pts.push(fromGalactic(vecOf(l, b)));
-        grid.push(pts);
-      }
-    } else {
-      const step = gridStep(state.fov);
-      const raStep = state.fov > 60 ? 30 : step;
-      const fine = Math.min(step / 8, 1);
-      for (let dec = -90 + step; dec < 90; dec += step) {
-        const pts = [];
-        for (let ra = 0; ra <= 360; ra += fine * 2) pts.push(vecOf(ra, dec));
-        grid.push(pts);
-      }
-      for (let ra = 0; ra < 360; ra += raStep) {
-        const pts = [];
-        for (let dec = -90; dec <= 90; dec += fine * 2) pts.push(vecOf(ra, dec));
-        grid.push(pts);
-      }
-    }
-    // The ecliptic: the plane the planets keep to, and the first place to look for one.
-    const eps = 23.4393 * DEG;
-    const ecl = [];
-    for (let l = 0; l <= 360; l += 0.5) {
-      const lam = l * DEG;
-      ecl.push([Math.cos(lam), Math.sin(lam) * Math.cos(eps), Math.sin(lam) * Math.sin(eps)]);
-    }
     gl.useProgram(line.program);
+    gl.uniform1i(line.u.Map, inMap ? 1 : 0);
+    if (!inMap) {
+      gl.uniform3fv(line.u.C, cam.C);
+      gl.uniform3fv(line.u.E, cam.E);
+      gl.uniform3fv(line.u.N, cam.N);
+      gl.uniform2f(line.u.Scale, cam.k * cam.sx, cam.k * cam.sy);
+    }
+    // On the sphere a segment is kept whole and clipped by the GPU; only one
+    // with an end behind the eye is dropped, so it is not drawn through it.
+    const front = (v) => (dot(v, cam.C) > 0.02 ? v : null);
+    const sets = inMap
+      ? (({ grid, ecliptic }) => [[grid, ink.grid], [ecliptic, ink.ecliptic]])(mapSegments(cam))
+      : [[segmentsOf(sphereGrid(), front), ink.grid], [segmentsOf(ECLIPTIC, front), ink.ecliptic]];
     gl.bindVertexArray(lineVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, lineBuffer);
-    for (const [set, colour] of [[grid, ink.grid], [[ecl], ink.ecliptic]]) {
+    for (const [data, colour] of sets) {
+      if (!data.length) continue;
       gl.uniform4fv(line.u.Ink, [colour[0], colour[1], colour[2], colour[3] * alpha]);
-      for (const run of strokes(set, cam, inMap)) {
-        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(run.flat()), gl.STREAM_DRAW);
-        gl.drawArrays(gl.LINE_STRIP, 0, run.length);
-      }
+      gl.bufferData(gl.ARRAY_BUFFER, data, gl.STREAM_DRAW);
+      gl.drawArrays(gl.LINES, 0, data.length / 3);
     }
   }
 
