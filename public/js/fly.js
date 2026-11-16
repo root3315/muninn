@@ -15,7 +15,7 @@ import { starColour, direction } from './gate.js';
 import { encodeHash } from './hash.js';
 import { radecOf } from './allsky/healpix.js';
 import { createSpace, screenOf } from './fly/space.js';
-import { temperatureOf, luminosityOf, radiusOf, R_SUN_PC } from './fly/stars.js';
+import { temperatureOf, luminosityOf, radiusOf, R_SUN_PC, T_SUN } from './fly/stars.js';
 
 const $ = (id) => document.getElementById(id);
 const LY_PER_PC = 3.26156;
@@ -316,7 +316,10 @@ function placeLabels() {
   const b = basis();
   for (const { s, el } of labels) {
     const at = screenOf(placeOf(s), b, proj);
-    el.hidden = !at;
+    // A star seen as a large disc needs no ring and name on top of it.
+    const big = lastNear && s.index === lastNear.index
+      && (lastNear.rpc / len(sub(lastNear.pos, cam.eye))) * proj.focal[1] * (proj.h / proj.dpr) / 2 > 24;
+    el.hidden = !at || big;
     if (!at) continue;
     el.style.transform = `translate(${at.x.toFixed(1)}px, ${at.y.toFixed(1)}px)`;
     el.querySelector('.fly-label__far').textContent = distanceText(len(sub(placeOf(s), cam.eye)));
@@ -390,7 +393,11 @@ function openCard(entry) {
     const bv = stars.bv[i];
     rows.push([t('fly.cardTemp'), t('fly.kelvin', { n: fmt(Math.round(temperatureOf(bv) / 10) * 10, 0) })]);
     rows.push([t('fly.cardRadius'), t(stars.measured[i] ? 'fly.radiusMeasured' : 'fly.radiusEstimated', { n: sig(stars.rad[i]) })]);
-    rows.push([t('fly.cardLum'), t('fly.solar', { n: sig(luminosityOf(m, bv)) })]);
+    // With a measured radius, the luminosity follows from it and the
+    // temperature; the magnitude's bolometric correction is weakest for the
+    // coolest stars, which are the largest.
+    const lum = stars.measured[i] ? stars.rad[i] ** 2 * (temperatureOf(bv) / T_SUN) ** 4 : luminosityOf(m, bv);
+    rows.push([t('fly.cardLum'), t('fly.solar', { n: sig(lum) })]);
     if (i !== sunIndex) rows.push([t('fly.cardMag'), fmt(m + 5 * Math.log10(fromSun / 10), 2)]);
   } else if (s.radius) {
     rows.push([t('fly.cardRadius'), t('fly.radiusModel', { n: sig(s.radius) })]);
