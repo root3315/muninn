@@ -25,6 +25,7 @@ uniform bool uIR;
 uniform float uFocalPx;
 uniform float uMaxPoint;
 uniform int uSkip;
+uniform int uSkip2;
 uniform vec4 uNear;
 uniform vec3 uEye;
 uniform vec3 uR;
@@ -42,7 +43,7 @@ void main() {
   float d = length(rel);
   vec3 c = vec3(dot(rel, uR), dot(rel, uU), dot(rel, uF));
   // The near star is drawn as a sphere instead, from exact coordinates.
-  if (c.z < 1e-6 || d < 1e-9 || gl_VertexID == uSkip) {
+  if (c.z < 1e-6 || d < 1e-9 || gl_VertexID == uSkip || gl_VertexID == uSkip2) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     gl_PointSize = 0.0;
     return;
@@ -132,6 +133,8 @@ uniform vec2 uSize;
 uniform vec3 uCentre;
 uniform float uRadius;
 uniform vec3 uCol;
+uniform bool uLit;
+uniform vec3 uSun;
 out vec4 outColour;
 void main() {
   vec2 ndc = gl_FragCoord.xy / uSize * 2.0 - 1.0;
@@ -141,12 +144,25 @@ void main() {
   float miss2 = dot(uCentre, uCentre) - along * along;
   float r2 = uRadius * uRadius;
   if (miss2 < r2) {
-    float mu = sqrt(1.0 - miss2 / r2);
-    outColour = vec4(uCol * (0.4 + 0.6 * mu), 1.0);
+    if (uLit) {
+      // A planet or the Moon: lit by the Sun from where the Sun is, so its
+      // phase is the phase it has from here. A little ambient keeps the night
+      // side from being a hole in the stars.
+      vec3 hit = v * (along - sqrt(r2 - miss2));
+      vec3 n = (hit - uCentre) / uRadius;
+      float day = max(0.0, dot(n, normalize(uSun - hit)));
+      outColour = vec4(uCol * (0.02 + 0.98 * day), 1.0);
+    } else {
+      // A star: limb darkening, the edge dimmer than the middle.
+      float mu = sqrt(1.0 - miss2 / r2);
+      outColour = vec4(uCol * (0.4 + 0.6 * mu), 1.0);
+    }
+  } else if (uLit) {
+    discard;
   } else {
-    // Its light scattered in the eye: a glow that falls off with distance from the limb.
+    // A star's light scattered in the eye: added, not drawn over.
     float out_ = (sqrt(miss2) - uRadius) / uRadius;
-    outColour = vec4(uCol * 0.35 * exp(-out_ * 2.5), 1.0);
+    outColour = vec4(uCol * 0.35 * exp(-out_ * 2.5), 0.0);
   }
 }`;
 
@@ -300,25 +316,16 @@ export function createSpace(canvas, { stars, sky }) {
       gl.uniform1f(starProg.u.Px, dpr);
       gl.uniform1f(starProg.u.FocalPx, (fy * h) / 2);
       gl.uniform1f(starProg.u.MaxPoint, maxPoint);
-      gl.uniform1i(starProg.u.Skip, near ? near.index : -1);
-      gl.uniform4fv(starProg.u.Near, near
-        ? [near.pos[0] - eye[0], near.pos[1] - eye[1], near.pos[2] - eye[2], near.rpc]
+      const nears = (Array.isArray(near) ? near : near ? [near] : []).slice(0, 2);
+      // The spheres are drawn exactly; their points are left out of the star pass.
+      gl.uniform1i(starProg.u.Skip, nears[0]?.index ?? -1);
+      gl.uniform1i(starProg.u.Skip2, nears[1]?.index ?? -1);
+      const front = nears[0];
+      gl.uniform4fv(starProg.u.Near, front
+        ? [front.pos[0] - eye[0], front.pos[1] - eye[1], front.pos[2] - eye[2], front.rpc]
         : [0, 0, 0, 0]);
       gl.bindVertexArray(vao);
       gl.drawArrays(gl.POINTS, 0, count);
-      if (near) {
-        gl.useProgram(nearProg.program);
-        gl.uniform3fv(nearProg.u.R, R);
-        gl.uniform3fv(nearProg.u.U, U);
-        gl.uniform3fv(nearProg.u.F, F);
-        gl.uniform2fv(nearProg.u.Focal, focal);
-        gl.uniform2f(nearProg.u.Size, w, h);
-        gl.uniform3fv(nearProg.u.Centre, [near.pos[0] - eye[0], near.pos[1] - eye[1], near.pos[2] - eye[2]]);
-        gl.uniform1f(nearProg.u.Radius, near.rpc);
-        gl.uniform3fv(nearProg.u.Col, near.col);
-        gl.bindVertexArray(emptyVao);
-        gl.drawArrays(gl.TRIANGLES, 0, 3);
-      }
       if (lineGroups.length) {
         gl.blendFunc(gl.SRC_ALPHA, gl.ONE);
         gl.useProgram(lineProg.program);
@@ -333,6 +340,30 @@ export function createSpace(canvas, { stars, sky }) {
           gl.bindVertexArray(g.vao);
           gl.drawArrays(gl.LINES, 0, g.count);
         }
+      }
+      if (nears.length) {
+        gl.useProgram(nearProg.program);
+        gl.uniform3fv(nearProg.u.R, R);
+        gl.uniform3fv(nearProg.u.U, U);
+        gl.uniform3fv(nearProg.u.F, F);
+        gl.uniform2fv(nearProg.u.Focal, focal);
+        gl.uniform2f(nearProg.u.Size, w, h);
+        // The Sun from here, for the lit bodies.
+        gl.uniform3fv(nearProg.u.Sun, [-eye[0], -eye[1], -eye[2]]);
+        // A disc covers what is behind it; a star's glow adds to it.
+        gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+        gl.bindVertexArray(emptyVao);
+        // The farther first, so the nearer is drawn over it.
+        const order = [...nears].sort((a, b) => Math.hypot(b.pos[0] - eye[0], b.pos[1] - eye[1], b.pos[2] - eye[2])
+          - Math.hypot(a.pos[0] - eye[0], a.pos[1] - eye[1], a.pos[2] - eye[2]));
+        for (const n of order) {
+          gl.uniform3fv(nearProg.u.Centre, [n.pos[0] - eye[0], n.pos[1] - eye[1], n.pos[2] - eye[2]]);
+          gl.uniform1f(nearProg.u.Radius, n.rpc);
+          gl.uniform3fv(nearProg.u.Col, n.col);
+          gl.uniform1i(nearProg.u.Lit, n.lit ? 1 : 0);
+          gl.drawArrays(gl.TRIANGLES, 0, 3);
+        }
+        gl.blendFunc(gl.ONE, gl.ONE);
       }
       gl.disable(gl.BLEND);
       gl.bindVertexArray(null);

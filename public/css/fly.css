@@ -19,26 +19,37 @@
 }
 .fly-label--target .fly-label__dot { border-color: var(--color-counter); }
 .fly-label__name, .fly-label__far { margin-block-start: -8px; }
-.fly-label__far { color: var(--color-neutral); font-size: var(--text-2xs); }
+.fly-label__far { color: var(--color-muted); font-size: var(--text-2xs); }
+/* Over the stars and the lines, a name keeps a ground of its own. */
+.fly-label__name {
+  padding: 1px var(--space-xs); border-radius: var(--radius-round);
+  background: var(--gate-veil-deep); text-shadow: none;
+}
 .fly-label:hover .fly-label__dot { transform: scale(1.25); }
 .fly-label:hover .fly-label__name { color: var(--color-accent); }
 
 /* Destinations scroll on one line rather than wrap the dock into a wall. */
-.fly-dest { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; min-inline-size: 0; flex: 1; }
+.fly-dest {
+  flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; min-inline-size: 0; flex: 1;
+  /* The row goes on past the edge: it fades rather than being cut. */
+  -webkit-mask-image: linear-gradient(90deg, #000 90%, transparent); mask-image: linear-gradient(90deg, #000 90%, transparent);
+}
+.fly-speed { display: inline-flex; gap: var(--space-3xs); }
+.fly-speed .as-toggle { min-inline-size: var(--hit); justify-content: center; font-size: var(--text-md); }
 .fly-dest::-webkit-scrollbar { display: none; }
 .fly-dest .as-band { white-space: nowrap; border: 0; font: inherit; font-size: var(--text-sm); font-weight: 600; }
 .fly-chip--target { color: var(--color-counter); }
 
 /* Forward and back, for a hand with no keyboard. */
 .fly-pad {
-  position: absolute; inset-inline-end: var(--edge); inset-block-start: 40%;
+  position: absolute; inset-inline-end: var(--edge); inset-block-end: calc(var(--edge) + 11rem);
   display: grid; gap: var(--space-xs);
 }
 .fly-pad .as-zoom__key { touch-action: none; user-select: none; -webkit-user-select: none; }
 .fly-pad .as-zoom__key:active { background: var(--color-accent); color: var(--color-accent-ink); }
 
 @media (max-width: 640px) {
-  .fly-pad { inset-block-start: 30%; }
+  .fly-pad { inset-block-end: calc(var(--edge) + 10rem); }
   .fly-label__far { display: none; }
 }
 
@@ -66,7 +77,9 @@
 .fly-card__rows { margin: 0; display: grid; gap: var(--space-3xs); }
 .fly-card__rows > div { display: flex; justify-content: space-between; gap: var(--space-md); font-size: var(--text-sm); }
 .fly-card__rows dt { color: var(--color-muted); }
-.fly-card__rows dd { margin: 0; text-align: end; }
+/* Values are words as much as numbers: they wrap as text, under their name. */
+.fly-card__rows > div { flex-direction: column; gap: 0; }
+.fly-card__rows dd { margin: 0; font-family: var(--font-body); color: var(--color-ink); }
 .fly-card__acts { display: flex; flex-wrap: wrap; gap: var(--space-xs); padding-block-start: var(--space-xs); }
 .fly-card__acts .as-open { margin-inline-start: 0; }
 .fly-card__frames { text-decoration: none; }
@@ -80,7 +93,8 @@
 .fly-mark {
   position: absolute; inset-inline-start: 0; inset-block-start: 0;
   font-size: var(--text-2xs); color: var(--color-counter); white-space: nowrap;
-  text-shadow: var(--shade-text); pointer-events: none; will-change: transform;
+  padding: 1px var(--space-xs); border-radius: var(--radius-round);
+  background: var(--gate-veil-deep); pointer-events: none; will-change: transform;
 }
 .fly-mark[hidden] { display: none; }
 #read-note:empty { display: none; }

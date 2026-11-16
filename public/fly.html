@@ -18,6 +18,8 @@
 <link rel="modulepreload" href="js/fly/space.js">
 <link rel="modulepreload" href="js/fly/stars.js">
 <link rel="modulepreload" href="js/fly/reach.js">
+<link rel="modulepreload" href="js/fly/solar.js">
+<link rel="modulepreload" href="js/ephemeris.js">
 <link rel="modulepreload" href="js/depth.js">
 <link rel="modulepreload" href="js/hash.js">
 <link rel="modulepreload" href="js/allsky/healpix.js">
@@ -68,8 +70,10 @@
     <div class="as-dock__row">
       <button type="button" class="as-toggle" id="reach" aria-pressed="true" data-i18n="fly.reach" data-i18n-title="fly.reachWhen"></button>
       <button type="button" class="as-toggle" id="ir" aria-pressed="false" data-i18n="fly.ir" data-i18n-title="fly.irWhen"></button>
-      <button type="button" class="as-toggle" id="slower" data-i18n="fly.slower"></button>
-      <button type="button" class="as-toggle" id="faster" data-i18n="fly.faster"></button>
+      <span class="fly-speed">
+        <button type="button" class="as-toggle" id="slower" data-i18n-label="fly.slower" data-i18n-title="fly.slower">−</button>
+        <button type="button" class="as-toggle" id="faster" data-i18n-label="fly.faster" data-i18n-title="fly.faster">+</button>
+      </span>
       <p class="as-read num" id="read" aria-live="off"></p>
     </div>
     <div class="as-dock__row as-dock__row--read">

@@ -241,6 +241,11 @@ body[data-map="true"] .as-ring__name {
 
 @media (max-width: 640px) {
   .bar__title { display: none; }
+  /* The bar fits the screen: no sideways scroll. The tool is one tap away on the brand. */
+  .bar { gap: var(--space-xs); }
+  .bar__acts { min-inline-size: 0; }
+  .bar__link { padding-inline: var(--space-xs); }
+  #to-tool { display: none; }
   .as-dock { padding: var(--space-xs) var(--space-sm); gap: var(--space-2xs); }
   .as-band { padding-inline: var(--space-xs); }
   .as-open { margin-inline-start: 0; flex: 1 1 100%; }

@@ -16,6 +16,7 @@ import { encodeHash } from './hash.js';
 import { radecOf } from './allsky/healpix.js';
 import { createSpace, screenOf } from './fly/space.js';
 import { temperatureOf, luminosityOf, radiusOf, vMinusW2, R_SUN_PC, T_SUN } from './fly/stars.js';
+import { solarSystem, AU_PC } from './fly/solar.js';
 import { shells, planetNineShortfall, WISE0855_AB, WISE0855_PC, D6_ONE_VISIT_AB, PLANET_NINE_V, PLANET_NINE_AU, PLANET_NINE_MAX_BETA } from './fly/reach.js';
 
 const $ = (id) => document.getElementById(id);
@@ -93,8 +94,10 @@ async function loadStars() {
   const hipOf = new Int32Array(bin, stored * 16, stored);
   const measured = new Map(info.named.filter((s) => s.hip).map((s) => [s.hip, s.radius]));
 
-  // The catalogue, the Sun, and WISE 0855: a body the eye cannot see at all.
-  const n = stored + 2;
+  // The catalogue, the Sun, WISE 0855 (a body the eye cannot see at all), and
+  // the planets and the Moon where they are today.
+  const bodies = solarSystem();
+  const n = stored + 2 + bodies.length;
   const stars = {
     pos: new Float32Array(n * 3), mag: new Float32Array(n), col: new Float32Array(n * 3),
     rad: new Float32Array(n), bv: new Float32Array(n), hip: new Int32Array(n), measured: new Uint8Array(n),
@@ -129,12 +132,27 @@ async function loadStars() {
     stars.rad[wiseIndex] = 0.1;
     stars.bv[wiseIndex] = NaN;
   }
+  stars.dark = wise ? wiseIndex : -1;
+  const lit = new Uint8Array(n);
+  bodies.forEach((b, k) => {
+    const i = stored + 2 + k;
+    stars.pos.set(b.pos, i * 3);
+    stars.mag[i] = b.absMag;
+    stars.ir[i] = b.absMag;
+    stars.col.set(b.col, i * 3);
+    stars.rad[i] = b.radius;
+    stars.bv[i] = NaN;
+    stars.measured[i] = 1;
+    lit[i] = 1;
+  });
+  stars.lit = lit;
   const indexOfHip = new Map();
   for (let i = 0; i < stored; i++) indexOfHip.set(hipOf[i], i);
   const named = info.named.map((s) => ({
     ...s,
     index: s.key === 'sun' ? stored : s.key === 'wise0855' ? wiseIndex : indexOfHip.get(s.hip) ?? -1,
   }));
+  bodies.forEach((b, k) => named.push({ key: b.key, en: b.en, ru: b.ru, planet: true, km: b.km, index: stored + 2 + k }));
   return { stars, named, count: info.count, sun: stored };
 }
 
@@ -150,8 +168,11 @@ async function loadSky() {
 /* ---- words ------------------------------------------------------------- */
 
 const ly = (pc) => pc * LY_PER_PC;
+const KM_PER_PC = 3.0856775814913673e13;
 function distanceText(pc) {
   const l = ly(pc);
+  // Beside a planet AU are too coarse: kilometres, as a spacecraft would say.
+  if (pc * AU_PER_PC < 0.01) return t('fly.km', { n: fmt(pc * KM_PER_PC, 0) });
   if (l < 0.01) return t('fly.au', { n: fmt(pc * AU_PER_PC, pc * AU_PER_PC < 10 ? 2 : 0) });
   return t('fly.ly', { n: fmt(l, l < 10 ? 2 : l < 100 ? 1 : 0) });
 }
@@ -187,7 +208,8 @@ let hashTimer = 0;
 function writeHash() {
   clearTimeout(hashTimer);
   hashTimer = setTimeout(() => {
-    const p = new URLSearchParams({ x: cam.eye[0].toFixed(6), y: cam.eye[1].toFixed(6), z: cam.eye[2].toFixed(6) });
+    // Exponent form: beside the Moon a millionth of a parsec is too coarse.
+    const p = new URLSearchParams({ x: cam.eye[0].toExponential(10), y: cam.eye[1].toExponential(10), z: cam.eye[2].toExponential(10) });
     history.replaceState(null, '', `#${p}`);
   }, 300);
 }
@@ -229,7 +251,7 @@ function nameLabels() {
   p9.textContent = nameOf(P9);
   p9.addEventListener('click', () => { flyToPlanetNine(); openCardLater(P9); });
   chips.append(p9);
-  const order = ['wise0855', 'hip70890', 'hip87937', 'hip32349', 'hip108870', 'hip91262', 'hip27989', 'hip17702', 'hip11767', 'sun'];
+  const order = ['earth', 'moon', 'mars', 'jupiter', 'saturn', 'wise0855', 'hip70890', 'hip87937', 'hip32349', 'hip108870', 'hip91262', 'hip27989', 'hip17702', 'hip11767', 'sun'];
   for (const key of order) {
     const s = named.find((x) => x.key === key);
     if (!s) continue;
@@ -257,7 +279,13 @@ function flyTo(s) {
   // WISE 0855 gives no light to see: the autopilot stops a thousand AU
   // out, near enough that at 4.6 µm it is one of the brightest things in the
   // sky, far enough that in visible light the ring shows a place, not a disc.
-  const stop = s.key === 'wise0855' ? 0.005 : radiusPc(s) * (s.index >= 0 ? STOP_RADII : 600);
+  // Every star is approached to the same distance, five AU (Jupiter's from
+  // the Sun), or six of its radii if it is bigger than that: arriving at a
+  // fixed number of radii made a supergiant and a dwarf look the same size.
+  // A planet or the Moon, six radii.
+  const stop = s.key === 'wise0855' ? 0.005
+    : s.planet ? radiusPc(s) * STOP_RADII
+      : Math.max(radiusPc(s) * STOP_RADII, 5 * AU_PC);
   const dir = norm(sub(to, cam.eye));
   const end = away > stop ? add(to, dir, -stop) : cam.eye;
   autopilot = {
@@ -302,32 +330,43 @@ function steer(dt) {
 
 /* ---- the near star ----------------------------------------------------- */
 
-/** The star whose disc is largest from here: the one drawn as a sphere. */
+/** The two bodies whose discs are largest from here: the ones drawn as spheres. */
 function nearestStar() {
   const [ex, ey, ez] = cam.eye;
   const p = stars.pos;
-  let best = -1;
-  let bestK = 0;
+  let a = -1;
+  let aK = 0;
+  let b = -1;
+  let bK = 0;
   for (let i = 0; i < stars.mag.length; i++) {
+    // WISE 0855 has no light to see: it is never a disc.
+    if (i === stars.dark) continue;
     const dx = p[i * 3] - ex;
     const dy = p[i * 3 + 1] - ey;
     const dz = p[i * 3 + 2] - ez;
-    if (stars.mag[i] > 30) continue;
-    const k = stars.rad[i] / Math.sqrt(dx * dx + dy * dy + dz * dz + 1e-30);
-    if (k > bestK) { bestK = k; best = i; }
+    const k = stars.rad[i] / Math.sqrt(dx * dx + dy * dy + dz * dz + 1e-40);
+    if (k > aK) { b = a; bK = aK; a = i; aK = k; } else if (k > bK) { b = i; bK = k; }
   }
-  if (best < 0) return null;
-  return {
-    index: best,
-    // In double precision: the GPU's single precision is a few AU at a few
-    // hundred parsecs, and a star seen from a few of its radii needs better.
-    pos: posOf(best),
-    rpc: stars.rad[best] * R_SUN_PC,
-    col: [stars.col[best * 3], stars.col[best * 3 + 1], stars.col[best * 3 + 2]],
-  };
+  // In double precision: the GPU's single precision is a few AU at a few
+  // hundred parsecs, and a body seen from a few of its radii needs better.
+  const sphere = (i) => ({
+    index: i,
+    pos: posOf(i),
+    rpc: stars.rad[i] * R_SUN_PC,
+    col: [stars.col[i * 3], stars.col[i * 3 + 1], stars.col[i * 3 + 2]],
+    lit: Boolean(stars.lit[i]),
+  });
+  return [a, b].filter((i) => i >= 0).map(sphere);
 }
 
 /* ---- the readout and labels ------------------------------------------- */
+
+/** Speed in the unit that suits it: km/s near planets, AU/s in the Solar System, ly/s among the stars. */
+function speedText(pcPerS) {
+  if (pcPerS * AU_PER_PC < 0.01) return t('fly.speedKm', { v: fmt(pcPerS * KM_PER_PC, 0) });
+  if (ly(pcPerS) < 0.01) return t('fly.speedAu', { v: fmt(pcPerS * AU_PER_PC, 2) });
+  return t('fly.speed', { v: fmt(ly(pcPerS), ly(pcPerS) < 1 ? 2 : 1) });
+}
 
 function readout() {
   const fromSun = len(cam.eye);
@@ -339,7 +378,7 @@ function readout() {
   }
   $('read').textContent = [
     t('fly.fromSun', { d: distanceText(fromSun) }),
-    t('fly.speed', { v: fmt(ly(cam.speed), cam.speed < 0.3 ? 3 : 1) }),
+    speedText(cam.speed),
     nearName && t('fly.nearest', { name: nameOf(nearName), d: distanceText(nearD) }),
   ].filter(Boolean).join('  ·  ');
 }
@@ -349,9 +388,20 @@ function placeLabels() {
   for (const { s, el } of labels) {
     const at = screenOf(placeOf(s), b, proj);
     // A star seen as a large disc needs no ring and name on top of it.
-    const big = lastNear && s.index === lastNear.index
-      && (lastNear.rpc / len(sub(lastNear.pos, cam.eye))) * proj.focal[1] * (proj.h / proj.dpr) / 2 > 24;
-    el.hidden = !at || big;
+    const ln = (lastNear ?? []).find((x) => x.index === s.index);
+    const big = ln && (ln.rpc / len(sub(ln.pos, cam.eye))) * proj.focal[1] * (proj.h / proj.dpr) / 2 > 24;
+    // A planet's name only near the Sun: from the stars the planets are one point.
+    const far = s.planet && len(cam.eye) > 0.01;
+    // Behind a nearer disc: hidden by it.
+    const behind = at && (lastNear ?? []).some((n) => {
+      if (n.index === s.index) return false;
+      const dn = len(sub(n.pos, cam.eye));
+      if (dn >= len(sub(placeOf(s), cam.eye))) return false;
+      const c = screenOf(n.pos, b, proj);
+      const r = (n.rpc / dn) * proj.focal[1] * (proj.h / proj.dpr) / 2;
+      return c && Math.hypot(c.x - at.x, c.y - at.y) < r;
+    });
+    el.hidden = !at || big || far || behind;
     if (!at) continue;
     el.style.transform = `translate(${at.x.toFixed(1)}px, ${at.y.toFixed(1)}px)`;
     el.querySelector('.fly-label__far').textContent = distanceText(len(sub(placeOf(s), cam.eye)));
@@ -376,11 +426,11 @@ function frame(now) {
 function pickAt(px, py) {
   const b = basis();
   // On the near star's disc: that star.
-  if (lastNear) {
-    const c = screenOf(lastNear.pos, b, proj);
-    const d = len(sub(lastNear.pos, cam.eye));
-    const rPx = (lastNear.rpc / d) * proj.focal[1] * (proj.h / proj.dpr) / 2;
-    if (c && Math.hypot(c.x - px, c.y - py) <= Math.max(rPx, 0)) return lastNear.index;
+  for (const ln of lastNear ?? []) {
+    const c = screenOf(ln.pos, b, proj);
+    const d = len(sub(ln.pos, cam.eye));
+    const rPx = (ln.rpc / d) * proj.focal[1] * (proj.h / proj.dpr) / 2;
+    if (c && Math.hypot(c.x - px, c.y - py) <= Math.max(rPx, 0)) return ln.index;
   }
   let best = -1;
   let bestScore = Infinity;
@@ -431,6 +481,9 @@ function openCard(entry) {
     rows.push([t('fly.cardP9Where'), t('fly.p9Where', { a: PLANET_NINE_AU[0], b: PLANET_NINE_AU[1], beta: PLANET_NINE_MAX_BETA })]);
     rows.push([t('fly.cardP9Bright'), t('fly.p9Bright', { lo: fmt(PLANET_NINE_V.bright, 1), hi: fmt(PLANET_NINE_V.faint, 1) })]);
     rows.push([t('fly.cardP9Gap'), t('fly.p9Gap', { x: fmt(planetNineShortfall(17.6), 0) })]);
+  } else if (s.planet) {
+    rows.push([t('fly.cardRadius'), t('fly.planetRadius', { km: fmt(s.km, 0), e: sig(s.km / 6371.0) })]);
+    rows.push([t('fly.cardSunAU'), t('fly.au', { n: fmt(fromSun / AU_PC, 2) })]);
   } else if (i >= 0) {
     const m = stars.mag[i];
     const bv = stars.bv[i];
@@ -446,14 +499,16 @@ function openCard(entry) {
     rows.push([t('fly.cardRadius'), t('fly.radiusModel', { n: sig(s.radius) })]);
   }
   $('card-title').textContent = title;
-  $('card-note').textContent = s.key === 'wise0855'
+  if (s.planet) rows.splice(0, 1);
+  $('card-note').textContent = s.planet ? t('fly.planetNote') : s.key === 'wise0855'
     ? t('fly.dark')
     : s.key === 'p9' ? t('fly.p9Note')
     : i >= 0 && i !== sunIndex ? `HIP ${stars.hip[i]} · ${t('fly.cardSource')}` : '';
   $('card-rows').replaceChildren(...rows.map(([k, v]) => cardRow(k, v)));
   // SPHEREx looks from beside the Earth: a star's place on its sky is its
   // direction from the Sun. The Sun itself has none.
-  const sky = fromSun > 0 && s.key !== 'p9' ? radecOf(p) : null;
+  // A planet moves across the sky: there is no one field of it to open.
+  const sky = fromSun > 0 && s.key !== 'p9' && !s.planet ? radecOf(p) : null;
   const frames = $('card-frames');
   frames.hidden = !sky;
   if (sky) {
@@ -608,8 +663,14 @@ function placeMarks() {
   const b = basis();
   for (const m of marks) {
     const at = view.reach ? screenOf(m.pos, b, proj) : null;
-    m.el.hidden = !at;
-    if (!at) continue;
+    // A mark on top of a star's label would be read as neither.
+    const crowded = at && labels.some(({ s, el }) => {
+      if (el.hidden) return false;
+      const p = screenOf(placeOf(s), b, proj);
+      return p && Math.abs(p.x - at.x) < 140 && Math.abs(p.y - at.y) < 18;
+    });
+    m.el.hidden = !at || crowded;
+    if (!at || crowded) continue;
     m.el.textContent = m.text();
     m.el.style.transform = `translate(${at.x.toFixed(1)}px, ${at.y.toFixed(1)}px)`;
   }
