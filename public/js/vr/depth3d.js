@@ -263,3 +263,93 @@ export function motionPath(posAt, { dirOf, axis, coneRad, n = 33 }) {
     shortened: fLo > -1 || fHi < 1,
   };
 }
+
+/**
+ * A Gaia DR3 star's distance, as both depth views take it: the geometric
+ * distance (Bailer-Jones et al. 2021, `bj` Map id → { r, lo, hi } in pc)
+ * where it is itself known to 20 % (for a faint star it is mostly the
+ * prior, and that is not a measurement), else the parallax measured to 20 %.
+ * Returns `{ pc, lo, hi, src }`, src 'bj', 'plx' or null with pc null.
+ */
+export function starDistance(row, bj = null) {
+  const g0 = bj?.get(row.id);
+  const geom = g0 && (g0.hi - g0.lo) / (2 * g0.r) <= 0.2 ? g0 : null;
+  const plx = geom ? null : parallaxDistancePc(row.plx, row.plxErr);
+  return {
+    pc: geom?.r ?? plx?.pc ?? null,
+    lo: geom?.lo ?? plx?.lo ?? null,
+    hi: geom?.hi ?? plx?.hi ?? null,
+    src: geom ? 'bj' : plx ? 'plx' : null,
+  };
+}
+
+/** A galaxy's comoving distance from its redshift, `{ mpc, au }`, both null below MIN_REDSHIFT. */
+export function galaxyDistance(z) {
+  const mpc = z >= MIN_REDSHIFT ? redshiftDistanceMpc(z) : null;
+  return { mpc, au: mpc ? mpc * 1e6 * AU_PER_PC : null };
+}
+
+/**
+ * A sky position to its place in the plate's picture, `{ u, v }` (u across
+ * from the left, v up from the bottom, both 0…1), by the grid the visit is
+ * drawn on (wcs.js TangentGrid: north up, east left); null off the picture.
+ */
+export function plateUV(grid, ra, dec) {
+  const ij = grid?.worldToIndex(ra, dec);
+  if (!ij) return null;
+  const u = (ij[0] + 0.5) / grid.width;
+  const v = 1 - (ij[1] + 0.5) / grid.height;
+  return u >= 0 && u <= 1 && v >= 0 && v <= 1 ? { u, v } : null;
+}
+
+/**
+ * The point on the plate under (u, v): `corners` its four corners, bottom-left,
+ * bottom-right, top-right, top-left, as the picture is stretched over them.
+ * A ray started here leaves the very pixel its object is in.
+ */
+export function platePoint(corners, u, v) {
+  const [a, b, c, d] = corners;
+  const w = [(1 - u) * (1 - v), u * (1 - v), u * v, (1 - u) * v];
+  return [0, 1, 2].map((k) => w[0] * a[k] + w[1] * b[k] + w[2] * c[k] + w[3] * d[k]);
+}
+
+/**
+ * The plate's four corners in the corridor (bottom-left, bottom-right,
+ * top-right, top-left as seen from its front), `nearM` from the eye: the
+ * grid's own edges sent through the same widened mapping as everything else
+ * (`fieldDirection`, east on the left). The grid must be centred on the field
+ * the frame looks along, as the page's grid is.
+ */
+export function plateCornersFor(grid, frame, spread, nearM) {
+  const hw = grid.fovDeg / 2;
+  const hh = grid.fovHeightDeg / 2;
+  const corner = (e, n) => {
+    const d = fieldDirection(e, n, frame, spread);
+    const l = Math.hypot(d[0], d[1], d[2]);
+    return [(d[0] / l) * nearM, (d[1] / l) * nearM, (d[2] / l) * nearM];
+  };
+  return [corner(hw, -hh), corner(-hw, -hh), corner(-hw, hh), corner(hw, hh)];
+}
+
+/**
+ * Where a thing's ray leaves the plate: its own pixel in the picture (by the
+ * grid the plate was built from), or null when it is off the picture. The
+ * catalogues are asked over a circle round the whole field, so a good part
+ * of what is placed lies above, below or beside the picture; such a thing has
+ * no pixel, and a ray started from empty space beside the plate reads as one
+ * that missed its star.
+ */
+export function rayStart(grid, corners, ra, dec) {
+  const uv = corners ? plateUV(grid, ra, dec) : null;
+  return uv ? platePoint(corners, uv.u, uv.v) : null;
+}
+
+/**
+ * The rays worth drawing when there are more than `max`: by `score`, highest
+ * first (the field's own object, what SPHEREx sees in the visit, the
+ * brighter), ties in the order given. Returns `{ drawn, total }`.
+ */
+export function capRays(rays, max) {
+  const order = rays.map((r, i) => i).sort((p, q) => (rays[q].score - rays[p].score) || p - q);
+  return { drawn: order.slice(0, Math.max(0, max)).map((i) => rays[i]), total: rays.length };
+}

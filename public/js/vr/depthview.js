@@ -27,7 +27,7 @@ import { fmt, formatDay, fmtDate } from '../i18n.js';
 import { deltaRA, separation } from '../wcs.js';
 import { propagate, GAIA_EPOCH } from '../overlay.js';
 import {
-  placeByDistance, depthMetres, unknownShell, parallaxDistancePc, redshiftDistanceMpc, MIN_REDSHIFT, matchTarget,
+  placeByDistance, depthMetres, unknownShell, starDistance, galaxyDistance, matchTarget,
   AU_PER_PC, DEPTH_TICKS, PLANET_X_AU, lookbackGyr, PLANET_X_V, PLANET_X_MAX_BETA, eclipticLatitude, decadeRings, viewFrame, fieldDirection, motionPath,
 } from './depth3d.js';
 import { createPanel, FONTS, wrapText, fitText, wrapLines, button, chipWidth, roundRect } from './panel.js';
@@ -1417,15 +1417,11 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
       }
       const objs = rows.map((r) => {
         const at = propagate(r, epoch, GAIA_EPOCH);
-        // A geometric distance is taken only where it is itself known to 20 %:
-        // for a faint star it is mostly the prior, and that is not a measurement.
-        const g0 = bj?.get(r.id);
-        const geom = g0 && (g0.hi - g0.lo) / (2 * g0.r) <= 0.2 ? g0 : null;
-        const plx = geom ? null : parallaxDistancePc(r.plx, r.plxErr);
-        const pc = geom?.r ?? plx?.pc ?? null;
+        // Geometric where it is known to 20 %, else the parallax (starDistance).
+        const { pc, lo, hi, src } = starDistance(r, bj);
         return {
-          id: r.id, dir: dirOf(at.ra, at.dec), au: pc ? pc * AU_PER_PC : null, mag: r.mag, pc, src: geom ? 'bj' : plx ? 'plx' : null,
-          lo: geom?.lo ?? plx?.lo ?? null, hi: geom?.hi ?? plx?.hi ?? null, ra: at.ra, dec: at.dec,
+          id: r.id, dir: dirOf(at.ra, at.dec), au: pc ? pc * AU_PER_PC : null, mag: r.mag, pc, src,
+          lo, hi, ra: at.ra, dec: at.dec,
           // Where it stands across the clock's span, by its proper motion alone:
           // the distance is held, since these rows carry no radial velocity.
           moves: Number.isFinite(r.pmRA) && Number.isFinite(r.pmDE),
@@ -1660,8 +1656,8 @@ export function createDepthView({ head, behind, field, look, pxPerDeg, onAction,
     setGalaxies(list) {
       if (list instanceof Error) { if (!state.failed.includes('SIMBAD')) state.failed.push('SIMBAD'); state.galaxies = []; drawSign(); return; }
       const objs = list.map((g) => {
-        const mpc = g.z >= MIN_REDSHIFT ? redshiftDistanceMpc(g.z) : null;
-        return { g, dir: dirOf(g.ra, g.dec), mpc, au: mpc ? mpc * 1e6 * AU_PER_PC : null };
+        const { mpc, au } = galaxyDistance(g.z);
+        return { g, dir: dirOf(g.ra, g.dec), mpc, au };
       });
       state.galaxies = objs.filter((o) => o.au);
       state.galaxyCount = objs.length;

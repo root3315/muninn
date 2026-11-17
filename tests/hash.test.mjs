@@ -64,3 +64,11 @@ test('an empty hash is no field, not the vernal equinox', () => {
 test('escaped separators from an older copy still read', () => {
   assert.deepEqual(parseMarks('1.5,2.5;3,4'), decodeHash('#marks=1.5%2C2.5%3B3%2C4').marks);
 });
+
+test('the field in depth goes in the link and reads back, with its visit', () => {
+  const hash = encodeHash({ ...field, mode: 'depth' });
+  assert.match(hash, /(^|&)mode=depth(&|$)/);
+  const back = decodeHash(`#${hash}`);
+  assert.equal(back.mode, 'depth');
+  assert.equal(back.visit, 4);
+});

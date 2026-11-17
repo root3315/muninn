@@ -18,7 +18,7 @@ import { scanHDUs, decodePixels, readHeader, dataLength, padded } from './fits.j
 import { WCS } from './wcs.js';
 import { skySigma } from './depth.js';
 import { deadline, withRetry, FRAME_DEADLINE_MS } from './net.js';
-import { onHost, rangeProblem } from './ranges.js';
+import { onHost, rangeProblem, fetchFrame } from './ranges.js';
 import { parseWaveTable, wavelengthAt } from './spectrum.js';
 import { riceDecode } from './rice.js';
 
@@ -33,22 +33,23 @@ const MAX_HEADER = 1 << 20;
 /**
  * Asks per range: a dropped connection, a gateway error or a short answer is
  * asked again after a growing wait, every second time at the bucket's other
- * name (see ranges.js). What was read before stays read.
+ * name; the first ask goes through the site's own relay where there is one
+ * (see ranges.js). What was read before stays read.
  */
 const RANGE_TRIES = 4;
 
 const fault = (message, extra) => Object.assign(new Error(message), extra);
 
 function fetchRange(url, start, end, signal, { cache = 'default' } = {}) {
-  return withRetry((attempt) => fetchRangeOnce(onHost(url, attempt), start, end, signal, cache), { signal, tries: RANGE_TRIES });
+  return withRetry((attempt) => fetchRangeOnce(onHost(url, attempt), start, end, signal, cache, attempt), { signal, tries: RANGE_TRIES });
 }
 
-async function fetchRangeOnce(url, start, end, signal, cache) {
-  const res = await fetch(url, {
+async function fetchRangeOnce(url, start, end, signal, cache, attempt) {
+  const res = await fetchFrame(url, {
     headers: { Range: `bytes=${start}-${end}` },
     signal: deadline(signal, FRAME_DEADLINE_MS),
     cache,
-  });
+  }, attempt);
   if (!res.ok) throw fault(`${res.status} ${res.statusText} on ${url}`, { status: res.status });
   if (res.status === 206) return checked(res, await res.arrayBuffer(), start, end, url);
   // A server that ignores Range answers 200 with the whole file. From byte 0
@@ -298,7 +299,7 @@ function maskFlagged(plane, read) {
  * Sampled around the grid border rather than at four corners, because SIP
  * distortion bows the edges outward near the detector rim.
  */
-function sourceBounds(wcs, grid) {
+export function sourceBounds(wcs, grid) {
   let x0 = Infinity; let x1 = -Infinity; let y0 = Infinity; let y1 = -Infinity;
   let hits = 0;
   const w = grid.width - 1;
@@ -322,10 +323,28 @@ function sourceBounds(wcs, grid) {
 }
 
 /**
- * Fetch and resample one epoch.
- * Returns null when the frame does not actually overlap the requested field.
+ * The detector rows a grid falls on, with the box of detector pixels that
+ * covers it. `margin` rows are added above and below: one is what bilinear
+ * sampling needs; a ready-made field keeps a few more, so a field opened a
+ * hair off its centre still finds every pixel it samples.
  */
-export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = true, onHeader } = {}) {
+function rowsFor(wcs, grid, nx, ny, margin = 1) {
+  const box = sourceBounds(wcs, grid);
+  if (!box) return null;
+  const rowFrom = Math.max(1, Math.floor(box.y0) - margin);
+  const rowTo = Math.min(ny, Math.ceil(box.y1) + margin);
+  if (rowTo < rowFrom || box.x1 < 1 || box.x0 > nx) return null;
+  return { box, rowFrom, rowTo };
+}
+
+/**
+ * Read one visit's detector pixels under a grid: the rows it falls on, whole,
+ * with the pipeline's flagged pixels blanked, and the FLAGS rows beside them.
+ * Returns null when the frame does not reach the grid. This is everything a
+ * stamp is made from (see resampleSource); tools/bake-fields.mjs keeps it for
+ * the ready-made fields, cut to the columns the field needs.
+ */
+export async function readSource(url, grid, { signal, mask = true, onHeader, margin = 1 } = {}) {
   // The flags' header, read beside the image header when that is still to
   // be read (see FLAGS_AHEAD_FROM).
   const flagsAhead = headers.has(url) ? null : fetchRange(url, FLAGS_AHEAD_FROM, FLAGS_AHEAD_TO - 1, signal, AHEAD_CACHE);
@@ -344,13 +363,9 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = 
     throw fault(`no image plane described on ${url}`, { retry: false });
   }
 
-  const box = sourceBounds(wcs, grid);
-  if (!box) return null;
-
-  // One pixel of margin on every side so bilinear sampling has its neighbours.
-  const rowFrom = Math.max(1, Math.floor(box.y0) - 1);
-  const rowTo = Math.min(ny, Math.ceil(box.y1) + 1);
-  if (rowTo < rowFrom || box.x1 < 1 || box.x0 > nx) return null;
+  const span = rowsFor(wcs, grid, nx, ny, margin);
+  if (!span) return null;
+  const { rowFrom, rowTo } = span;
 
   const rows = rowTo - rowFrom + 1;
   const byteStart = hdu.dataStart + (rowFrom - 1) * nx * bytesPerPixel;
@@ -376,19 +391,73 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = 
   // `mask: false` is for the tools that calibrate against a flagged pixel.
   const read = await flagsRead;
   const flagged = read && mask ? maskFlagged(plane, read) : null;
-  const flagRows = read?.values ?? null;
+  return {
+    cards, wcs, nx, ny, dataStart: hdu.dataStart, dataBytes: hdu.dataBytes ?? null,
+    // The pixels held: `rows` detector rows from `rowFrom` (1-based), `cols`
+    // columns from `colFrom` (0-based); here every column of each row.
+    plane, flags: read?.values ?? null, rowFrom, rows, colFrom: 0, cols: nx,
+    // Pixels the mask blanked, per row held, every column counted.
+    maskedPerRow: flagged ? maskedByRow(plane, nx, rows) : null,
+    bytesRead: raw.byteLength + (flagged?.bytes ?? 0),
+  };
+}
+
+/** How many blank pixels each row holds, so any span of rows can be counted again. */
+function maskedByRow(plane, nx, rows) {
+  const out = new Uint32Array(rows);
+  for (let r = 0; r < rows; r++) {
+    let n = 0;
+    for (let c = 0; c < nx; c++) if (plane[r * nx + c] !== plane[r * nx + c]) n++;
+    out[r] = n;
+  }
+  return out;
+}
+
+/**
+ * Put a visit's detector pixels onto a grid: what loadStamp returns, from
+ * what readSource read or what a ready-made field kept. Every test of
+ * whether a sample falls on the detector is made against the rows this grid
+ * itself would read, so a source that holds more of the detector than the
+ * grid needs (a ready-made field, cut for the widest screen) gives the very
+ * same stamp as a read made for this grid. A source that holds less throws
+ * (`uncovered`): the caller reads the visit from the archive instead.
+ */
+export function resampleSource(src, grid, { minCoverage = 0.15 } = {}) {
+  const { wcs, nx, ny, plane, cols, colFrom: col0 } = src;
+  const span = rowsFor(wcs, grid, nx, ny);
+  if (!span) return null;
+  const { box, rowFrom, rowTo } = span;
+  const rows = rowTo - rowFrom + 1;
+  // The detector columns this grid's noise is taken over (0-based), and the
+  // widest its samples can reach: one past the box on either side.
+  const colFrom = Math.max(0, Math.floor(box.x0) - 1);
+  const colTo = Math.min(nx - 1, Math.ceil(box.x1) - 1);
+  const firstCol = Math.max(0, Math.floor(box.x0) - 2);
+  const lastCol = Math.min(nx - 1, Math.ceil(box.x1));
+  if (rowFrom < src.rowFrom || rowTo > src.rowFrom + src.rows - 1 || firstCol < col0 || lastCol > col0 + cols - 1) {
+    throw fault('the kept pixels do not cover this grid', { retry: false, uncovered: true });
+  }
+  // Where detector row r and column c (both 0-based) sit in the source.
+  const rowShift = src.rowFrom - 1;
+  const at = (r, c) => (r - rowShift) * cols + (c - col0);
+  const flagRows = src.flags;
+
+  // Pixels the mask blanked over this grid's rows, every column counted.
+  let masked = null;
+  if (src.maskedPerRow) {
+    masked = 0;
+    for (let r = rowFrom; r <= rowTo; r++) masked += src.maskedPerRow[r - src.rowFrom];
+  }
 
   // The sky noise of the detector's own pixels, over the columns the field
   // covers. The depth is a statement about detector pixels (6.15″, the pixel
   // solid angle it is converted through), and the resampled grid is smoother
   // than they are: bilinear interpolation averages neighbours and reads about
   // a third low, which made every quoted depth ~0.4 mag too deep.
-  const colFrom = Math.max(0, Math.floor(box.x0) - 1);
-  const colTo = Math.min(nx - 1, Math.ceil(box.x1) - 1);
   const patch = new Float32Array(Math.max(0, colTo - colFrom + 1) * rows);
   let n = 0;
-  for (let r = 0; r < rows; r++) {
-    for (let c = colFrom; c <= colTo; c++) patch[n++] = plane[r * nx + c];
+  for (let r = rowFrom - 1; r < rowTo; r++) {
+    for (let c = colFrom; c <= colTo; c++) patch[n++] = plane[at(r, c)];
   }
   const detectorSigma = skySigma(patch.subarray(0, n));
 
@@ -413,16 +482,16 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = 
 
       const tx = fx - ix;
       const ty = fy - iy;
-      const base = iy * nx + ix;
-      const nearest = base + (tx >= 0.5 ? 1 : 0) + (ty >= 0.5 ? nx : 0);
+      const base = at(iy + rowFrom - 1, ix);
+      const nearest = base + (tx >= 0.5 ? 1 : 0) + (ty >= 0.5 ? cols : 0);
       let q = plane[nearest] === plane[nearest] ? 0 : QUALITY.HOLE;
       if (flagRows && flagRows[nearest] & (1 << OVERFLOW_BIT)) { q |= QUALITY.OVERFLOW; overflow++; }
       if (flagRows && flagRows[nearest] & (1 << GHOST_BIT)) q |= QUALITY.GHOST;
       quality[j * gw + i] = q;
       const a = plane[base];
       const b = plane[base + 1];
-      const c = plane[base + nx];
-      const d = plane[base + nx + 1];
+      const c = plane[base + cols];
+      const d = plane[base + cols + 1];
 
       let value;
       if (a === a && b === b && c === c && d === d) {
@@ -442,6 +511,7 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = 
   const coverage = inside / (gw * gh);
   if (coverage < minCoverage) return null;
 
+  const { cards } = src;
   return {
     data: out,
     // Per sample: QUALITY.OVERFLOW where the nearest detector pixel saturated,
@@ -466,13 +536,22 @@ export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = 
       exposure: cards.get('EXPTIME') ?? cards.get('EFFEXPTM') ?? null,
       rollDeg: wcs.rollDeg,
       pixelScale: wcs.scale * 3600,
-      bytesRead: raw.byteLength + (flagged?.bytes ?? 0),
-      flaggedPixels: flagged ? flagged.masked : null,
+      bytesRead: src.bytesRead,
+      flaggedPixels: masked,
       // Grid samples on saturated detector pixels; null when FLAGS was not read.
       overflowSamples: flagRows ? overflow : null,
       detectorSigma,
     },
   };
+}
+
+/**
+ * Fetch and resample one epoch.
+ * Returns null when the frame does not actually overlap the requested field.
+ */
+export async function loadStamp(url, grid, { signal, minCoverage = 0.15, mask = true, onHeader } = {}) {
+  const src = await readSource(url, grid, { signal, mask, onHeader });
+  return src && resampleSource(src, grid, { minCoverage });
 }
 
 /**
@@ -485,10 +564,10 @@ const WAVE_TAIL_BYTES = 2 * 2880;
 function fetchTail(url, bytes, signal) {
   return withRetry(async (attempt) => {
     const at = onHost(url, attempt);
-    const res = await fetch(at, {
+    const res = await fetchFrame(at, {
       headers: { Range: `bytes=-${bytes}` },
       signal: deadline(signal, FRAME_DEADLINE_MS),
-    });
+    }, attempt);
     if (!res.ok) throw fault(`${res.status} ${res.statusText} on ${at}`, { status: res.status });
     // Anything but a partial answer would be the whole 70 MB file.
     if (res.status !== 206) throw fault(`Range not honoured (HTTP ${res.status}) on ${at}`, { retry: false });
@@ -509,4 +588,22 @@ export async function loadWavelength(url, ra, dec, { signal } = {}) {
   ]);
   const pix = new WCS(hdu.cards).worldToPix(ra, dec);
   return pix ? wavelengthAt(table, pix[0], pix[1]) : null;
+}
+
+/** A file's WCS-WAVE table, read once (see loadWavelength); null when it has none. */
+export function loadWaveTable(url, { signal } = {}) {
+  return remembered(waveTables, url, async () => parseWaveTable(await fetchTail(url, WAVE_TAIL_BYTES, signal)));
+}
+
+/**
+ * What a ready-made field already holds of a file (its image header and its
+ * wavelength table, see fieldstore.js), taken as read: a wavelength at a
+ * mark, or a read of the same file at another size, then asks the archive
+ * for nothing it has already given.
+ */
+export function knowFile(url, { cards, dataStart, dataBytes, waveTable }) {
+  if (!headers.has(url) && cards && Number.isFinite(dataStart)) {
+    headers.set(url, Promise.resolve({ name: 'IMAGE', cards, dataStart, dataBytes }));
+  }
+  if (!waveTables.has(url) && waveTable !== undefined) waveTables.set(url, Promise.resolve(waveTable));
 }

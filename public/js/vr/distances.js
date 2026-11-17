@@ -19,6 +19,7 @@ import { parseVOTable } from '../votable.js';
 import { parseCsv } from '../csv.js';
 import { simbadTap, simbadFamily } from '../catalog.js';
 import { deadline } from '../net.js';
+import { fetchData } from '../datafiles.js';
 
 const VIZIER_CFA = 'https://vizier.cfa.harvard.edu/viz-bin/votable';
 const VIZIER_TAP = 'https://tapvizier.cds.unistra.fr/TAPVizieR/tap/sync';
@@ -110,7 +111,7 @@ export async function galaxiesWithRedshift(field, signal) {
 export async function bakedAnswers(key, signal) {
   if (!key) return null;
   try {
-    const res = await fetch(`data/vr/${encodeURIComponent(key)}.json`, { signal: deadline(signal, 10_000) });
+    const res = await fetchData(`data/vr/${encodeURIComponent(key)}.json`, { signal: deadline(signal, 10_000) });
     if (!res.ok) return null;
     return await res.json();
   } catch {

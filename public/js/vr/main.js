@@ -20,6 +20,7 @@
 import * as THREE from '../vendor/three.module.js';
 import { setLanguage, getLanguage, t } from '../i18n.js';
 import { loadStars } from '../gate.js';
+import { fetchData } from '../datafiles.js';
 import { planetsNow } from '../ephemeris.js';
 import { createSky, SKY_RADIUS } from './sky3d.js';
 import { createCard } from './card.js';
@@ -59,7 +60,7 @@ const STEP_MAX_M = 12;
 const STEP_FADE_MS = 160;
 const FLY_STOP_M = 0.6;
 
-/** The page's language: ?lang=, else the site's stored choice, else the browser's. */
+/** The page's language: ?lang=, else the site's stored choice, else English. */
 export function pageLanguage() {
   const asked = new URLSearchParams(location.search).get('lang');
   if (asked) return asked;
@@ -67,7 +68,7 @@ export function pageLanguage() {
     const stored = localStorage.getItem('muninn.lang');
     if (stored) return stored;
   } catch { /* private window */ }
-  return (navigator.language ?? '').toLowerCase().startsWith('ru') ? 'ru' : 'en';
+  return 'en';
 }
 
 /** Whether this device can run an immersive VR session, the recommended way. */
@@ -124,7 +125,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   ui.status(tv('vr.loadingSky'));
   const [stars, targets] = await Promise.all([
     loadStars().catch(() => null),
-    fetch('data/targets.json').then((r) => (r.ok ? r.json() : { targets: [] })).catch(() => ({ targets: [] })),
+    fetchData('data/targets.json').then((r) => (r.ok ? r.json() : { targets: [] })).catch(() => ({ targets: [] })),
   ]);
   const sky = createSky(stars);
   // The naked-eye stars whose stray light a mark near them is read against, as on the site.

@@ -15,6 +15,24 @@ const HORIZONS_API = 'https://ssd.jpl.nasa.gov/api/horizons.api';
 export const SMALL_BODY_MAX = 3;
 
 /**
+ * The 88 constellations as the IAU abbreviates them. A number and one of
+ * these is a star's Flamsteed name ("55 Cnc", "61 Cyg", "51 Peg"), not an
+ * asteroid's: Flamsteed numbers stop at 140, so "849 Ara" is still asteroid
+ * (849) Ara.
+ */
+const CONSTELLATIONS = new Set(`And Ant Aps Aqr Aql Ara Ari Aur Boo Cae Cam Cnc CVn CMa CMi Cap Car Cas Cen Cep Cet Cha Cir Col
+  Com CrA CrB Crv Crt Cru Cyg Del Dor Dra Equ Eri For Gem Gru Her Hor Hya Hyi Ind Lac Leo LMi Lep Lib Lup Lyn Lyr Men Mic Mon
+  Mus Nor Oct Oph Ori Pav Peg Per Phe Pic Psc PsA Pup Pyx Ret Sge Sgr Sco Scl Sct Ser Sex Tau Tel Tri TrA Tuc UMa UMi Vel Vir
+  Vol Vul`.trim().split(/\s+/).map((c) => c.toLowerCase()));
+const FLAMSTEED_MAX = 140;
+
+/** Whether the text is a star's Flamsteed name: a number up to 140 and a constellation. */
+export function isFlamsteed(text) {
+  const m = /^(\d{1,3}) ([A-Za-z]{3})$/.exec(String(text ?? '').replace(/\s+/g, ' ').trim());
+  return Boolean(m && Number(m[1]) >= 1 && Number(m[1]) <= FLAMSTEED_MAX && CONSTELLATIONS.has(m[2].toLowerCase()));
+}
+
+/**
  * What to ask the Small-Body Database for the text, or null when the text
  * cannot be a small body's designation or name.
  *
@@ -26,6 +44,8 @@ export const SMALL_BODY_MAX = 3;
 export function smallBodyQuery(raw) {
   const text = String(raw ?? '').replace(/[−–—]/g, '-').replace(/\s+/g, ' ').trim();
   if (!text || text.length > 40) return null;
+  // "55 Cnc" is a star with five planets, not asteroid (55) Pandora.
+  if (isFlamsteed(text)) return null;
 
   // A provisional designation: "2024 YR4", "2024YR4", "1998 KY26".
   let m = /^(18\d\d|19\d\d|20\d\d) ?([A-Z]{2})(\d{0,4})$/i.exec(text);
@@ -46,6 +66,16 @@ export function smallBodyQuery(raw) {
   // A plain name, one word: "Ceres", "Eros", "Halley".
   if (/^\p{L}[\p{L}'-]{2,24}$/u.test(text)) return { sstr: text, sure: false };
   return null;
+}
+
+/**
+ * Whether a body JPL found by number is the one the text names. "433 Eros"
+ * is asked of JPL as 433 alone, so "55 Cancri" came back as (55) Pandora;
+ * where the text has a name after the number, the body's name must carry it.
+ */
+export function bodyMatchesText(text, name) {
+  const m = /^\(?\d{1,7}\)? (\p{L}[\p{L}' -]*)$/u.exec(String(text ?? '').replace(/\s+/g, ' ').trim());
+  return !m || String(name ?? '').toLowerCase().includes(m[1].trim().toLowerCase());
 }
 
 /** The characters the relay lets through to JPL: what smallBodyQuery writes. */

@@ -463,6 +463,15 @@ li { list-style: none; }
 /* An empty span has no width of its own: `auto` left the ramp at zero and the
    two words either side of it read as unrelated labels. */
 .run__scale .matrix__ramp { flex: 0 0 4rem; }
+/* Where the page is one screen high, the line under the run is one line in
+   every mode: a longer hint wrapped it to two, the run grew, and the plate
+   above shrank by a line's height on each change of mode. The hint gives way
+   at its end instead, and says all of itself on hover. */
+@media (min-width: 68.0625rem) and (min-height: 34.0625rem) {
+  .run__scale { flex-wrap: nowrap; }
+  .run__hint { flex: 1 1 0; min-inline-size: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .run__axes { flex: none; }
+}
 
 /* =================================================================== centre */
 
@@ -1364,6 +1373,39 @@ body[data-gate="open"] .shell { visibility: hidden; }
   color: var(--color-ink);
   overflow: hidden;
 }
+/* The GPU-drawn band under the sky's canvas: seen, never touched. */
+.gate__band { pointer-events: none; }
+/* The opening: the real sky comes up out of the dark and settles, as an eye
+   adjusts, then the live sky takes over from the picture without a seam. */
+.gate__intro {
+  background: var(--color-well) url("../img/opening.jpg") center / cover no-repeat;
+  animation: intro-sky 2600ms var(--ease-out, ease-out) both;
+}
+@keyframes intro-sky {
+  from { opacity: 0; transform: scale(1.14); filter: brightness(0.4); }
+  60% { opacity: 1; }
+  to { opacity: 1; transform: scale(1); filter: brightness(1); }
+}
+.gate__band--wait { opacity: 0; }
+.gate__band { transition: opacity 1200ms var(--ease-out, ease-out); }
+/* On a wide screen only: on a phone the panel's mark is placed out of it,
+   fixed in the bar, and an animated panel would hold it back in place. */
+@media not ((max-width: 48rem) and (min-height: 30.0625rem)) {
+  .gate:not([data-entering="true"]) .gate__poster,
+  .gate:not([data-entering="true"]) .gate__acts { animation: intro-ui 900ms var(--ease-out, ease-out) 700ms backwards; }
+}
+/* Opacity only: on a phone the panel's mark is placed out of it, into the
+   bar, and a transform here would carry it back. */
+@keyframes intro-ui {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gate__intro, .gate .gate__poster, .gate .gate__acts { animation: none; }
+}
+/* SPHEREx's own sky comes in over the picture that stood in for it. */
+.gate__band--survey { opacity: 0; transition: opacity 900ms var(--ease-out, ease-out); }
+.gate--cube .gate__band--survey { opacity: 1; }
 .gate__sky {
   position: absolute; inset: 0;
   inline-size: 100%; block-size: 100%;
@@ -1654,3 +1696,10 @@ body[data-gate="closed"] :is(.mast, .side--right) {
 .safety-toast { inset-block-end: calc(env(safe-area-inset-bottom, 0px) + var(--space-xl)); }
 .safety-offline { inset-block-start: calc(env(safe-area-inset-top, 0px) + var(--space-sm)); color: var(--color-ink); }
 .safety-toast[hidden], .safety-offline[hidden] { display: none; }
+
+/* In depth, while its code (and three.js with it) is on the way: the plate says so. */
+.indepth-wait {
+  position: absolute; inset: 0; z-index: 2; margin: 0;
+  display: grid; place-content: center; padding: var(--space-xl); text-align: center;
+  background: var(--color-well); color: var(--color-muted); font-size: var(--text-sm);
+}

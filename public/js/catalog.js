@@ -34,9 +34,10 @@ import {
 import { parseCsv } from './csv.js';
 import { mergeBodies } from './sbident.js';
 import { normaliseName } from './names.js';
-import { smallBodyQuery } from './smallbody.js';
+import { smallBodyQuery, bodyMatchesText } from './smallbody.js';
 import { parseVOTable } from './votable.js';
 import { deltaRA } from './wcs.js';
+import { fetchData, FIELD_LIST } from './datafiles.js';
 
 const S3_BASE = 'https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/';
 const IBE_PREFIX = 'https://irsa.ipac.caltech.edu/ibe/data/spherex/';
@@ -126,20 +127,21 @@ export function formatDec(deg) {
   return `${deg < 0 ? '−' : '+'}${String(whole).padStart(2, '0')}° ${String(minutes).padStart(2, '0')}′ ${seconds.toFixed(1).padStart(4, '0')}″`;
 }
 
-/** SIMBAD name resolution through the CDS Sesame service. */
 /**
- * Sesame at CDS, and its mirror at the CfA. In November 2026 the CDS address
- * began answering with a redirect to a mirror that sends no CORS headers, so
- * a browser could resolve no name at all; both are asked and the first
- * answer is taken.
+ * SIMBAD name resolution through the CDS Sesame service: at CDS, and at its
+ * mirror at the CfA. In November 2026 the CDS address began answering with a
+ * redirect to a mirror (vizier.idia.ac.za) that sends no CORS headers, so the
+ * browser asks the box (/api/cds), which asks both, and the CfA mirror,
+ * which does send them, itself; the first answer is taken.
  */
-const SESAME = [
+export const SESAME = [
   'https://cds.unistra.fr/cgi-bin/nph-sesame/-oI/SNV?',
   'https://vizier.cfa.harvard.edu/viz-bin/nph-sesame/-oI/SNV?',
 ];
+const SESAME_CFA = SESAME[1];
 
-async function askSesame(base, name, signal) {
-  const res = await fetch(base + encodeURIComponent(name), { signal: deadline(signal, CATALOG_DEADLINE_MS) });
+async function askSesame(name, signal) {
+  const res = await fetch(SESAME_CFA + encodeURIComponent(name), { signal: deadline(signal, CATALOG_DEADLINE_MS) });
   if (!res.ok) throw new Error(`Sesame ${res.status}`);
   return res.text();
 }
@@ -153,7 +155,10 @@ export async function resolveSesame(raw, { signal } = {}) {
   const name = normaliseName(raw);
   let body;
   try {
-    body = await Promise.any(SESAME.map((base) => askSesame(base, name, signal)));
+    body = await Promise.any([
+      fromRelay(`api/cds?ask=sesame&name=${encodeURIComponent(name)}`, signal, CATALOG_DEADLINE_MS).then((b) => b.text),
+      askSesame(name, signal),
+    ]);
   } catch (err) {
     throw err.errors?.[0] ?? err;
   }
@@ -190,9 +195,11 @@ export async function resolveSmallBody(text, { signal } = {}) {
 export async function resolveName(name, { signal } = {}) {
   const small = smallBodyQuery(name);
   const fromJpl = small
-    ? resolveSmallBody(name, { signal }).then(({ bodies, day }) => (bodies[0]
-      ? { ra: bodies[0].ra, dec: bodies[0].dec, name: `${bodies[0].name} · ${day}`, smallBody: { ...bodies[0], day } }
-      : null)).catch(() => null)
+    ? resolveSmallBody(name, { signal }).then(({ bodies, day }) => {
+      // Only a body whose name is the one typed: "55 Cancri" is not (55) Pandora.
+      const body = bodies.find((b) => bodyMatchesText(name, b.name));
+      return body ? { ra: body.ra, dec: body.dec, name: `${body.name} · ${day}`, smallBody: { ...body, day } } : null;
+    }).catch(() => null)
     : Promise.resolve(null);
   const fromSesame = resolveSesame(name, { signal });
   if (small?.sure) {
@@ -227,21 +234,6 @@ export class NoRelayError extends Error {
   constructor(cause) { super('No archive relay available'); this.name = 'NoRelayError'; this.cause = cause; }
 }
 
-let bakedIndex = null;
-
-/** The fields whose frame lists ship with the page. Empty if the file is absent. */
-async function loadBakedIndex(signal) {
-  if (bakedIndex) return bakedIndex;
-  try {
-    const res = await fetch('data/fields/index.json', { signal: deadline(signal, CATALOG_DEADLINE_MS) });
-    bakedIndex = res.ok ? await res.json() : [];
-  } catch {
-    // Not remembered: one dropped request must not send every preset to the
-    // relay until the page is reloaded.
-    return [];
-  }
-  return bakedIndex;
-}
 
 /**
  * Which SPHEREx frames cover the position.
@@ -291,15 +283,52 @@ function untilAborted(promise, signal) {
   });
 }
 
-async function askFrames({ ra, dec, radius }, signal) {
-  const index = await loadBakedIndex(signal);
+/**
+ * Frame lists already answered in this session, whole ones only: a field
+ * opened again (back from the sky, another band and back, the browser's Back)
+ * asks nothing. Kept for a quarter of an hour, so a page left open still
+ * hears of a new visit.
+ */
+const answered = new Map();
+const ANSWER_KEPT_MS = 15 * 60_000;
+const ANSWERS_KEPT = 32;
+
+async function askFrames(question, signal) {
+  const key = `${question.ra},${question.dec},${question.radius}`;
+  const kept = answered.get(key);
+  if (kept && Date.now() - kept.at < ANSWER_KEPT_MS) return kept.answer;
+  const answer = await askFramesNow(question, signal);
+  if (!answer.partial && !answer.ownIndexDate) {
+    answered.delete(key);
+    answered.set(key, { at: Date.now(), answer });
+    while (answered.size > ANSWERS_KEPT) answered.delete(answered.keys().next().value);
+  }
+  return answer;
+}
+
+/**
+ * The archive's own list for a field that ships with the page, asked past
+ * the bundled copy (`live=1`), to see what has changed since it was made.
+ * Throws when there is no relay to ask or it did not answer.
+ */
+export async function askLiveFrames({ ra, dec, radius = 0.006 }, { signal } = {}) {
+  const res = await fetch(`api/search?ra=${ra.toFixed(6)}&dec=${dec.toFixed(6)}&radius=${radius}&live=1`, { signal: deadline(signal, SEARCH_DEADLINE_MS) });
+  if (!(res.headers.get('content-type') ?? '').includes('json')) throw new NoRelayError(new Error(`HTTP ${res.status}`));
+  const body = await res.json();
+  if (!body?.ok) throw new UpstreamError(body?.error ?? `HTTP ${res.status}`);
+  return readPartial(body);
+}
+
+async function askFramesNow({ ra, dec, radius }, signal) {
+  // The fields whose frame lists ship with the page; the list itself travels with the code.
+  const index = FIELD_LIST;
   const cos = Math.cos((dec * Math.PI) / 180);
   const hit = index.find((f) => Math.hypot(deltaRA(f.ra, ra) * cos, f.dec - dec) < 0.01);
   if (hit) {
     // A bundled list that did not arrive (or arrived broken) is asked of the
     // relay, which keeps the same lists.
     try {
-      const res = await fetch(`data/fields/${hit.key}.json`, { signal: deadline(signal, CATALOG_DEADLINE_MS) });
+      const res = await fetchData(`data/fields/${hit.key}.json`, { signal: deadline(signal, CATALOG_DEADLINE_MS) });
       const field = res.ok ? await res.json() : null;
       if (Array.isArray(field?.frames)) return { frames: field.frames, truncated: Boolean(field.truncated), source: 'bundled' };
     } catch (err) {
@@ -584,30 +613,92 @@ export async function knownBodies(field, { signal, magLimit = 20, limit = 40 } =
   return mergeBodies(skybot, fromJpl ?? []).slice(0, limit);
 }
 
+/**
+ * The orbit JPL's Small-Body Database has for a body SkyBoT or JPL named
+ * (orbit.js readOrbit), through the relay: JPL sends no CORS headers. Null
+ * when JPL has no single body by that designation. Asked once a page.
+ */
+const orbits = new Map();
+
+export function smallBodyOrbit(des) {
+  const key = String(des).replace(/\s+/g, ' ').trim();
+  if (!orbits.has(key)) {
+    const asked = fromRelay(`api/sbdb?des=${encodeURIComponent(key)}`, null, CATALOG_DEADLINE_MS)
+      .then((body) => body.orbit ?? null);
+    // A failure is not kept: the next look at the mark asks again.
+    asked.catch(() => orbits.delete(key));
+    orbits.set(key, asked);
+  }
+  return orbits.get(key);
+}
+
+/**
+ * The asteroids and comets on nearly a body's orbit (orbit.js NEAR_BOX), from
+ * JPL's Small-Body Database through the relay: { count, rows, scale }.
+ * Asked once a page for each orbit.
+ */
+const neighbours = new Map();
+
+export function orbitNeighbours(k) {
+  const query = `a=${k.a.toFixed(5)}&e=${k.e.toFixed(5)}&i=${k.i.toFixed(4)}`;
+  if (!neighbours.has(query)) {
+    // Up to four questions at JPL in a row: twice a catalogue's time.
+    const asked = fromRelay(`api/sbdb-near?${query}`, null, 2 * CATALOG_DEADLINE_MS)
+      .then(({ count, rows, scale }) => ({ count, rows: rows ?? [], scale }));
+    asked.catch(() => neighbours.delete(query));
+    neighbours.set(query, asked);
+  }
+  return neighbours.get(query);
+}
+
 /* ------------------------------------------------------------- fixed sources */
 
 /**
  * SIMBAD at CDS, and its mirror at the CfA. CDS in Strasbourg has had days
- * this November when it answered nothing; both are asked and the first
- * answer is taken.
+ * this November when it answered nothing, and it sends no CORS headers, so
+ * a browser asking it directly got nothing at all: the marks said "no SIMBAD
+ * identification" on Barnard's Star. The page's own questions (simbadNear,
+ * simbadField) go to the box, which asks both and keeps the answer, and to
+ * the CfA, which answers browsers, at once; the first answer is taken.
  */
-const SIMBAD_TAPS = [
+export const SIMBAD_TAPS = [
   'https://simbad.cds.unistra.fr/simbad/sim-tap/sync',
   'https://simbad.cfa.harvard.edu/simbad/sim-tap/sync',
 ];
+const SIMBAD_CFA = SIMBAD_TAPS[1];
 /** VizieR's cone search at the CfA mirror, which also answers when CDS does not. */
 const VIZIER_CFA = 'https://vizier.cfa.harvard.edu/viz-bin/votable';
 /** Where a person is sent to read more: the mirrors that stayed up. */
 export const SIMBAD_PAGE = 'https://simbad.cfa.harvard.edu/simbad/sim-id?Ident=';
 export const VIZIER_PAGE = 'https://vizier.cfa.harvard.edu/viz-bin/VizieR-4?';
 
-export async function simbadTap(query, format, signal) {
+export async function simbadTap(query, format, signal, relayed = null) {
+  const asks = [tap(SIMBAD_CFA, query, format, signal)];
+  if (relayed) asks.push(fromRelay(`api/cds?${relayed}`, signal, CATALOG_DEADLINE_MS).then((b) => b.answer));
   try {
-    return await Promise.any(SIMBAD_TAPS.map((base) => tap(base, query, format, signal)));
+    return await Promise.any(asks);
   } catch (err) {
     throw err.errors?.[0] ?? err;
   }
 }
+
+/**
+ * The two SIMBAD questions the page asks, written in one place so the box
+ * (server.js, /api/cds) asks exactly these and nothing else: the brightest
+ * object within a few arcseconds of a mark, and a field's notable objects.
+ */
+export const simbadNearQuery = (ra, dec, arcsec) => `SELECT TOP 8 main_id, otype, ${sepCol('ra', 'dec', ra, dec)}, allfluxes.J AS j, allfluxes.V AS v, allfluxes.G AS g,
+    plx_value, plx_err, rvz_redshift
+    FROM basic LEFT JOIN allfluxes ON oid = allfluxes.oidref WHERE ${cone('ra', 'dec', ra, dec, arcsec)}`;
+
+export const simbadFieldQuery = (ra, dec, radiusDeg) => `SELECT TOP 400 main_id, otype, ra, dec, nbref, allfluxes.J AS j, allfluxes.V AS v, pmra, pmdec
+    FROM basic LEFT JOIN allfluxes ON oid = allfluxes.oidref
+    WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', ${ra.toFixed(6)}, ${dec.toFixed(6)}, ${radiusDeg.toFixed(5)})) = 1
+    ORDER BY nbref DESC`;
+
+/** The box's form of the same questions: the numbers as the query writes them. */
+const relayNear = (ra, dec, arcsec) => `ask=near&ra=${ra.toFixed(6)}&dec=${dec.toFixed(6)}&r=${arcsec.toFixed(1)}`;
+const relayField = (ra, dec, radiusDeg) => `ask=field&ra=${ra.toFixed(6)}&dec=${dec.toFixed(6)}&r=${radiusDeg.toFixed(5)}`;
 const VIZIER_TAP = 'https://tapvizier.cds.unistra.fr/TAPVizieR/tap/sync';
 
 async function tap(base, query, format, signal) {
@@ -746,12 +837,18 @@ const brightest = (rows, key) => rows
   .filter((r) => Number.isFinite(r.sep))
   .sort((a, b) => (a[key] ?? 99) - (b[key] ?? 99) || a.sep - b.sep)[0] ?? null;
 
+/**
+ * SIMBAD's nearest bright object, with what a card says it is from: its type,
+ * and where SIMBAD has them its parallax (mas, for a star's distance) and its
+ * redshift (for a galaxy's).
+ */
 async function askSimbad(ra, dec, signal, arcsec = 8) {
-  const body = await simbadTap(`SELECT TOP 8 main_id, otype, ${sepCol('ra', 'dec', ra, dec)}, allfluxes.J AS j, allfluxes.V AS v, allfluxes.G AS g
-    FROM basic LEFT JOIN allfluxes ON oid = allfluxes.oidref WHERE ${cone('ra', 'dec', ra, dec, arcsec)}`, 'json', signal);
-  const rows = (body.data ?? []).map(([name, otype, sep, j, v, g]) => ({
+  const r = Number(arcsec.toFixed(1));
+  const body = await simbadTap(simbadNearQuery(ra, dec, r), 'json', signal, relayNear(ra, dec, r));
+  const rows = (body.data ?? []).map(([name, otype, sep, j, v, g, plx, plxErr, z]) => ({
     name: String(name).trim().replace(/\s+/g, ' ').replace(/^NAME /, ''), otype: String(otype ?? '').trim(), sep: Number(sep),
     mag: j ?? v ?? g ?? null, magBand: j != null ? 'J' : v != null ? 'V' : g != null ? 'G' : null,
+    plx: plx ?? null, plxErr: plxErr ?? null, z: z ?? null,
   }));
   const best = brightest(rows, 'mag');
   return best ? { ...best, family: simbadFamily(best.otype) } : null;
@@ -1075,10 +1172,8 @@ export async function surveySources(kind, { ra, dec, radiusDeg, limit }, { signa
  * ahead of the thousand star clusters catalogued inside it.
  */
 export async function fieldObjects({ ra, dec, radiusDeg }, { signal, limit = 25 } = {}) {
-  const body = await simbadTap(`SELECT TOP 400 main_id, otype, ra, dec, nbref, allfluxes.J AS j, allfluxes.V AS v, pmra, pmdec
-    FROM basic LEFT JOIN allfluxes ON oid = allfluxes.oidref
-    WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', ${ra.toFixed(6)}, ${dec.toFixed(6)}, ${radiusDeg.toFixed(5)})) = 1
-    ORDER BY nbref DESC`, 'json', signal);
+  const r = Number(radiusDeg.toFixed(5));
+  const body = await simbadTap(simbadFieldQuery(ra, dec, r), 'json', signal, relayField(ra, dec, r));
   return (body.data ?? []).map(([name, otype, ora, odec, refs, j, v, pmra, pmdec]) => {
     const kind = String(otype ?? '').trim();
     return {

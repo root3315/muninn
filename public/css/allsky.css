@@ -1,0 +1,299 @@
+/* The whole sky: the SPHEREx DR1 cube on the full screen, and the tool's
+ * chrome kept to its edges. Colours, type and shapes come from tokens.css and
+ * redesign.css; the page takes the hue of the band in view, as the tool does.
+ */
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { block-size: 100%; }
+/* What a phone shows, not what it would show without its address bar: in
+   100% the dock sat below the bottom of the screen. */
+@supports (height: 100dvh) { html, body { block-size: 100dvh; } }
+body {
+  margin: 0;
+  display: grid; grid-template-rows: auto 1fr;
+  background: var(--color-well); color: var(--color-ink);
+  font-family: var(--font-body); font-size: var(--text-base); line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  --edge: clamp(0.75rem, 2.4vw, 1.5rem);
+}
+p, h1, fieldset { margin: 0; padding: 0; border: 0; }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.vh {
+  position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden;
+  clip-path: inset(50%); white-space: nowrap;
+}
+:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 3px; }
+button, input { font: inherit; }
+
+/* ---------------------------------------------------------------- the bar */
+
+.bar {
+  display: flex; align-items: center; gap: var(--space-md);
+  padding: var(--space-xs) var(--edge);
+  padding-block-start: calc(var(--space-xs) + env(safe-area-inset-top, 0px));
+  background: var(--color-paper);
+}
+.bar__brand {
+  color: inherit; text-decoration: none;
+  font-family: var(--font-display); font-weight: 600; font-size: var(--text-md); line-height: 1;
+}
+.bar__title {
+  font-size: var(--text-sm); font-weight: 500; color: var(--color-accent);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-inline-size: 0;
+}
+.bar__acts { margin-inline-start: auto; display: flex; align-items: center; gap: var(--space-2xs); }
+.bar__link, .bar__lang {
+  display: inline-flex; align-items: center; min-block-size: var(--hit); padding-inline: var(--space-sm);
+  border: 0; border-radius: var(--radius-round);
+  color: var(--color-muted); background: transparent; text-decoration: none; white-space: nowrap;
+  font-size: var(--text-sm); cursor: pointer;
+  transition: color var(--dur-micro) var(--ease-out), background-color var(--dur-micro) var(--ease-out);
+}
+.bar__lang { font-weight: 600; letter-spacing: 0.04em; background: var(--color-paper-2); }
+.bar__link:hover, .bar__lang:hover { color: var(--color-ink); background: var(--color-paper-3); }
+
+/* ---------------------------------------------------------------- the sky */
+
+.as-sky { position: relative; min-block-size: 0; overflow: hidden; }
+.as-sky__canvas {
+  position: absolute; inset: 0; inline-size: 100%; block-size: 100%;
+  display: block; touch-action: none; cursor: grab;
+}
+.as-sky__canvas:active { cursor: grabbing; }
+.as-sky__canvas:focus-visible { outline-offset: -3px; }
+
+/* The middle of the screen, once the field is narrow enough to point with:
+   it is what "Open the frames here" opens. */
+.as-sky__reticle {
+  position: absolute; inset-inline-start: 50%; inset-block-start: 50%;
+  inline-size: 28px; block-size: 28px; margin: -14px 0 0 -14px;
+  border: 1.5px solid var(--color-accent); border-radius: 50%;
+  pointer-events: none; opacity: 0;
+  transition: opacity var(--dur-short) var(--ease-out);
+}
+.as-sky__reticle[data-on="true"] { opacity: 0.85; }
+
+.as-sky__rings { position: absolute; inset: 0; pointer-events: none; }
+/* A ready field: a fixed-size mark at its place, so it reads the same at
+   every width of the field; the name beside it. */
+.as-ring {
+  position: absolute; inset-inline-start: 0; inset-block-start: 0;
+  display: flex; align-items: center; gap: var(--space-2xs);
+  color: var(--color-ink); text-decoration: none; text-shadow: var(--shade-text);
+  font-size: var(--text-xs); white-space: nowrap;
+  pointer-events: auto;
+  will-change: transform;
+}
+.as-ring[hidden] { display: none; }
+.as-ring__dot {
+  inline-size: 18px; block-size: 18px; margin: -9px 0 0 -9px;
+  border: 1.5px solid var(--color-counter); border-radius: 50%;
+  transition: transform var(--dur-micro) var(--ease-out);
+}
+.as-ring__name {
+  margin-block-start: -9px; padding: 1px var(--space-xs);
+  border-radius: var(--radius-round);
+  transition: background-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out);
+}
+.as-ring:hover .as-ring__name, .as-ring:focus-visible .as-ring__name { background: var(--color-counter); color: var(--color-accent-ink); text-shadow: none; }
+.as-ring:hover .as-ring__dot { transform: scale(1.2); }
+/* A deep field the cube leaves blank: the note under the name, quieter than it. */
+.as-ring--gap { flex-wrap: wrap; max-inline-size: 22rem; }
+.as-ring__note {
+  flex-basis: 100%; margin-inline-start: calc(9px + var(--space-2xs) + var(--space-xs));
+  color: var(--color-neutral); font-size: var(--text-2xs); white-space: normal;
+}
+.as-ring--gap:hover .as-ring__note { color: var(--color-ink); }
+body[data-map="true"] .as-ring__note { display: none; }
+
+.as-sky__hint, .as-sky__nogl {
+  position: absolute; inset-inline: 0; inset-block-end: 9rem;
+  margin-inline: auto; inline-size: fit-content; max-inline-size: calc(100% - 2 * var(--edge));
+  padding: var(--space-xs) var(--space-md); border-radius: var(--radius-round);
+  background: var(--gate-veil-deep); color: var(--color-muted); font-size: var(--text-sm); text-align: center;
+  pointer-events: none;
+  transition: opacity var(--dur-long) var(--ease-out);
+}
+.as-sky__hint[data-gone="true"] { opacity: 0; }
+.as-sky__nogl[hidden] { display: none; }
+
+/* ------------------------------------------------------------- the search */
+
+.as-find {
+  position: absolute; inset-inline-start: var(--edge); inset-block-start: var(--edge);
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2xs);
+  inline-size: min(22rem, calc(100% - 2 * var(--edge) - 3.5rem));
+  padding: var(--space-2xs); border-radius: var(--radius-round);
+  background: var(--gate-veil-deep);
+  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+.as-find__input {
+  min-inline-size: 0; block-size: 2.25rem; padding-inline: var(--space-sm);
+  border: 0; border-radius: var(--radius-round);
+  color: var(--color-ink); background: transparent;
+}
+.as-find__input::placeholder { color: var(--color-neutral); }
+.as-find__input:focus-visible { outline-offset: 0; }
+.as-find__go {
+  block-size: 2.25rem; padding-inline: var(--space-md);
+  border: 0; border-radius: var(--radius-round); cursor: pointer;
+  color: var(--color-accent-ink); background: var(--color-accent); font-weight: 600;
+  transition: filter var(--dur-micro) var(--ease-out), transform var(--dur-micro) var(--ease-out);
+}
+.as-find__go:hover { filter: brightness(1.08); }
+.as-find__go:active { transform: scale(0.97); }
+.as-find__note {
+  grid-column: 1 / -1; padding-inline: var(--space-sm);
+  font-size: var(--text-xs); color: var(--color-muted);
+}
+.as-find__note:empty { display: none; }
+
+/* --------------------------------------------------------------- the zoom */
+
+.as-zoom {
+  position: absolute; inset-inline-end: var(--edge); inset-block-start: var(--edge);
+  display: grid; gap: var(--space-2xs);
+}
+.as-zoom__key {
+  inline-size: 2.5rem; block-size: 2.5rem; border: 0; border-radius: 50%; cursor: pointer;
+  color: var(--color-ink); background: var(--gate-veil-deep); font-size: var(--text-lg); line-height: 1;
+  transition: background-color var(--dur-micro) var(--ease-out), transform var(--dur-micro) var(--ease-out);
+}
+.as-zoom__key:hover { background: var(--color-paper-3); }
+.as-zoom__key:active { transform: scale(0.94); }
+
+/* --------------------------------------------------------------- the dock */
+
+.as-dock {
+  position: absolute; inset-inline: var(--edge); inset-block-end: calc(var(--edge) + env(safe-area-inset-bottom, 0px));
+  display: grid; gap: var(--space-xs);
+  margin-inline: auto; max-inline-size: 64rem;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-lg);
+  background: var(--gate-veil-deep);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.as-dock__row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs) var(--space-sm); min-inline-size: 0; }
+
+.as-bands { display: flex; flex-wrap: wrap; gap: var(--space-3xs); }
+.as-band {
+  position: relative; display: inline-flex; align-items: center;
+  min-block-size: var(--hit); padding-inline: var(--space-sm);
+  border-radius: var(--radius-round); cursor: pointer;
+  color: var(--color-muted); background: var(--color-paper-2);
+  font-size: var(--text-sm); font-weight: 600;
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-micro) var(--ease-out);
+}
+.as-band input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.as-band:hover { background: var(--color-paper-3); color: var(--color-ink); }
+.as-band[data-band="D1"] { --chip-h: var(--hue-d1); }
+.as-band[data-band="D2"] { --chip-h: var(--hue-d2); }
+.as-band[data-band="D3"] { --chip-h: var(--hue-d3); }
+.as-band[data-band="D4"] { --chip-h: var(--hue-d4); }
+.as-band[data-band="D5"] { --chip-h: var(--hue-d5); }
+.as-band[data-band="D6"] { --chip-h: var(--hue-d6); }
+.as-band:has(input:checked) { background: oklch(var(--acc-l) var(--acc-c) var(--chip-h)); color: var(--color-accent-ink); }
+.as-band--colour:has(input:checked) { background: var(--spectrum); }
+.as-band:has(input:focus-visible) { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+
+.as-toggle {
+  position: relative; display: inline-flex; align-items: center; gap: var(--space-2xs);
+  min-block-size: var(--hit); padding-inline: var(--space-sm);
+  border-radius: var(--radius-round); cursor: pointer;
+  color: var(--color-muted); background: var(--color-paper-2); font-size: var(--text-sm);
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-micro) var(--ease-out);
+}
+.as-toggle input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.as-toggle:hover { background: var(--color-paper-3); color: var(--color-ink); }
+.as-toggle:has(input:checked), .as-toggle[aria-pressed="true"] { background: var(--color-accent-wash); color: var(--color-accent); }
+button.as-toggle { border: 0; font: inherit; font-size: var(--text-sm); }
+button.as-toggle:active { transform: scale(0.97); }
+
+.as-open:disabled { opacity: 0.4; cursor: default; filter: none; transform: none; }
+.as-toggle:has(input:focus-visible) { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+
+.as-open {
+  margin-inline-start: auto;
+  min-block-size: var(--hit); padding-inline: var(--space-md);
+  border: 0; border-radius: var(--radius-round); cursor: pointer;
+  color: var(--color-accent-ink); background: var(--color-accent);
+  font-size: var(--text-sm); font-weight: 600;
+  transition: filter var(--dur-micro) var(--ease-out), transform var(--dur-micro) var(--ease-out);
+}
+.as-open:hover { filter: brightness(1.08); }
+.as-open:active { transform: scale(0.97); }
+
+.as-wave { display: flex; align-items: center; gap: var(--space-sm); flex: 1 1 18rem; min-inline-size: 0; }
+.as-wave__name { font-size: var(--text-xs); color: var(--color-neutral); white-space: nowrap; }
+.as-wave__range { flex: 1; min-inline-size: 8rem; accent-color: var(--color-accent); cursor: pointer; }
+.as-wave__value { font-size: var(--text-xs); color: var(--color-ink); white-space: nowrap; }
+/* In colour the slider is not the view's: it waits, dimmed, until it is touched. */
+.as-dock__row--lambda[data-colour="true"] .as-wave__range { opacity: 0.45; }
+
+.as-dock__row--read { gap: var(--space-2xs) var(--space-md); }
+.as-read { font-size: var(--text-xs); color: var(--color-muted); }
+.as-read--status { color: var(--color-neutral); }
+.as-read--status[data-bad="true"] { color: var(--color-counter); }
+.as-read--status:empty { display: none; }
+.as-read--credit { margin-inline-start: auto; color: var(--color-neutral); }
+.as-read--fills { flex-basis: 100%; color: var(--color-neutral); font-size: var(--text-2xs); }
+.as-read--map { color: var(--color-neutral); }
+body:not([data-map="true"]) .as-read--map { display: none; }
+/* On the map, a ready field is a point among many: the ring smaller, the name quieter. */
+body[data-map="true"] .as-ring__dot { inline-size: 12px; block-size: 12px; margin: -6px 0 0 -6px; }
+body[data-map="true"] .as-ring__name {
+  margin-block-start: -6px; font-size: var(--text-2xs);
+  /* A line of the grid or the ecliptic may run under a name: it gets a ground of its own. */
+  background: var(--gate-veil-deep); text-shadow: none;
+}
+
+@media (max-width: 640px) {
+  .bar__title { display: none; }
+  /* The bar fits the screen: no sideways scroll. The tool is one tap away on the brand. */
+  .bar { gap: var(--space-xs); }
+  .bar__acts { min-inline-size: 0; }
+  .bar__link { padding-inline: var(--space-xs); }
+  #to-tool { display: none; }
+  .as-dock { padding: var(--space-xs) var(--space-sm); gap: var(--space-2xs); }
+  .as-band { padding-inline: var(--space-xs); }
+  .as-open { margin-inline-start: 0; flex: 1 1 100%; }
+  .as-read--map { display: none !important; }
+  /* The credit stays on a phone too: NASA's data, IRSA's survey. */
+  .as-read--credit { margin-inline-start: 0; font-size: var(--text-2xs); }
+  .as-zoom { display: none; }
+  /* On a phone the map is small: the fields are dots, named on the sphere. */
+  body[data-map="true"] .as-ring__name { display: none; }
+  .as-find { inline-size: calc(100% - 2 * var(--edge)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; }
+}
+
+/* Inside the front page: no bar of its own, a way back to the sky instead. */
+:root[data-embed="1"] body { grid-template-rows: 1fr; }
+:root[data-embed="1"] .bar { display: none; }
+
+
+/* One control for the scale you are at — the sky, the whole sky in
+   SPHEREx, space — the same in each, on the sky itself. */
+.scale {
+  position: absolute; z-index: 6;
+  inset-inline: 0; margin-inline: auto; inline-size: fit-content;
+  inset-block-start: calc(var(--edge, 1rem) + 3.5rem);
+  display: flex; gap: var(--space-3xs); padding: var(--space-3xs);
+  border-radius: var(--radius-round);
+  background: var(--gate-veil-deep);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.scale__key {
+  min-block-size: var(--hit); padding-inline: var(--space-md);
+  border: 0; border-radius: var(--radius-round); cursor: pointer;
+  color: var(--color-muted); background: transparent;
+  font: inherit; font-size: var(--text-sm); font-weight: 600; white-space: nowrap;
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-micro) var(--ease-out);
+}
+.scale__key:hover { color: var(--color-ink); background: var(--color-paper-3); }
+.scale__key[aria-pressed="true"] { color: var(--color-accent-ink); background: var(--color-accent); cursor: default; }
+@media (max-width: 640px) { .scale__key { padding-inline: var(--space-sm); font-size: var(--text-xs); } }

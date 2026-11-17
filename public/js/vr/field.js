@@ -24,6 +24,7 @@ import { t, fmt, fmtDate } from '../i18n.js';
 import { seasonChunks, chunkAt, forStack } from '../stack.js';
 import { searchFrames, askMissingFrames, groupVisits, bandsPresent, toS3, skybotCone, knownBodies, surveySources, findHeldVisit } from '../catalog.js';
 import { planetHostNear, systemUrl } from '../exovision.js';
+import { fetchData } from '../datafiles.js';
 import { spread, VISITS_PER_BATCH, mergeFrames } from '../visits.js';
 import { TangentGrid, deltaRA } from '../wcs.js';
 import { SkyView } from '../sky.js';
@@ -1165,7 +1166,7 @@ export function openFieldVR(target, env) {
   /** A ready field's frame list by its name, as catalog.js would find it through the index; null for any other field. */
   function bundledList() {
     if (!target.key) return null;
-    return fetch(`data/fields/${encodeURIComponent(target.key)}.json`, { signal })
+    return fetchData(`data/fields/${encodeURIComponent(target.key)}.json`, { signal })
       .then((res) => (res.ok ? res.json() : null))
       .then((f) => (f?.frames ? { frames: f.frames, truncated: Boolean(f.truncated), source: 'bundled' } : searchFrames({ ra, dec }, { signal })))
       .catch((err) => { if (signal.aborted) throw err; return searchFrames({ ra, dec }, { signal }); });
@@ -1178,7 +1179,7 @@ export function openFieldVR(target, env) {
   async function presetLead() {
     if (!target.key) return null;
     try {
-      const res = await fetch('data/thumbs.json', { signal });
+      const res = await fetchData('data/thumbs.json', { signal });
       const thumb = res.ok ? (await res.json())[target.key] : null;
       const mjd = thumb?.iso ? Date.parse(`${thumb.iso}Z`) / 86400000 + 40587 : NaN;
       return Number.isFinite(mjd) ? { mjd, band: thumb.band } : null;

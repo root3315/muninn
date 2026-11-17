@@ -11,7 +11,7 @@
  */
 
 import { shortPosition, mergeRows, fold, SUGGEST_MAX } from './suggest.js';
-import { hostRows, loadHostIndex } from './hosts.js';
+import { hostRows, loadHostIndex, hostKey } from './hosts.js';
 import { lookUp, worthAsking, asteroidNumber, hitOfRow } from './lookup.js';
 import { smallBodyQuery } from './smallbody.js';
 
@@ -211,14 +211,17 @@ export function attachSuggest(input, { query, pick, say, up = false, remote = lo
       light(next < -1 ? options.length - 1 : next >= options.length ? -1 : next);
     } else if (e.key === 'Enter') {
       if (!list.hidden && active >= 0) { e.preventDefault(); take(options[active].row); return; }
-      // Nothing lit: a challenge target or a prepared field at the top of the
-      // list is what was meant ("WISE 0855", "Atala"), and so is the only
-      // row there is. A name the archive's resolver does not know would
-      // otherwise go to it and come back "not found". Positions are left to
-      // the form, which reads them itself.
+      // Nothing lit: the row at the top is what was meant when it is a
+      // challenge target or a prepared field ("WISE 0855", "Atala"), the
+      // very name typed ("55 Cnc", a star with planets), an answer the
+      // resolvers gave for this text, or the only row there is. Sent to the
+      // form instead, "55 Cnc" went to JPL as asteroid (55) and opened
+      // Pandora under a list that said 55 Cnc. A row that only starts with
+      // the text ("M31" under "M3") is not taken. Positions are left to the
+      // form, which reads them itself.
       const first = options.find((o) => o.row.kind !== 'position');
       const rows = options.filter((o) => o.row.kind !== 'position');
-      if (!list.hidden && first && (['target', 'field'].includes(first.row.kind) || rows.length === 1)) {
+      if (!list.hidden && first && (meant(first.row, input.value) || rows.length === 1)) {
         e.preventDefault();
         take(first.row);
         return;
@@ -230,6 +233,13 @@ export function attachSuggest(input, { query, pick, say, up = false, remote = lo
   });
 
   return { close, refresh: () => { if (!list.hidden) open(); } };
+}
+
+/** Whether a row at the top of the list is what Enter means for the text typed. */
+function meant(row, text) {
+  if (['target', 'field'].includes(row.kind) || row.remote) return true;
+  if (row.kind === 'host') return hostKey(row.label) === hostKey(text);
+  return fold(row.label) === fold(text);
 }
 
 /** What a row says beside its name: its other name, or how many planets its star has. */

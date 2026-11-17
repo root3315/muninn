@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Muninn — a flight through the Sun's neighbourhood</title>
+<meta name="description" content="Fly among 60 000 real stars, each where its Hipparcos parallax puts it: to Proxima Centauri, to Barnard's Star, to WISE 0855, the coldest brown dwarf known.">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#171721">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23171721'/%3E%3Ccircle cx='11' cy='13' r='2.5' fill='%23e6f0f7'/%3E%3Ccircle cx='21' cy='19' r='2.5' fill='%2356c1f5'/%3E%3C/svg%3E">
+<link rel="preload" href="data/fly/stars.8ecd0ea1d2.bin" as="fetch" crossorigin>
+<link rel="stylesheet" href="css/fonts.css">
+<link rel="stylesheet" href="css/tokens.css">
+<link rel="stylesheet" href="css/redesign.css">
+<link rel="stylesheet" href="css/allsky.css">
+<link rel="stylesheet" href="css/fly.css">
+<link rel="modulepreload" href="js/fly.js">
+<link rel="modulepreload" href="js/fly/space.js">
+<link rel="modulepreload" href="js/fly/stars.js">
+<link rel="modulepreload" href="js/fly/reach.js">
+<link rel="modulepreload" href="js/fly/solar.js">
+<link rel="modulepreload" href="js/fly/relief.js">
+<link rel="modulepreload" href="js/fly/orbits.js">
+<link rel="modulepreload" href="js/exovision.js">
+<link rel="modulepreload" href="js/catalog.js">
+<link rel="modulepreload" href="js/datafiles.js">
+<link rel="modulepreload" href="js/datanames.js">
+<link rel="modulepreload" href="js/ephemeris.js">
+<link rel="modulepreload" href="js/depth.js">
+<link rel="modulepreload" href="js/hash.js">
+<link rel="modulepreload" href="js/allsky/fills.js">
+<link rel="modulepreload" href="js/starcolour.js">
+<link rel="modulepreload" href="js/allsky/healpix.js">
+<link rel="modulepreload" href="js/allsky/view.js">
+<link rel="modulepreload" href="js/allsky/hips.js">
+<link rel="modulepreload" href="js/allsky/maps.js">
+<link rel="modulepreload" href="js/gate.js">
+<link rel="modulepreload" href="js/gate-band.js">
+<link rel="modulepreload" href="js/i18n.js">
+<link rel="modulepreload" href="js/embed.js">
+</head>
+<body>
+
+<header class="bar">
+  <a class="bar__brand" href="./">Muninn</a>
+  <h1 class="bar__title" data-i18n="fly.title"></h1>
+  <nav class="bar__acts">
+    <a class="bar__link" href="allsky.html" data-i18n="gate.allsky"></a>
+    <a class="bar__link" href="./" data-i18n="allsky.tool"></a>
+    <button type="button" class="bar__lang" id="lang" data-i18n-label="lang.switch" data-i18n-title="lang.switch"></button>
+  </nav>
+</header>
+
+<main class="as-sky" id="sky">
+  <canvas class="as-sky__canvas" id="canvas" tabindex="0" role="img" data-i18n-label="fly.canvas"></canvas>
+  <div class="fly-labels" id="labels"></div>
+  <div class="fly-labels" id="marks"></div>
+  <div class="fly-labels" id="sys-labels"></div>
+  <div class="fly-labels" id="scale-labels"></div>
+  <div class="fly-labels" id="pick-labels"></div>
+  <p class="as-sky__hint" id="hint"></p>
+  <!-- What the flight is still waiting for: the screen is dark until the stars are in. -->
+  <p class="as-sky__hint fly-loading" id="loading" role="status" aria-live="polite" hidden></p>
+  <p class="as-sky__nogl" id="nogl" hidden data-i18n="allsky.noGl"></p>
+  <!-- Inside the front page: the way back to its sky, on the very spot its
+       "Explore in 3D" stands, so the two read as one control. -->
+  <button type="button" class="way-3d way-3d--back" id="back-sky" hidden data-i18n-title="fly.backToSkyWhen">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>
+    <span data-i18n="fly.backToSky"></span>
+  </button>
+
+  <aside class="fly-card" id="card" hidden aria-live="polite">
+    <button type="button" class="fly-card__close" id="card-close" data-i18n-label="fly.close" data-i18n-title="fly.close">×</button>
+    <h2 class="fly-card__title" id="card-title"></h2>
+    <!-- What it goes round, and what else goes round the same centre: filled for each card. -->
+    <section class="fly-round" id="card-round" hidden></section>
+    <p class="fly-card__note" id="card-note"></p>
+    <dl class="fly-card__rows" id="card-rows"></dl>
+    <div class="fly-card__acts">
+      <button type="button" class="as-open" id="card-fly" data-i18n="fly.flyHere"></button>
+      <button type="button" class="as-toggle" id="card-orbit" hidden data-i18n="fly.seeOrbit"></button>
+      <a class="as-toggle fly-card__frames" id="card-frames" data-i18n="fly.frames"></a>
+      <a class="as-toggle fly-card__frames" id="card-exo" hidden target="_blank" rel="noopener" data-i18n="exo.open"></a>
+    </div>
+  </aside>
+
+  <!-- Forward and back for a hand with no keyboard; held, ▲ goes faster the
+       longer it is held. Placed just above the dock, wherever its top is. -->
+  <div class="fly-pad">
+    <button type="button" class="as-zoom__key" id="go-forward" data-i18n-label="fly.forward" data-i18n-title="fly.forward">▲</button>
+    <button type="button" class="as-zoom__key" id="go-back" data-i18n-label="fly.back" data-i18n-title="fly.back">▼</button>
+  </div>
+
+  <!-- What the 4.6 µm view is, while it is on: an estimate, said where it is seen. -->
+  <p class="fly-note" id="read-note" hidden></p>
+
+  <!-- Two rows: where to go; then what to show, the clock and where you are. -->
+  <section class="as-dock fly-dock" id="dock">
+    <div class="as-dock__row fly-dock__row">
+      <span class="as-wave__name fly-dock__to" data-i18n="fly.to"></span>
+      <div class="as-bands fly-dest" id="dest"></div>
+    </div>
+    <div class="as-dock__row fly-dock__row fly-dock__tools">
+      <button type="button" class="as-toggle" id="reach" aria-pressed="false" data-i18n="fly.reach" data-i18n-title="fly.reachWhen"></button>
+      <button type="button" class="as-toggle fly-ir" id="ir" hidden aria-pressed="false" data-i18n-title="fly.irWhen">
+        <span class="fly-ir__long" data-i18n="fly.irTrip"></span><span class="fly-ir__short" data-i18n="fly.ir"></span>
+      </button>
+      <span class="fly-time" id="time" role="group" data-i18n-label="fly.timeH">
+        <button type="button" class="as-toggle fly-time__play" id="time-play"></button>
+        <button type="button" class="as-toggle fly-time__rate" id="time-rate" data-i18n-title="fly.rateWhen"></button>
+        <button type="button" class="as-toggle" id="time-now" hidden data-i18n="fly.timeNow"></button>
+      </span>
+      <p class="as-read num fly-line"><span class="fly-line__date" id="time-date" aria-live="polite"></span><span id="read" aria-live="off"></span></p>
+      <button type="button" class="as-toggle fly-sources" id="sources" aria-expanded="false" aria-controls="sources-pop" data-i18n-label="fly.sources" data-i18n-title="fly.sourcesWhen">
+        <span class="fly-sources__long" data-i18n="fly.sources" aria-hidden="true"></span><span class="fly-sources__short" aria-hidden="true">i</span>
+      </button>
+    </div>
+  </section>
+
+  <!-- The Moon and the planets, one chip's worth of the dock. -->
+  <div class="fly-pop fly-pop--planets" id="planets-pop" hidden role="menu"></div>
+
+  <!-- Where it all comes from, and the one thing to show or not that is not a destination. -->
+  <div class="fly-pop fly-pop--sources" id="sources-pop" hidden>
+    <p class="fly-pop__text" id="source"></p>
+    <button type="button" class="as-toggle" id="exo-all" aria-pressed="false" data-i18n="fly.exoAll" data-i18n-title="fly.exoAllWhen"></button>
+  </div>
+</main>
+
+<script type="module" src="js/fly.js"></script>
+</body>
+</html>

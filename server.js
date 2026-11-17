@@ -1,9 +1,11 @@
 /**
  * server.js — static host plus the one proxy the browser cannot do without.
  *
- * Image data never passes through here. SPHEREx frames come from the public
- * `nasa-irsa-spherex` S3 mirror, which answers Range requests with
- * `Access-Control-Allow-Origin: *`, so the browser reads them directly.
+ * SPHEREx frames come from the public `nasa-irsa-spherex` S3 mirror, which
+ * answers Range requests with `Access-Control-Allow-Origin: *`, so the browser
+ * can read them directly, and does on a static host. Here it reads them
+ * through /api/frame instead, which keeps what it has read on disk, so a
+ * field opened once opens again without the trip to AWS (see handleFrame).
  *
  * What the browser cannot reach is IRSA's Simple Image Access service — the index
  * that says which frames cover a position. IRSA sends no CORS headers at all, so
@@ -16,7 +18,10 @@
  * takes a query from the page: the relay writes it from a fixed template and
  * checked numbers. The search box's asteroid and comet names go to JPL's
  * Small-Body Database and Horizons the same way (/api/smallbody): the relay
- * reads a designation out of the text and asks only for that.
+ * reads a designation out of the text and asks only for that. A marked
+ * body's orbit comes from the same database (/api/sbdb), asked by the
+ * designation SkyBoT or JPL gave it, and the bodies on nearly the same orbit
+ * from its query service (/api/sbdb-near), asked by three checked numbers.
  *
  * No dependencies. `node server.js` and open the address it prints.
  */
@@ -26,17 +31,18 @@ import { createHash } from 'node:crypto';
 import { readFileSync, existsSync } from 'node:fs';
 import { brotliCompress, gzip, gunzip, constants as zlib } from 'node:zlib';
 import { promisify } from 'node:util';
-import { readFile, writeFile, mkdir, stat, readdir, unlink } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, stat, readdir, unlink, utimes, rename } from 'node:fs/promises';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parseVOTable } from './public/js/votable.js';
-import { frameFromRow } from './public/js/catalog.js';
+import { frameFromRow, SESAME, SIMBAD_TAPS, simbadNearQuery, simbadFieldQuery } from './public/js/catalog.js';
 import { COLLECTIONS } from './public/js/release.js';
 import { parseCsv } from './public/js/csv.js';
 import { CATALOGUES, ROW_CAP, coneQuery, renameRow, mastGaiaRows, columnsTag } from './public/js/overlay.js';
 import { sbIdentUrl, parseSbIdent } from './public/js/sbident.js';
 import { smallBodyQuery, SBDB_TEXT, sbdbUrl, readSbdb, horizonsUrl, readHorizons } from './public/js/smallbody.js';
+import { sbdbOrbitUrl, readOrbit, nearBox, nearQueryUrl, readNear, NEAR_ROWS } from './public/js/orbit.js';
 import { archivesQuery, neossatQuery, neossatFilesQuery, readNeossat, ARCHIVE_RADIUS } from './public/js/archives.js';
 import {
   ROW, searchIndex, footprintMeetsCone, frameFromIndexRow, indexRowFromObscore, capLikeIrsa,
@@ -97,12 +103,13 @@ const REFRESH_PAUSE_MS = envMs('MUNINN_REFRESH_PAUSE_MS', 5 * 60 * 1000);
 /** When a collection that failed with nothing kept is asked again in the background, and for how many positions at once. */
 const RETRY_LATER_MS = (process.env.MUNINN_RETRY_LATER_MS || '15000,60000,180000').split(',').map(Number).filter(Number.isFinite);
 const RETRY_LATER_MAX = 64;
-/** The most the answer cache may hold on disk. */
-const CACHE_MAX_BYTES = 300 * 1024 * 1024;
+/** The most the answer cache may hold on disk; MUNINN_CACHE_MAX_BYTES on a box with room to spare. */
+const CACHE_MAX_BYTES = envMs('MUNINN_CACHE_MAX_BYTES', 300 * 1024 * 1024);
 /** IRSA's TAP answers a cone in 7–30 s; well past that, it is not coming. */
 const TAP_TIMEOUT_MS = 75_000;
 /** JPL's second pass takes 20–70 s on a crowded ecliptic field. */
 const SBIDENT_TIMEOUT_MS = 120_000;
+const SBIDENT_KEEP_MS = 30 * 24 * 3600 * 1000;
 /**
  * A position the archive has not seen before routinely takes 70 s or more. The
  * answer keeps its connection alive while it waits (see answerSlowly), so
@@ -249,6 +256,29 @@ async function writeCache(key, value) {
     await writeFile(join(CACHE, `${key}.json`), text, 'utf8');
   } catch {
     /* a cold cache is slower, not broken */
+  }
+}
+
+/** Marks a file still being written: never read, and cleared by the sweep if left behind. */
+const PART = '.part';
+let partsWritten = 0;
+
+/**
+ * A file written whole or not at all: written under a name of its own, then
+ * renamed over the real one. A process stopped halfway, or a full disk,
+ * leaves a stray part for the sweep, never a cut-short file that reads as
+ * a good one.
+ */
+async function writeWhole(file, body) {
+  await mkdir(CACHE, { recursive: true });
+  partsWritten += 1;
+  const part = `${file}${PART}${process.pid}_${partsWritten}`;
+  try {
+    await writeFile(part, body);
+    await rename(part, file);
+  } catch (err) {
+    await unlink(part).catch(() => {});
+    throw err;
   }
 }
 
@@ -761,21 +791,44 @@ const POOL_MAX = { search: 6, catalog: 8, jpl: 3, wise: 3, names: 3 };
 const pools = Object.fromEntries(Object.keys(POOL_MAX).map((k) => [k, new Set()]));
 
 /**
+ * How many questions may wait for a slot, per kind, instead of being answered
+ * "busy" at once. JPL's sb_ident takes 20 to 70 s a question, and a field with
+ * twenty visits asks twenty; two pages on WISE 0855 filled the three slots
+ * and every other question came back 503, again and again, though each would
+ * have had its turn within a minute or two. Now they queue (the answer starts
+ * at once and stays alive, answerSlowly), and only a queue this long is busy.
+ */
+const QUEUE_MAX = { jpl: 40, names: 12 };
+const waiting = Object.fromEntries(Object.keys(POOL_MAX).map((k) => [k, []]));
+
+/** Run `ask` in a slot of `pool`, waiting in line for one. */
+async function inPool(pool, key, ask) {
+  while (pools[pool].size >= POOL_MAX[pool]) await new Promise((go) => waiting[pool].push(go));
+  pools[pool].add(key);
+  try {
+    return await ask();
+  } finally {
+    pools[pool].delete(key);
+    waiting[pool].shift()?.();
+  }
+}
+
+/**
  * A question for an archive, answered from the cache, by joining the same
  * question already out, or by asking. `ask` caches its own answer, since only
  * it knows whether the answer is whole.
  */
-async function relay(res, key, ask, pool = 'catalog', keep = KEEP_PRIVATE) {
-  const cached = await readCache(key);
+async function relay(res, key, ask, pool = 'catalog', keep = KEEP_PRIVATE, keepMs = CACHE_TTL_MS) {
+  const cached = (await readEntry(key, keepMs))?.value;
   if (cached) return json(res, 200, { ok: true, cached: true, ...cached }, keep);
 
   let pending = inflight.get(key);
-  if (!pending && pools[pool].size >= POOL_MAX[pool]) {
-    return json(res, 503, { ok: false, error: 'The archive relay is busy with other questions; try again in a moment.' });
+  const full = pools[pool].size >= POOL_MAX[pool];
+  if (!pending && full && waiting[pool].length >= (QUEUE_MAX[pool] ?? 0)) {
+    return json(res, 503, { ok: false, error: 'The archive relay is busy with other questions; try again in a moment.' }, { 'retry-after': '20' });
   }
   if (!pending) {
-    pools[pool].add(key);
-    pending = ask().finally(() => { inflight.delete(key); pools[pool].delete(key); });
+    pending = inPool(pool, key, ask).finally(() => inflight.delete(key));
     inflight.set(key, pending);
   }
   return answerSlowly(res, pending);
@@ -815,7 +868,9 @@ async function handleSearch(url, res) {
   const collections = askedCollections(url);
   if (!collections) return json(res, 400, BAD_COLLECTIONS);
 
-  const prebaked = findBaked(ra, dec);
+  // `live=1` is the page asking past the bundled list, whether the archive
+  // has moved on since the field was baked (see app.js checkBake).
+  const prebaked = url.searchParams.get('live') === '1' ? null : findBaked(ra, dec);
   if (prebaked) {
     return json(res, 200, {
       ok: true, cached: 'baked',
@@ -1059,6 +1114,77 @@ function askGalaxies({ ra, dec, radiusDeg }) {
   return firstOf([ask(DEPTH_UPSTREAM.simbadCds, 'SIMBAD CDS'), ask(DEPTH_UPSTREAM.simbadCfa, 'SIMBAD CfA')]);
 }
 
+/* ------------------------------------------ names and SIMBAD, for the page */
+
+/**
+ * What the page asks of CDS, through the box: a name of Sesame, and SIMBAD's
+ * two questions (catalog.js simbadNearQuery, simbadFieldQuery).
+ *
+ *   ask=sesame&name=…           a name; letters, digits and . + - ' ( ) * [ ] / : _ only
+ *   ask=near&ra&dec&r=<arcsec>  the brightest object within r (1–60″) of a mark
+ *   ask=field&ra&dec&r=<deg>    a field's notable objects within r (0.005–1°)
+ *
+ * The browser cannot read CDS itself: its Sesame now redirects to a mirror
+ * that sends no CORS headers, and its SIMBAD sends none either. The box asks
+ * CDS and the CfA mirror at once and takes the first answer, as the page
+ * did. Nothing in the request names a host or writes the query: the query is
+ * the page's own, built here from the checked numbers. A name is kept for a
+ * month; SIMBAD's answer about a place for a week.
+ */
+const CDS_UPSTREAM = {
+  sesame: (process.env.MUNINN_SESAME_URLS || SESAME.join(' ')).split(/\s+/).filter(Boolean),
+  simbad: (process.env.MUNINN_SIMBAD_URLS || SIMBAD_TAPS.join(' ')).split(/\s+/).filter(Boolean),
+};
+const CDS_TIMEOUT_MS = 25_000;
+const NAMES_KEEP_MS = 30 * 24 * 3600 * 1000;
+const SIMBAD_KEEP_MS = 7 * 24 * 3600 * 1000;
+const NAME_TEXT = /^[\p{L}\p{N}\p{M}'’ .+*()[\]/:_,-]{1,80}$/u;
+
+async function handleCds(url, res) {
+  const ask = url.searchParams.get('ask') ?? '';
+  if (ask === 'sesame') {
+    const name = (url.searchParams.get('name') ?? '').replace(/\s+/g, ' ').trim();
+    if (!NAME_TEXT.test(name)) return json(res, 400, { ok: false, error: 'name: up to 80 letters, digits and . + - ( ) only' });
+    const key = `sesame_${createHash('sha1').update(name.toLowerCase()).digest('hex').slice(0, 20)}`;
+    return relay(res, key, () => askSesameNow(name, key), 'names', KEEP_PRIVATE, NAMES_KEEP_MS);
+  }
+  if (ask !== 'near' && ask !== 'field') return json(res, 400, { ok: false, error: 'ask must be sesame, near or field' });
+  const at = position(url);
+  if (!at) return json(res, 400, BAD_POSITION);
+  const r = param(url, 'r');
+  const [lo, hi] = ask === 'near' ? [1, 60] : [0.005, 1];
+  if (!(r >= lo && r <= hi)) return json(res, 400, { ok: false, error: `r must be ${lo}–${hi}` });
+  const query = ask === 'near' ? simbadNearQuery(at.ra, at.dec, r) : simbadFieldQuery(at.ra, at.dec, r);
+  const key = safeKey(`simbad_${ask}_${at.ra.toFixed(6)}_${at.dec.toFixed(6)}_${r}`);
+  return relay(res, key, () => askSimbadNow(query, key), 'catalog', KEEP_PRIVATE, SIMBAD_KEEP_MS);
+}
+
+async function askSesameNow(name, key) {
+  const text = await firstOf(CDS_UPSTREAM.sesame.map((base) => withTimeout(base + encodeURIComponent(name), CDS_TIMEOUT_MS)
+    .then(async (r2) => {
+      const body = await r2.text();
+      // A mirror's error page is not Sesame's "not found".
+      if (!r2.ok || !/^#/m.test(body)) throw new Error(`Sesame ${r2.status}`);
+      return body;
+    })));
+  const payload = { text };
+  await writeCache(key, payload);
+  return { ok: true, cached: false, ...payload };
+}
+
+async function askSimbadNow(adql, key) {
+  const query = new URLSearchParams({ request: 'doQuery', lang: 'adql', format: 'json', query: adql });
+  const answer = await firstOf(CDS_UPSTREAM.simbad.map((base) => withTimeout(`${base}?${query}`, CDS_TIMEOUT_MS)
+    .then(async (r2) => {
+      const body = r2.ok ? await r2.json().catch(() => null) : null;
+      if (!Array.isArray(body?.data)) throw new Error(`SIMBAD ${r2.status}`);
+      return { metadata: body.metadata, data: body.data };
+    })));
+  const payload = { answer, via: 'SIMBAD' };
+  await writeCache(key, payload);
+  return { ok: true, cached: false, ...payload };
+}
+
 /* ------------------------------------------------------- Gaia DR3 at MAST */
 
 /** The Gaia DR3 the challenge's resources point to: MAST, at STScI. */
@@ -1197,6 +1323,581 @@ async function cutWise({ ra, dec }, band, size, file) {
 /** Longest side of the picture sent on: more than the plate ever shows. */
 const WISE_MAX_SIDE = 640;
 
+/* ------------------------------------------------------- the whole-sky cube */
+
+/**
+ * The SPHEREx DR1 all-sky cube's HiPS tiles and Allsky images, passed on from
+ * IRSA and kept on disk. IRSA's tile server has slow spells — an Allsky image
+ * that usually comes in a second can take minutes — and the cube does not
+ * change, so a tile once fetched is served from here for weeks after.
+ * Only the cube's own file names are passed on: nothing else at IRSA can be
+ * asked for through this.
+ */
+const HIPS_ORIGIN = process.env.MUNINN_HIPS_URL || 'https://irsa.ipac.caltech.edu/data/hips/SPHEREx/spherex_allsky_cube/';
+/**
+ * Numbers written as the cube writes them, without leading zeros: "Npix0300"
+ * would be the same tile as "Npix300" kept a second time.
+ */
+const HIPS_PATH = /^Norder([0-5])\/(?:Dir(0|[1-9]\d{0,5})\/Npix(0|[1-9]\d{0,5})|Allsky)(?:_([1-9]\d{0,2}))?\.png$/;
+const HIPS_FRAMES = 102;
+const HIPS_TIMEOUT_MS = 90_000;
+/** A tile of a released cube does not change: the browser and Cloudflare may keep it a week. */
+const HIPS_KEEP = { 'content-type': 'image/png', 'cache-control': 'public, max-age=604800', 'x-muninn-hips': '1' };
+/** Said on every answer of the relay, so the page can tell its 404 from a host that has no relay. */
+const HIPS_SAYS = { 'x-muninn-hips': '1' };
+/** At most this many asked of IRSA at once; past it, the page asks IRSA itself. */
+const HIPS_UPSTREAM_MAX = 12;
+/** Bytes of tiles on disk: counted by the sweep and added to on every write, so the ceiling holds between sweeps. */
+let hipsOnDisk = 0;
+/** Its own ceiling on the disk, apart from the answers', so a sweep through the spectrum cannot push out frame lists. */
+const HIPS_MAX_BYTES = envMs('MUNINN_HIPS_MAX_BYTES', 200 * 1024 * 1024);
+const HIPS_PER_MINUTE = 1500;
+const hipsAsked = new Map();
+const hipsPending = new Map();
+/**
+ * Tiles IRSA said it does not have, until when: a view held still over a
+ * hole in the cube asks for the same missing tiles on every repaint, and
+ * each would otherwise be a trip to IRSA. Kept ten minutes, and only so many.
+ */
+const hipsMissing = new Map();
+const HIPS_MISSING_MS = 10 * 60 * 1000;
+const HIPS_MISSING_MAX = 4096;
+
+function rememberHipsMissing(path) {
+  hipsMissing.delete(path);
+  hipsMissing.set(path, Date.now() + HIPS_MISSING_MS);
+  while (hipsMissing.size > HIPS_MISSING_MAX) hipsMissing.delete(hipsMissing.keys().next().value);
+}
+
+function hipsKnownMissing(path) {
+  const until = hipsMissing.get(path);
+  if (until === undefined) return false;
+  if (until > Date.now()) return true;
+  hipsMissing.delete(path);
+  return false;
+}
+
+/** Whether a path names a file the cube has: the order, directory and index agree, the frame exists. */
+function hipsPathOk(path) {
+  const m = HIPS_PATH.exec(path);
+  if (!m) return false;
+  const order = Number(m[1]);
+  if (m[3] !== undefined) {
+    const npix = Number(m[3]);
+    if (npix >= 12 * 4 ** order) return false;
+    if (Number(m[2]) !== Math.floor(npix / 10000) * 10000) return false;
+  } else if (order !== 3) {
+    return false;
+  }
+  return m[4] === undefined || (Number(m[4]) >= 1 && Number(m[4]) < HIPS_FRAMES);
+}
+
+async function handleHips(url, res) {
+  const path = url.pathname.slice('/api/hips/'.length);
+  if (!hipsPathOk(path)) return send(res, 404, 'Not a file of the SPHEREx all-sky cube', HIPS_SAYS);
+  const file = join(CACHE, `hips_${path.replace(/[^\w]/g, '_')}`);
+  try {
+    return send(res, 200, await readFile(file), HIPS_KEEP);
+  } catch { /* not kept yet */ }
+  if (hipsKnownMissing(path)) return send(res, 404, 'No such tile', HIPS_SAYS);
+  let pending = hipsPending.get(path);
+  if (!pending && hipsPending.size >= HIPS_UPSTREAM_MAX) {
+    return send(res, 503, 'Busy: ask IRSA directly', { ...HIPS_SAYS, 'retry-after': '5' });
+  }
+  if (!pending) {
+    pending = (async () => {
+      const answer = await retryOnGateway(() => withTimeout(HIPS_ORIGIN + path, HIPS_TIMEOUT_MS));
+      if (answer.status === 404) {
+        rememberHipsMissing(path);
+        return null;
+      }
+      if (!answer.ok) throw new Error(`IRSA HiPS: HTTP ${answer.status}`);
+      const body = Buffer.from(await answer.arrayBuffer());
+      if (body.subarray(1, 4).toString('latin1') !== 'PNG') throw new Error('IRSA HiPS: not a PNG');
+      // Past the ceiling a tile is passed on but not kept, until a sweep makes room.
+      if (hipsOnDisk + body.length <= HIPS_MAX_BYTES) {
+        try {
+          await writeWhole(file, body);
+          hipsOnDisk += body.length;
+        } catch { /* served all the same */ }
+      }
+      return body;
+    })().finally(() => hipsPending.delete(path));
+    hipsPending.set(path, pending);
+  }
+  try {
+    const body = await pending;
+    return body ? send(res, 200, body, HIPS_KEEP) : send(res, 404, 'No such tile', HIPS_SAYS);
+  } catch (err) {
+    return send(res, 502, err.message, HIPS_SAYS);
+  }
+}
+
+/* -------------------------------------------------------------- frame ranges */
+
+/**
+ * SPHEREx frames, read by byte range through the relay and kept on disk
+ * (/api/frame?path=<key in the bucket>). The page reads a frame straight
+ * from the S3 mirror when this is not here; when it is, a field read once
+ * opens the next time from this disk alone, without the trip to AWS.
+ *
+ * A published frame never changes: a new visit, or a reprocessed one, comes
+ * as a new file, and the frame lists that name them are refreshed on their
+ * own (see handleSearch). The bucket's ETag is still kept with every frame
+ * and compared with each later answer for the same key; a different one
+ * means the bytes kept are not the file's any more, and they are dropped.
+ *
+ * Only a key laid out as the releases' level-2 files are is asked for, only
+ * at the bucket's two names, and nothing of the page's query is passed on.
+ */
+const FRAME_UPSTREAMS = process.env.MUNINN_S3_URL ? [S3_MIRROR] : [
+  'https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com/',
+  'https://nasa-irsa-spherex.s3.amazonaws.com/',
+];
+/**
+ * "dr1/level2/2025W26_2A/l2b-v27-2026-214/1/level2_2025W26_2A_0530_1D1_spx_l2b-v27-2026-214.fits":
+ * the release, the week folder, the processing version and the detector;
+ * the folder, the version and the detector are each said twice in the key
+ * and must agree.
+ */
+const FRAME_KEY = /^(?:qr|dr)\d{1,2}\/level2\/(\d{4}W\d{2}_\d[A-Z])\/(l2b(?:_[a-z]{1,12})?-v\d{1,3}-\d{4}-\d{3})\/([1-6])\/level2_\1_\d{4}_\d{1,2}D\3_spx_\2\.fits$/;
+/**
+ * Frames are kept in blocks of this size, cut at multiples of it, so two
+ * reads of one frame that overlap share what they overlap: a field opened
+ * again at another width, or on a wider screen, reads the same detector rows
+ * and a few more. A page's reads of one visit are 37 KB (the headers), 77 KB
+ * (the flags' header, read ahead), 6 KB (the wavelength table), 1–2 MB (the
+ * rows the field falls on) and about 1 MB (the flags' compressed rows). With
+ * 256 KB blocks the three small reads cost three blocks, and a visit keeps
+ * about 4.5 MB; with 1 MB blocks the small reads alone would keep 3 MB and a
+ * visit about 7 MB, so the same disk would hold a third fewer visits.
+ * Smaller still would only mean more files for the sweep to count.
+ */
+const FRAME_BLOCK = 256 * 1024;
+/**
+ * The longest single range passed on. The page's longest read is the rows a
+ * field falls on: at the widest field, 0.6° square, lying corner-up across
+ * the detector rows, that is about 500 rows of 8160 bytes, a little over
+ * 4 MB. A longer range is refused, and the page reads it from the bucket.
+ */
+const FRAME_RANGE_MAX = 6 * 1024 * 1024;
+/** Its own ceiling on the disk (MUNINN_FRAME_CACHE_BYTES): a few thousand visits in the default 2 GB. */
+const FRAME_MAX_BYTES = envMs('MUNINN_FRAME_CACHE_BYTES', 2 * 1024 * 1024 * 1024);
+/** A frame served from the disk without a look at the bucket for this long has its ETag checked again, in the background. */
+const FRAME_RECHECK_MS = envMs('MUNINN_FRAME_RECHECK_MS', DAY_MS);
+const FRAME_TIMEOUT_MS = 40_000;
+/** At most this many reads of the bucket at once; past it, the page reads the bucket itself. */
+const FRAME_UPSTREAM_MAX = 16;
+/**
+ * At most this many answers served from the disk at once (MUNINN_FRAME_DISK_MAX);
+ * past it, the page reads the bucket itself. Each holds one block in memory
+ * at a time, but a crowd of slow readers would still hold the disk busy.
+ */
+const FRAME_DISK_MAX = envMs('MUNINN_FRAME_DISK_MAX', 32);
+/**
+ * Reads per visitor per minute. A visit is five reads (headers, flags read
+ * ahead, rows, compressed flags, the wavelength table): opening the Atala
+ * field took fifty. "More visits", another band or another width are as
+ * many again each, so a busy minute is a few hundred.
+ */
+const FRAME_PER_MINUTE = 1200;
+/** Said on every refusal, so the page can tell the relay's from a static host's 404. */
+const FRAME_SAYS = { 'x-muninn-frame': 'error' };
+const framesAsked = new Map();
+/** Bytes of blocks on disk: counted by the sweep and added to on every write, so the ceiling holds between sweeps. */
+let framesOnDisk = 0;
+/** Reads of the bucket under way. */
+let frameReads = 0;
+/** Answers being sent from the disk. */
+let frameDiskReads = 0;
+/** Blocks on their way from the bucket, by `${id}:${n}`: a second visitor waits for them rather than asking again. */
+const frameBlocksPending = new Map();
+/** What is known of each frame, { path, etag, size, checkedAt }, the most recently used last. */
+const frameMetas = new Map();
+const FRAME_METAS_MAX = 4096;
+
+const frameId = (path) => createHash('sha256').update(path).digest('hex').slice(0, 24);
+/** Blocks carry their ETag in their name: a block of an older file is never read for a newer one. */
+const etagTag = (etag) => createHash('sha256').update(String(etag)).digest('hex').slice(0, 8);
+const frameMetaFile = (id) => join(CACHE, `frame_${id}.json`);
+const frameBlockFile = (id, meta, n) => join(CACHE, `frame_${id}_${etagTag(meta.etag)}_${n}.bin`);
+/** How long block `n` of a frame is: a whole block, but for the last, which is what is left of the file. */
+const frameBlockLength = (meta, n) => Math.max(0, Math.min(FRAME_BLOCK, meta.size - n * FRAME_BLOCK));
+
+/** The bucket key the page asks for, or null when it is not one of a release's level-2 frames. */
+function framePath(url) {
+  const names = [...url.searchParams.keys()];
+  if (names.length !== 1 || names[0] !== 'path') return null;
+  const path = url.searchParams.get('path');
+  if (!path || path.length > 200 || path.includes('..') || !FRAME_KEY.test(path)) return null;
+  return path;
+}
+
+/**
+ * The one range asked for: { start, end }, or { start: null, end: n } for
+ * the last n bytes. Null for anything else: no range, several, an open end,
+ * or one longer than FRAME_RANGE_MAX.
+ */
+function frameRange(header) {
+  const m = /^bytes=(?:(\d{1,12})-(\d{1,12})|-(\d{1,9}))$/.exec(String(header ?? '').trim());
+  if (!m) return null;
+  if (m[3] !== undefined) {
+    const n = Number(m[3]);
+    return n >= 1 && n <= FRAME_RANGE_MAX ? { start: null, end: n } : null;
+  }
+  const start = Number(m[1]);
+  const end = Number(m[2]);
+  return end >= start && end - start + 1 <= FRAME_RANGE_MAX ? { start, end } : null;
+}
+
+function rememberFrameMeta(id, meta) {
+  frameMetas.delete(id);
+  frameMetas.set(id, meta);
+  while (frameMetas.size > FRAME_METAS_MAX) frameMetas.delete(frameMetas.keys().next().value);
+}
+
+/** What is kept of a frame, or null: without it no block of the frame is read. */
+async function readFrameMeta(id, path) {
+  let meta = frameMetas.get(id);
+  if (!meta) {
+    try {
+      meta = JSON.parse(await readFile(frameMetaFile(id), 'utf8'));
+    } catch {
+      return null;
+    }
+  }
+  if (meta?.path !== path || !Number.isInteger(meta.size) || typeof meta.etag !== 'string') return null;
+  rememberFrameMeta(id, meta);
+  return meta;
+}
+
+async function writeFrameMeta(id, meta) {
+  rememberFrameMeta(id, meta);
+  const file = frameMetaFile(id);
+  const text = Buffer.from(JSON.stringify(meta), 'utf8');
+  try {
+    // Counted with the blocks it describes, as the sweep counts it.
+    const before = await stat(file).then((info) => info.size, () => 0);
+    await writeWhole(file, text);
+    framesOnDisk += text.length - before;
+  } catch { /* the blocks are not read without it: a cold read next time */ }
+}
+
+/** A frame's record, gone from the disk and the count. */
+async function dropFrameMeta(id) {
+  frameMetas.delete(id);
+  const file = frameMetaFile(id);
+  try {
+    const { size } = await stat(file);
+    await unlink(file);
+    framesOnDisk -= size;
+  } catch { /* not kept */ }
+}
+
+/** Every block kept of one version of a frame, gone. */
+async function dropFrameBlocks(id, meta) {
+  const blocks = Math.ceil(meta.size / FRAME_BLOCK);
+  for (let n = 0; n < blocks; n += 1) {
+    const file = frameBlockFile(id, meta, n);
+    try {
+      const { size } = await stat(file);
+      await unlink(file);
+      framesOnDisk -= size;
+    } catch { /* not kept */ }
+  }
+}
+
+class FrameFault extends Error {
+  constructor(message, status, final = false) { super(message); this.status = status; this.final = final; }
+}
+
+/**
+ * Bytes `from`–`to` of a frame from the bucket, at its regional name and
+ * then its global one: { body, size, etag }. The answer must be the range
+ * asked for, or the part of it before the file ends.
+ */
+async function frameFromBucket(path, from, to) {
+  let last;
+  for (const base of FRAME_UPSTREAMS) {
+    try {
+      const res = await fetch(base + path, {
+        headers: { range: `bytes=${from}-${to}`, 'user-agent': 'Muninn/1.0 (NASA Space Apps 2026)' },
+        signal: AbortSignal.timeout(FRAME_TIMEOUT_MS),
+      });
+      // No such file, or a range past its end: the other name would say the same.
+      if (res.status === 416) {
+        const size = /^bytes \*\/(\d+)$/.exec(res.headers.get('content-range') ?? '')?.[1];
+        throw Object.assign(new FrameFault('Past the end of the file', 416, true), { size: size && Number(size) });
+      }
+      if ([403, 404].includes(res.status)) throw new FrameFault(`S3: HTTP ${res.status}`, 404, true);
+      if (res.status !== 206) throw new FrameFault(`S3: HTTP ${res.status}`, 502);
+      const body = Buffer.from(await res.arrayBuffer());
+      const said = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(res.headers.get('content-range') ?? '');
+      if (!said || Number(said[1]) !== from || Number(said[2]) - from + 1 !== body.length) {
+        throw new FrameFault('S3: not the range asked for', 502);
+      }
+      const size = Number(said[3]);
+      if (body.length < to - from + 1 && Number(said[2]) !== size - 1) throw new FrameFault('S3: cut short', 502);
+      return { body, size, etag: res.headers.get('etag') ?? '' };
+    } catch (err) {
+      if (err.final) throw err;
+      last = err;
+    }
+  }
+  throw last instanceof FrameFault ? last : new FrameFault(`S3: ${last?.message ?? 'no answer'}`, 502);
+}
+
+/**
+ * Room for `bytes` more under the ceiling; past it, a sweep is asked for to
+ * make room, and the block is passed on unkept. The count keeps the disk
+ * from ever going past the ceiling, so the sweep is told to let go of the
+ * least recently used even though it finds the frames under it.
+ */
+let framesWantRoom = false;
+function frameRoomFor(bytes) {
+  if (framesOnDisk + bytes <= FRAME_MAX_BYTES) return true;
+  framesWantRoom = true;
+  sweepSoon();
+  return false;
+}
+
+/**
+ * Blocks `first`–`last` of a frame from the bucket in one read, kept as they
+ * land: { blocks, meta, changed }. When the bucket's ETag is not the one
+ * kept, what was kept is dropped, and `changed` says so.
+ */
+async function fetchFrameBlocks(path, id, known, first, last) {
+  if (frameReads >= FRAME_UPSTREAM_MAX) throw new FrameFault('Busy: ask the bucket directly', 503);
+  frameReads += 1;
+  let got;
+  try {
+    got = await frameFromBucket(path, first * FRAME_BLOCK, (last + 1) * FRAME_BLOCK - 1);
+  } finally {
+    frameReads -= 1;
+  }
+  const changed = Boolean(known && known.etag !== got.etag);
+  if (changed) await dropFrameBlocks(id, known);
+  const meta = { path, etag: got.etag, size: got.size, checkedAt: Date.now() };
+  if (!known || changed || known.size !== got.size) await writeFrameMeta(id, meta);
+  else known.checkedAt = meta.checkedAt;
+  const blocks = [];
+  for (let at = 0; at < got.body.length; at += FRAME_BLOCK) blocks.push(got.body.subarray(at, at + FRAME_BLOCK));
+  try {
+    for (let k = 0; k < blocks.length; k += 1) {
+      if (!frameRoomFor(blocks[k].length)) break;
+      await writeWhole(frameBlockFile(id, meta, first + k), blocks[k]);
+      framesOnDisk += blocks[k].length;
+    }
+  } catch { /* passed on all the same */ }
+  return { blocks, meta: changed || !known ? meta : known, changed };
+}
+
+/**
+ * The name of a block kept on disk, marked as just used, or null. A block
+ * of the wrong length (cut short by a crash before blocks were written
+ * whole, or by a full disk) is not the frame's: it is dropped, and read
+ * from the bucket again.
+ */
+async function keptBlock(id, meta, n) {
+  const file = frameBlockFile(id, meta, n);
+  let size;
+  try {
+    ({ size } = await stat(file));
+  } catch {
+    return null;
+  }
+  if (size !== frameBlockLength(meta, n) || size === 0) {
+    try {
+      await unlink(file);
+      framesOnDisk -= size;
+    } catch { /* gone already */ }
+    return null;
+  }
+  const now = new Date();
+  // The sweep evicts the least recently used: a block read is a block used.
+  utimes(file, now, now).catch(() => {});
+  return file;
+}
+
+/**
+ * Blocks `first`–`last` of a frame: from the disk where kept, from the
+ * bucket where not, each stretch of missing blocks in a single read. A
+ * block already on its way for another visitor is waited for, not asked
+ * again. { blocks, meta, fromDisk, changed }: each block is its bytes when
+ * it came from the bucket, or the name of its file when it is on disk, read
+ * only as it is sent.
+ */
+async function frameBlocks(path, id, meta, first, last) {
+  const blocks = [];
+  const missing = [];
+  for (let n = first; n <= last; n += 1) {
+    const pending = frameBlocksPending.get(`${id}:${n}`);
+    const kept = !pending && meta ? await keptBlock(id, meta, n) : null;
+    blocks.push(pending ?? kept);
+    if (!pending && !kept) missing.push(n);
+  }
+  const runs = [];
+  for (let k = 0; k < missing.length;) {
+    let j = k;
+    while (j + 1 < missing.length && missing[j + 1] === missing[j] + 1) j += 1;
+    const from = missing[k];
+    const to = missing[j];
+    const run = fetchFrameBlocks(path, id, meta, from, to);
+    for (let n = from; n <= to; n += 1) {
+      const block = run.then((r) => r.blocks[n - from] ?? Buffer.alloc(0));
+      block.catch(() => {});
+      frameBlocksPending.set(`${id}:${n}`, block);
+      blocks[n - first] = block;
+    }
+    run.catch(() => {}).finally(() => {
+      for (let n = from; n <= to; n += 1) frameBlocksPending.delete(`${id}:${n}`);
+    });
+    runs.push(run);
+    k = j + 1;
+  }
+  const settled = await Promise.all(blocks);
+  const read = await Promise.all(runs);
+  return {
+    blocks: settled,
+    meta: read.at(-1)?.meta ?? meta ?? frameMetas.get(id) ?? null,
+    fromDisk: missing.length === 0,
+    changed: read.some((r) => r.changed),
+  };
+}
+
+/** A frame not looked at in the bucket for a day has its ETag compared, and its blocks dropped if it moved. */
+function recheckFrame(path, id, meta) {
+  if (Date.now() - (meta.checkedAt ?? 0) < FRAME_RECHECK_MS || meta.rechecking) return;
+  if (frameReads >= FRAME_UPSTREAM_MAX) return;
+  meta.rechecking = true;
+  frameReads += 1;
+  frameFromBucket(path, 0, 0).then(async (got) => {
+    if (got.etag !== meta.etag) {
+      await dropFrameBlocks(id, meta);
+      await dropFrameMeta(id);
+    } else {
+      await writeFrameMeta(id, { path, etag: meta.etag, size: meta.size, checkedAt: Date.now() });
+    }
+  }).catch(() => {}).finally(() => { frameReads -= 1; meta.rechecking = false; });
+}
+
+const pastTheEnd = (res, size) => send(res, 416, 'Past the end of the file', {
+  ...FRAME_SAYS, ...(Number.isInteger(size) ? { 'content-range': `bytes */${size}` } : {}),
+});
+
+/** Until the answer can take more, or the visitor has gone. */
+function drained(res) {
+  return new Promise((resolve) => {
+    const done = () => {
+      res.off('drain', done);
+      res.off('close', done);
+      resolve();
+    };
+    res.on('drain', done);
+    res.on('close', done);
+  });
+}
+
+/**
+ * Bytes `start`–`stop` of blocks `first`… sent on one block at a time: a
+ * block on disk is read only when its turn comes, and the next is not read
+ * until the visitor has taken the last, so a read costs one block of memory
+ * however long it is. A block gone from the disk halfway (the sweep took
+ * it) cuts the answer off; the page then reads the bucket itself.
+ */
+async function sendFrameBlocks(res, blocks, first, start, stop, meta) {
+  for (let k = 0; k < blocks.length && !res.destroyed; k += 1) {
+    const n = first + k;
+    let block = blocks[k];
+    if (typeof block === 'string') {
+      try {
+        block = await readFile(block);
+      } catch {
+        block = null;
+      }
+      if (block?.length !== frameBlockLength(meta, n)) {
+        res.destroy();
+        return;
+      }
+    }
+    const from = Math.max(start, n * FRAME_BLOCK) - n * FRAME_BLOCK;
+    const to = Math.min(stop + 1, (n + 1) * FRAME_BLOCK) - n * FRAME_BLOCK;
+    if (to > from && !res.write(block.subarray(from, to))) await drained(res);
+  }
+  if (!res.destroyed) res.end();
+}
+
+async function handleFrame(url, req, res) {
+  const path = framePath(url);
+  if (!path) return send(res, 400, 'Not a SPHEREx level-2 frame', FRAME_SAYS);
+  const asked = frameRange(req.headers.range);
+  if (!asked) return send(res, 416, `One range of at most ${FRAME_RANGE_MAX} bytes`, FRAME_SAYS);
+  const id = frameId(path);
+  let got;
+  let start;
+  let stop;
+  let meta;
+  try {
+    meta = await readFrameMeta(id, path);
+    // The last n bytes need the file's length: its first block brings it, and is the page's next read anyway.
+    if (asked.start === null && !meta) meta = (await frameBlocks(path, id, null, 0, 0)).meta;
+    for (let round = 0; ; round += 1) {
+      start = asked.start ?? Math.max(0, meta.size - asked.end);
+      const end = asked.start === null ? meta.size - 1 : asked.end;
+      if (meta && start >= meta.size) return pastTheEnd(res, meta.size);
+      got = await frameBlocks(path, id, meta, Math.floor(start / FRAME_BLOCK), Math.floor(Math.min(end, (meta?.size ?? Infinity) - 1) / FRAME_BLOCK));
+      // The bucket's file is not the one the kept blocks came from: every block is read again, once.
+      if (got.changed && round === 0) { meta = got.meta; continue; }
+      meta = got.meta;
+      if (start >= meta.size) return pastTheEnd(res, meta.size);
+      stop = Math.min(end, meta.size - 1);
+      break;
+    }
+  } catch (err) {
+    const status = err instanceof FrameFault ? err.status : 502;
+    if (status === 416) return pastTheEnd(res, err.size);
+    return send(res, status, err.message, status === 503 ? { ...FRAME_SAYS, 'retry-after': '5' } : FRAME_SAYS);
+  }
+  const first = Math.floor(start / FRAME_BLOCK);
+  // Bytes from the bucket are checked here, before the answer starts: a
+  // block another visitor's read brought short cannot be sent as whole.
+  for (let k = 0; k < got.blocks.length; k += 1) {
+    const block = got.blocks[k];
+    if (typeof block !== 'string' && block.length !== frameBlockLength(meta, first + k)) {
+      return send(res, 502, 'S3: cut short', FRAME_SAYS);
+    }
+  }
+  const fromDisk = got.blocks.some((block) => typeof block === 'string');
+  if (fromDisk && frameDiskReads >= FRAME_DISK_MAX) {
+    return send(res, 503, 'Busy: ask the bucket directly', { ...FRAME_SAYS, 'retry-after': '5' });
+  }
+  if (got.fromDisk) recheckFrame(path, id, meta);
+  // Used as its blocks are, so the sweep never takes it before them: without it they cannot be read.
+  const now = new Date();
+  utimes(frameMetaFile(id), now, now).catch(() => {});
+  res.writeHead(206, {
+    ...SECURITY_HEADERS,
+    'content-type': 'application/octet-stream',
+    'content-length': String(stop - start + 1),
+    'content-range': `bytes ${start}-${stop}/${meta.size}`,
+    'accept-ranges': 'bytes',
+    etag: meta.etag,
+    // A frame's path names its version, so the bytes of a range never
+    // change: the browser keeps them for good and a field opened again reads
+    // nothing. The browser only: an edge cache in front would have to key
+    // every answer on its Range, and that is not something to assume.
+    'cache-control': 'private, max-age=31536000, immutable',
+    // Whether the bucket was asked: the warm-up and the tests count on it.
+    'x-muninn-frame': got.fromDisk ? 'hit' : 'miss',
+  });
+  if (fromDisk) frameDiskReads += 1;
+  try {
+    await sendFrameBlocks(res, got.blocks, first, start, stop, meta);
+  } finally {
+    if (fromDisk) frameDiskReads -= 1;
+  }
+}
+
 /**
  * Average a float FITS image down by a whole factor until its longer side
  * fits `maxSide`, and rewrite the scale cards to match. An Atlas pixel is
@@ -1329,7 +2030,10 @@ async function handleSbIdent(url, res) {
     magLimit: Math.round(clamp(param(url, 'mag') || 20, 10, 25)),
   };
   const key = safeKey(`sbid_${field.ra.toFixed(4)}_${field.dec.toFixed(4)}_${field.halfWidthDeg.toFixed(4)}_${field.iso}_${field.magLimit}`);
-  return relay(res, key, () => askJpl(field, key), 'jpl');
+  // Where the known bodies stood at a past instant does not change, short of a
+  // new discovery: an answer is kept for weeks, and a field opened again, by
+  // anyone, does not queue at JPL for it.
+  return relay(res, key, () => askJpl(field, key), 'jpl', KEEP_PRIVATE, SBIDENT_KEEP_MS);
 }
 
 async function askJpl(field, key) {
@@ -1384,6 +2088,82 @@ async function askSmallBody(sstr, day, key) {
   return { ok: true, cached: false, ...payload };
 }
 
+/* ------------------------------------------------- a marked body's orbit */
+
+/**
+ * The orbit JPL's Small-Body Database has for one asteroid or comet, for the
+ * card of a mark it was matched to: its class, a, e, i, period and the
+ * elements the page draws the orbit from (orbit.js readOrbit).
+ *
+ *   des   the designation SkyBoT or JPL named the body by: "152",
+ *         "2000 AG119", "C/2020 F3", "67P". Checked, and only it goes to JPL.
+ *
+ * Answers { orbit }, null when JPL has no single body by that designation.
+ */
+async function handleSbdb(url, req, res) {
+  const des = (url.searchParams.get('des') ?? '').replace(/\s+/g, ' ').trim();
+  if (!SBDB_TEXT.test(des)) {
+    return json(res, 400, { ok: false, error: 'des must be an asteroid or comet designation' });
+  }
+  if (overLimit(req, namesAsked, NAMES_PER_MINUTE)) {
+    return json(res, 429, { ok: false, error: 'Too many names from here; wait a minute.' });
+  }
+  const key = `sbdb_${createHash('sha1').update(des.toLowerCase()).digest('hex').slice(0, 20)}`;
+  return relay(res, key, () => askOrbit(des, key), 'names');
+}
+
+async function askOrbit(des, key) {
+  const payload = { orbit: readOrbit(await jplJson(sbdbOrbitUrl(des), 'SBDB')), via: 'JPL' };
+  await writeCache(key, payload);
+  return { ok: true, cached: false, ...payload };
+}
+
+/* ------------------------------------------- bodies on nearly the same orbit */
+
+/** Tries at a smaller box before the rows JPL sent are taken as they are. */
+const NEAR_NARROWINGS = 3;
+
+/**
+ * Every asteroid and comet JPL's Small-Body Database has on nearly the orbit
+ * of a marked body, for its card (orbit.js NEAR_BOX: a within 2 %, e within
+ * 0.03, i within 1.5°).
+ *
+ *   a, e, i   the marked body's semi-major axis (AU), eccentricity and
+ *             inclination (°). Checked as plain numbers; the question to
+ *             JPL is written from them alone.
+ *
+ * Answers { count, rows, scale }: how many bodies the box holds, and the
+ * rows of a box shrunk by `scale` until it holds no more than JPL is asked
+ * to send, so that the closest are among them. A main-belt box holds
+ * thousands; it takes two or three questions.
+ */
+async function handleSbdbNear(url, req, res) {
+  const k = { a: param(url, 'a'), e: param(url, 'e'), i: param(url, 'i') };
+  if (!(k.a > 0.1 && k.a < 1000) || !(k.e >= 0 && k.e < 1) || !(k.i >= 0 && k.i <= 180)) {
+    return json(res, 400, { ok: false, error: 'a (AU), e (0 to 1) and i (degrees) must be numbers of a closed orbit' });
+  }
+  if (overLimit(req, namesAsked, NAMES_PER_MINUTE)) {
+    return json(res, 429, { ok: false, error: 'Too many names from here; wait a minute.' });
+  }
+  const box = nearBox(k);
+  const key = `sbnear_${createHash('sha1').update(JSON.stringify(box)).digest('hex').slice(0, 20)}`;
+  return relay(res, key, () => askNear(k, key), 'names');
+}
+
+async function askNear(k, key) {
+  const wide = readNear(await jplJson(nearQueryUrl(nearBox(k)), 'SBDB query'));
+  let found = wide;
+  let scale = 1;
+  for (let n = 0; n < NEAR_NARROWINGS && found.count > NEAR_ROWS; n++) {
+    // The box's volume goes as the cube of its scale: aim a little under the rows wanted.
+    scale *= 0.85 * Math.cbrt(NEAR_ROWS / found.count);
+    found = readNear(await jplJson(nearQueryUrl(nearBox(k, scale)), 'SBDB query'));
+  }
+  const payload = { count: wide.count, rows: found.rows, scale: Number(scale.toFixed(4)), via: 'JPL' };
+  await writeCache(key, payload);
+  return { ok: true, cached: false, ...payload };
+}
+
 /** A JPL API's JSON. A busy JPL answers with an HTML page instead: that is an error, not "not found". */
 async function jplJson(target, what) {
   const res = await withTimeout(target, SMALL_BODY_TIMEOUT_MS);
@@ -1405,20 +2185,37 @@ async function serveStatic(pathname, req, res, asked = null) {
   const rel = normalize(decoded).replace(/^([/\\])+/, '');
   if (rel.split(/[\\/]/).includes('..')) return send(res, 403, 'Forbidden');
 
-  const target = join(PUBLIC, rel === '' ? 'index.html' : rel);
+  let target = join(PUBLIC, rel === '' ? 'index.html' : rel);
   if (!target.startsWith(PUBLIC + sep) && target !== join(PUBLIC, 'index.html')) {
     return send(res, 403, 'Forbidden');
   }
   let file;
+  let hashed = null;
   try {
     file = await loadStatic(target);
   } catch {
-    return send(res, 404, 'Not found', { 'content-type': 'text/plain; charset=utf-8' });
+    const alias = dataAlias(rel);
+    // The file the hash names; failing that, the first there is, not kept.
+    for (const path of alias?.paths ?? []) {
+      const found = await loadStatic(join(PUBLIC, path)).catch(() => null);
+      if (!found) continue;
+      const same = contentHash(found) === alias.hash;
+      if (!file || same) {
+        file = found;
+        target = join(PUBLIC, path);
+        hashed = alias.hash;
+      }
+      if (same) break;
+    }
+    if (!file) return send(res, 404, 'Not found', { 'content-type': 'text/plain; charset=utf-8' });
   }
   const ext = extname(target);
+  const policy = hashed
+    ? (contentHash(file) === hashed ? IMMUTABLE : 'no-cache')
+    : await keptForGood(rel, asked, file) ? IMMUTABLE : cachePolicy(rel);
   const headers = {
     'content-type': TYPES[ext] ?? 'application/octet-stream',
-    'cache-control': await keptForGood(rel, asked, file) ? IMMUTABLE : cachePolicy(rel),
+    'cache-control': policy,
     etag: file.etag,
     vary: 'accept-encoding',
   };
@@ -1431,6 +2228,27 @@ async function serveStatic(pathname, req, res, asked = null) {
   if (file.gzip && /\bgzip\b/.test(accepts)) return send(res, 200, file.gzip, { ...headers, 'content-encoding': 'gzip' });
   return send(res, 200, file.raw, headers);
 }
+
+/**
+ * A data file under its hashed name (tools/name-data.mjs): `data/x.<hash>.bin`
+ * is data/x.json (or data/x.bin), `data/x.<hash>.png` is data/x.png.
+ * Cloudflare keeps a .bin at its edge and never a .json, so the page asks for
+ * its data under these names. Answered with the file as it is now: kept for
+ * good when its hash is the one asked for, and `no-cache` when the file has
+ * changed since the name was written, so the edge never keeps new bytes
+ * under an old name.
+ */
+const DATA_ALIAS = /^data\/([\w./-]+)\.([0-9a-f]{10})\.(bin|png|jpg)$/;
+
+function dataAlias(rel) {
+  const m = DATA_ALIAS.exec(rel.replace(/\\/g, '/'));
+  if (!m) return null;
+  const [, stem, hash, ext] = m;
+  return { paths: ext === 'bin' ? [`data/${stem}.json`, `data/${stem}.bin`] : [`data/${stem}.${ext}`], hash };
+}
+
+/** The first ten hex digits of a file's sha256, worked out once per file read. */
+const contentHash = (file) => (file.sha256 ??= createHash('sha256').update(file.raw).digest('hex').slice(0, 10));
 
 /**
  * Text is sent compressed. The page's own code is 700 KB as written and about
@@ -1583,8 +2401,13 @@ function versioned(target, raw, version) {
  * (and answered with a 304 when nothing moved). Data and pictures change with
  * a data release. The same policy public/_headers gives Cloudflare Pages.
  */
+const BAKED_PIXELS = /^data\/fields\/[\w-]+\/\w+\/[\w.-]+_[0-9a-f]{10}\.bin$/;
+
 function cachePolicy(rel) {
   const path = rel.replace(/\\/g, '/');
+  // A ready-made field's pixels are named by their own hash (bake-fields.mjs):
+  // a new bake is a new name, so the edge may keep each for good.
+  if (BAKED_PIXELS.test(path)) return IMMUTABLE;
   if (path.startsWith('data/')) return 'public, max-age=600, stale-while-revalidate=86400';
   if (path.startsWith('img/')) return 'public, max-age=86400';
   if (path.startsWith('fonts/')) return 'public, max-age=31536000, immutable';
@@ -1629,15 +2452,27 @@ const server = createServer(async (req, res) => {
   if (req.method !== 'GET' && req.method !== 'HEAD') {
     return send(res, 405, 'Method not allowed', { allow: 'GET, HEAD' });
   }
-  if (url.pathname.startsWith('/api/') && overLimit(req)) {
+  // The sky's tiles come by the hundred as the view moves, and a field's
+  // frames by the hundred as it opens: each has a limit of its own.
+  const tiles = url.pathname.startsWith('/api/hips/');
+  const frame = url.pathname === '/api/frame';
+  if (frame && overLimit(req, framesAsked, FRAME_PER_MINUTE)) {
+    return send(res, 429, 'Too many reads from here; wait a minute.', { ...FRAME_SAYS, 'retry-after': '60' });
+  }
+  if (!frame && url.pathname.startsWith('/api/') && (tiles ? overLimit(req, hipsAsked, HIPS_PER_MINUTE) : overLimit(req))) {
     return json(res, 429, { ok: false, error: 'Too many questions from here; wait a minute.' });
   }
   try {
+    if (tiles) return await handleHips(url, res);
+    if (frame) return await handleFrame(url, req, res);
     if (url.pathname === '/api/search') return await handleSearch(url, res);
     if (url.pathname === '/api/tap') return await handleTap(url, res);
     if (url.pathname === '/api/depth') return await handleDepth(url, res);
+    if (url.pathname === '/api/cds') return await handleCds(url, res);
     if (url.pathname === '/api/sbident') return await handleSbIdent(url, res);
     if (url.pathname === '/api/smallbody') return await handleSmallBody(url, req, res);
+    if (url.pathname === '/api/sbdb') return await handleSbdb(url, req, res);
+    if (url.pathname === '/api/sbdb-near') return await handleSbdbNear(url, req, res);
     if (url.pathname === '/api/wise') return await handleWise(url, res);
     if (url.pathname === '/api/archives') return await handleArchives(url, res);
     if (url.pathname === '/api/targets') {
@@ -1665,30 +2500,70 @@ setInterval(loadOwnIndex, 10 * 60 * 1000).unref();
 async function sweepCache() {
   let names;
   try { names = await readdir(CACHE); } catch { return; }
+  // The running counts as they stood when the folder was listed: what is
+  // written or dropped while the sweep runs is not in its list, and is kept
+  // in the counts as the difference from these.
+  const hipsBefore = hipsOnDisk;
+  const framesBefore = framesOnDisk;
+  const framesFull = framesWantRoom;
+  framesWantRoom = false;
   const now = Date.now();
   const kept = [];
+  const keptTiles = [];
+  const keptFrames = [];
   for (const name of names) {
     const file = join(CACHE, name);
     try {
       const info = await stat(file);
       if (!info.isFile()) continue;
+      // A file left half written by a stopped process; one still being written is a few seconds old.
+      if (name.includes(PART)) {
+        if (now - info.mtimeMs > 10 * 60 * 1000) await unlink(file);
+        continue;
+      }
       // A frame list, and the depth view's catalogues, are kept for weeks, as
       // the answer to fall back on while the archives are down; everything
       // else for as long as it is trusted.
-      const keep = name.startsWith('frames_') ? SEARCH_KEEP_MS : name.startsWith('depth_') ? DEPTH_KEEP_MS : CACHE_TTL_MS;
+      // The cube's tiles, for as long as the frame lists: a release does not change.
+      // A frame's blocks, for as long as there is room: they go by their ceiling alone.
+      if (name.startsWith('frame_')) { keptFrames.push({ file, at: info.mtimeMs, size: info.size }); continue; }
+      const keep = name.startsWith('frames_') || name.startsWith('hips_') ? SEARCH_KEEP_MS
+        : name.startsWith('depth_') ? DEPTH_KEEP_MS : name.startsWith('sbid_') ? SBIDENT_KEEP_MS
+          : name.startsWith('sesame_') ? NAMES_KEEP_MS : name.startsWith('simbad_') ? SIMBAD_KEEP_MS : CACHE_TTL_MS;
       if (now - info.mtimeMs > keep) await unlink(file);
-      else kept.push({ file, at: info.mtimeMs, size: info.size });
+      else (name.startsWith('hips_') ? keptTiles : kept).push({ file, at: info.mtimeMs, size: info.size });
     } catch { /* gone already, or busy: the next sweep has it */ }
   }
-  // And a ceiling on what is kept, oldest out first.
-  let total = kept.reduce((sum, f) => sum + f.size, 0);
-  for (const f of kept.sort((a, b) => a.at - b.at)) {
-    if (total <= CACHE_MAX_BYTES) break;
-    try { await unlink(f.file); total -= f.size; } catch { /* next sweep */ }
+  // And a ceiling on what is kept, oldest out first: one for the answers, one
+  // for the tiles, one for the frames. A frame's block is touched each time
+  // it is read, so for the frames "oldest" is the least recently used; they
+  // go down to nine tenths of their ceiling, so a warm-up past it is not a
+  // sweep for every block.
+  for (const [list, ceiling, floor, full] of [
+    [kept, CACHE_MAX_BYTES, CACHE_MAX_BYTES, false],
+    [keptTiles, HIPS_MAX_BYTES, HIPS_MAX_BYTES, false],
+    [keptFrames, FRAME_MAX_BYTES, FRAME_MAX_BYTES * 0.9, framesFull],
+  ]) {
+    let total = list.reduce((sum, f) => sum + f.size, 0);
+    if (total > ceiling || full) {
+      for (const f of list.sort((a, b) => a.at - b.at)) {
+        if (total <= floor) break;
+        try { await unlink(f.file); total -= f.size; } catch { /* next sweep */ }
+      }
+    }
+    if (list === keptTiles) hipsOnDisk = total + (hipsOnDisk - hipsBefore);
+    if (list === keptFrames) framesOnDisk = total + (framesOnDisk - framesBefore);
   }
 }
-sweepCache();
-setInterval(sweepCache, 10 * 60 * 1000).unref();
+
+/** One sweep at a time; one asked for while another runs is that one. */
+let sweeping = null;
+function sweepSoon() {
+  sweeping ??= sweepCache().catch(() => {}).finally(() => { sweeping = null; });
+  return sweeping;
+}
+sweepSoon();
+setInterval(sweepSoon, 10 * 60 * 1000).unref();
 
 /**
  * The last line of defence. Every relay catches what an archive can send it,
@@ -1717,7 +2592,7 @@ server.on('clientError', (err, socket) => {
 server.listen(PORT, HOST, () => {
   console.log(`\n  Muninn — SPHEREx time-domain viewer`);
   console.log(`  http://${HOST}:${PORT}\n`);
-  console.log(`  Image data is read straight from the AWS mirror by the browser.`);
+  console.log(`  Frames are read through /api/frame and kept in .cache/ (up to ${Math.round(FRAME_MAX_BYTES / 2 ** 20)} MB).`);
   console.log(`  This process relays the IRSA frame index and catalogues, and JPL's`);
   console.log(`  small-body identification, and caches the answers in .cache/`);
   console.log(baked.length

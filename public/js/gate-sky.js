@@ -1,0 +1,92 @@
+/**
+ * gate-sky.js — the front page's sky is SPHEREx's own.
+ *
+ * Under the gate's canvas, the whole-sky renderer of allsky.html
+ * (allsky/view.js): the DR1 all-sky cube, from the averaged Allsky image at
+ * the widest field down to 512-pixel tiles as a dive narrows it. The gate
+ * keeps its camera, its markers, its pointer and its dive; this only draws
+ * the sky behind them, from the gate's camera, every frame it moves.
+ *
+ * The gate's field of view is vertical; the renderer's is across the shorter
+ * side of the screen. On a tall phone screen the shorter side is the width,
+ * so the angle is converted, not copied: the two must agree on the focal
+ * length in pixels, or the markers would drift off what they mark.
+ */
+
+import { createSkyView } from './allsky/view.js';
+import { HIPS_BASE, COLOUR_FRAMES } from './allsky/hips.js';
+
+const DEG = Math.PI / 180;
+
+/**
+ * A sky layer under `canvas`, or null where WebGL 2 cannot be had (the gate
+ * then draws its own band, as before). `onFirstSky` is called once, when the
+ * whole sky is first on screen.
+ */
+export function createSurveySky(canvas, { onFirstSky = () => {} } = {}) {
+  const layer = document.createElement('canvas');
+  layer.className = `${canvas.className} gate__band`;
+  layer.setAttribute('aria-hidden', 'true');
+  canvas.before(layer);
+  const ramp = getComputedStyle(document.documentElement).getPropertyValue('--cmap-deep')
+    .split(/,(?![^(]*\))/).map((s) => s.trim()).filter(Boolean);
+  let shown = false;
+  const view = createSkyView(layer, {
+    ramp,
+    ink: { grid: [0.86, 0.88, 1, 0.14], ecliptic: [1, 0.76, 0.42, 0.7] },
+    relay: (url) => url.replace(`${HIPS_BASE}/`, 'api/hips/'),
+    onChange: ({ wanted, have }) => {
+      if (!shown && wanted > 0 && have >= wanted) {
+        shown = true;
+        onFirstSky();
+      }
+    },
+  });
+  if (!view) {
+    layer.remove();
+    return null;
+  }
+  view.setFrames(COLOUR_FRAMES);
+
+  return {
+    /** Point the sky as the gate points: RA, Dec, vertical field in degrees, the canvas in CSS pixels. */
+    draw({ ra, dec, fov, width, height }) {
+      const short = Math.min(width, height);
+      const across = (2 * Math.atan(Math.tan((fov * DEG) / 2) * (short / height))) / DEG;
+      view.set({ ra, dec, fov: across });
+      // In this frame, not the next: the gate draws its markers now, and a
+      // sky a frame behind them slides under them in a turn.
+      view.drawNow();
+    },
+    get shown() { return shown; },
+    /** One wavelength (a frame of the cube) or the colour view. */
+    setFrames(frames) { view.setFrames(frames); },
+  };
+}
+
+/** How wide the card's cutout of the cube is, degrees: wide enough to hold a few stars on an empty patch of sky. */
+const CUTOUT_FOV = 1;
+
+/**
+ * The all-sky cube at one point, for the card on the sky while the archive
+ * is asked for a real frame, or where it cannot give one. The same renderer
+ * and the same tiles as the sky behind the card (most already in the
+ * browser's cache), on the card's own small canvas. It is the survey's
+ * averaged sky, not one visit, and the card says so. Null where WebGL 2
+ * cannot be had.
+ */
+export function createCubeCutout(canvas) {
+  const ramp = getComputedStyle(document.documentElement).getPropertyValue('--cmap-deep')
+    .split(/,(?![^(]*\))/).map((s) => s.trim()).filter(Boolean);
+  const view = createSkyView(canvas, {
+    ramp,
+    ink: { grid: [0, 0, 0, 0], ecliptic: [0, 0, 0, 0] },
+    relay: (url) => url.replace(`${HIPS_BASE}/`, 'api/hips/'),
+  });
+  if (!view) return null;
+  view.setFrames(COLOUR_FRAMES);
+  return {
+    /** Face the cube at a point. */
+    show(ra, dec) { view.set({ ra, dec, fov: CUTOUT_FOV }); },
+  };
+}

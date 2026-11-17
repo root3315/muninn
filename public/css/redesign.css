@@ -207,6 +207,16 @@ body { font-size: var(--text-base); line-height: 1.5; }
 }
 .mast, .stage, .run { background: none; border: 0; }
 .side--right { background: var(--rec-panel); border-radius: var(--radius-lg); }
+/* Scrolled, the right column's words pass under a strip of its own ground at
+   its top edge instead of running into it. */
+@media (min-width: 68.0625rem) and (min-height: 34.0625rem) {
+  .side--right::before {
+    content: ""; position: sticky; inset-block-start: 0; z-index: 1;
+    display: block; block-size: var(--space-md); margin-block-end: calc(-1 * var(--space-md));
+    background: linear-gradient(var(--rec-panel) 60%, transparent);
+    pointer-events: none;
+  }
+}
 .run { background: var(--rec-panel); border-radius: var(--radius-lg); }
 .stage { background: var(--rec-panel); border-radius: var(--radius-lg); }
 
@@ -450,6 +460,8 @@ body { font-size: var(--text-base); line-height: 1.5; }
   font-size: var(--text-finding); line-height: 1.22; letter-spacing: -0.01em;
   text-wrap: balance;
 }
+.verdict__sub { margin: 0; font-size: var(--text-sm); line-height: 1.45; color: var(--color-muted); max-inline-size: 42ch; }
+.verdict__sub[hidden] { display: none; }
 .verdict__line[data-state="reading"] { font-family: var(--font-body); font-weight: 500; font-size: 1.0625rem; color: var(--color-muted); }
 .verdict__line[data-found="true"] { color: var(--color-counter); }
 
@@ -664,6 +676,21 @@ body { font-size: var(--text-base); line-height: 1.5; }
   margin: var(--poster-m);
   margin-block-end: calc(var(--poster-m) + env(safe-area-inset-bottom, 0px));
 }
+/* On a wide screen the way in stands on the sky itself, with no panel under
+   it: a soft shade rising from the lower left corner gives the words their
+   ground wherever the Milky Way is behind them, and the name is large. */
+@media not ((max-width: 48rem) and (min-height: 30.0625rem)) {
+  .gate__poster { inline-size: min(36rem, calc(100% - 2 * var(--poster-m))); }
+  .gate__vignette {
+    background:
+      radial-gradient(64rem 36rem at 0% 100%, var(--gate-veil-deep) 0%, oklch(9% 0.022 285 / 0.55) 45%, transparent 78%),
+      radial-gradient(120% 90% at 60% 40%, transparent 50%, var(--gate-veil) 100%);
+  }
+  .gate__poster :is(.gate__word, .gate__tag, .gate__src, .gate__jump-k) { text-shadow: var(--shade-text); }
+  .gate__poster .gate__word { font-size: clamp(3rem, 6vw, 5.75rem); letter-spacing: -0.03em; }
+  .gate__poster .gate__tag { font-size: var(--text-lg); color: var(--color-ink); }
+  .gate__poster .gate__src { font-size: var(--text-sm); color: var(--color-muted); }
+}
 .gate__word {
   font-family: var(--font-display); font-weight: 500;
   font-size: var(--text-word); line-height: 1; letter-spacing: -0.02em;
@@ -834,8 +861,10 @@ body { font-size: var(--text-base); line-height: 1.5; }
 /* The same way in, under a field's facts when the field is on a host star. */
 .field-planets {
   justify-self: start; display: inline-flex; align-items: center; min-block-size: 36px;
-  padding-inline: var(--space-md); border-radius: var(--radius-round);
-  font-size: var(--text-sm); font-weight: 600; white-space: nowrap; color: var(--color-ink);
+  /* The longer offer (no known planets, search the light curve) wraps
+     inside the panel instead of running out of it. */
+  max-inline-size: 100%; padding: var(--space-3xs) var(--space-md); border-radius: var(--radius-lg);
+  font-size: var(--text-sm); font-weight: 600; line-height: 1.35; text-wrap: balance; color: var(--color-ink);
   box-shadow: inset 0 0 0 1px var(--color-rule-strong);
 }
 .field-planets[hidden] { display: none; }
@@ -1119,7 +1148,8 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .mark__link[data-tone="wait"], .mark__link[data-tone="quiet"] { color: var(--color-neutral); }
 .mark__link-acts { display: flex; flex-wrap: wrap; gap: var(--space-2xs) var(--space-xs); }
 /* A mark's actions stack in its column: each its own row, never touching the next. */
-.mark > .spectrum { margin-block-start: var(--space-sm); }
+.mark > .spectrum, .mark > .mark__more { margin-block-start: var(--space-sm); }
+.mark__more[open] > .spectrum { margin-block-start: var(--space-2xs); }
 .mark__body > .mark__csv + .mark__csv { margin-block-start: var(--space-2xs); }
 .mark__link-acts > .mark__csv[aria-pressed="false"] { color: var(--color-neutral); }
 
@@ -1444,8 +1474,8 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .mark__kill { grid-column: 3; grid-row: 1; align-self: start; margin-block-start: -6px; display: grid; place-items: center; }
 .mark__kill svg { inline-size: 16px; block-size: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
 .mark__body { display: contents; }
-.mark__body > *, .mark > .spectrum { grid-column: 2 / -1; }
-.mark[data-open="false"] > .mark__body, .mark[data-open="false"] > .spectrum { display: none; }
+.mark__body > *, .mark > .spectrum, .mark > .mark__more { grid-column: 2 / -1; }
+.mark[data-open="false"] > .mark__body, .mark[data-open="false"] > .spectrum, .mark[data-open="false"] > .mark__more { display: none; }
 /* Figures in a line keep together; the one the verdict rests on is in ink. */
 .facts-bit { white-space: nowrap; }
 .facts-bit--key { color: var(--color-ink); font-weight: 600; }
@@ -1458,6 +1488,49 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .mark__group .mark__who { color: var(--color-ink); font-size: var(--text-sm); line-height: 1.5; }
 .mark__group .mark__detail, .mark__group .mark__id { color: var(--color-muted); font-size: var(--text-sm); line-height: 1.5; }
 .mark__group .mark__phot, .mark__group .mark__pos { font-size: var(--text-sm); }
+.mark__group .body__line { margin: 0; color: var(--color-ink); font-size: var(--text-sm); line-height: 1.5; }
+.mark__group .body__line--dim { color: var(--color-muted); }
+.mark__group .body__figures { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-neutral); }
+/* The orbit from above: the Sun, the planets for scale, the body and the Earth where they are today. */
+.body__sketch { margin: var(--space-2xs) 0 0; display: grid; gap: var(--space-3xs); }
+.body-sketch { inline-size: min(100%, 220px); block-size: auto; aspect-ratio: 1; overflow: visible; }
+.body-sketch__ref { fill: none; stroke: var(--color-rule-strong); stroke-width: 0.8; stroke-dasharray: 2 3; }
+.body-sketch__orbit { fill: none; stroke: var(--color-accent); stroke-width: 1.4; }
+.body-sketch__near { fill: none; stroke: var(--color-accent); stroke-opacity: 0.32; stroke-width: 0.7; }
+.body-sketch__sun { fill: var(--color-ink); }
+.body-sketch__earth { fill: var(--color-neutral); }
+.body-sketch__now { fill: var(--color-accent); stroke: var(--color-paper); stroke-width: 1.2; }
+.body-sketch__visit { fill: var(--color-accent); fill-opacity: 0.45; }
+.body-sketch__visit--shown { fill-opacity: 1; stroke: var(--color-paper); stroke-width: 0.8; }
+.body__time { display: grid; grid-template-columns: 1fr; gap: 2px; inline-size: min(100%, 220px); margin-block-start: var(--space-3xs); }
+.body__time input { inline-size: 100%; accent-color: var(--color-accent); }
+.body__time-read { font-size: var(--text-2xs); color: var(--color-neutral); font-family: var(--font-mono); }
+/* In the drawing's own units: 10 of its 200 across is 11 px at the width it is shown. */
+.body-sketch__label { fill: var(--color-neutral); font-family: var(--font-mono); font-size: 10px; text-anchor: middle; }
+/* On a phone the orbit's drawing and its neighbours, and the spectrum, fold under a line each. */
+.body__more > summary, .mark__more > summary {
+  display: flex; align-items: center; gap: var(--space-2xs); min-block-size: 44px;
+  font-size: var(--text-sm); color: var(--color-accent); cursor: pointer; list-style: none;
+}
+.body__more > summary::-webkit-details-marker, .mark__more > summary::-webkit-details-marker { display: none; }
+.body__more > summary::after, .mark__more > summary::after { content: "+"; font-family: var(--font-mono); color: var(--color-neutral); }
+.body__more[open] > summary::after, .mark__more[open] > summary::after { content: "−"; }
+.body__more[open] { display: grid; gap: var(--space-2xs); }
+.body__sketch figcaption { font-size: var(--text-xs); line-height: 1.45; color: var(--color-muted); max-inline-size: 36ch; }
+.body__near { margin: 0; padding: 0; list-style: none; display: grid; gap: 1px; font-size: var(--text-xs); color: var(--color-ink); }
+.body__near li { display: flex; justify-content: space-between; gap: var(--space-xs); }
+.body__near-d { font-family: var(--font-mono); color: var(--color-neutral); white-space: nowrap; }
+.body__space {
+  justify-self: start; margin-block-start: var(--space-2xs);
+  display: inline-flex; align-items: center; gap: var(--space-2xs);
+  min-block-size: var(--hit); padding-inline: var(--space-sm);
+  font: inherit; font-size: var(--text-sm); color: var(--color-ink);
+  background: var(--color-paper-3); border: 0; border-radius: var(--radius-round); cursor: pointer;
+  transition: background-color var(--dur-short) var(--ease-out);
+}
+.body__space::before { content: ""; inline-size: 5px; block-size: 5px; background: var(--color-accent); border-radius: var(--radius-round); }
+.body__space:hover { background: var(--color-accent-wash); }
+.body__space:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 1px; }
 /* The verdict's sentence: its subtitle, in the ink of an answer. */
 .mark__lead { margin-block-start: var(--space-xs); color: var(--color-ink); font-size: var(--text-sm); line-height: 1.5; }
 .mark__lead + .mark__lead { margin-block-start: var(--space-3xs); }
@@ -1600,6 +1673,12 @@ body { font-size: var(--text-base); line-height: 1.5; }
 @media (max-width: 22.5rem) {
   .mount > .deck .segment { font-size: var(--text-2xs); }
 }
+/* Six modes since "In depth" came: on a phone one track cut the last of
+   them off at the edge. Two rows of three, each word whole. */
+@media (max-width: 40rem) {
+  .mount > .deck .segments { flex-wrap: wrap; border-radius: var(--radius-lg); }
+  .mount > .deck .segment { flex: 1 1 calc(33.333% - 2px); }
+}
 
 /* In View on a phone a choice that wraps onto its own row still reads as a
    choice: the options not taken keep a thin outline, so "one for all frames"
@@ -1679,6 +1758,8 @@ body { font-size: var(--text-base); line-height: 1.5; }
 
 /* Phone-only pieces of the sky's chrome; a wide screen lays out as before. */
 .gate .gate__theme, .gate .gate__foot { display: none; }
+/* Off the phone the foot links are not shown; their line takes no room. */
+.gate__feet { display: contents; }
 .gate__jump-row { display: contents; }
 
 /*
@@ -1718,7 +1799,7 @@ body { font-size: var(--text-base); line-height: 1.5; }
     inset-inline-start: calc(var(--dock-pad) + env(safe-area-inset-left, 0px));
     block-size: 3.5rem; align-items: center;
   }
-  .gate__word { font-size: 1.375rem; letter-spacing: -0.01em; text-shadow: none; }
+  .gate__word, .gate__poster .gate__word { font-size: 1.375rem; letter-spacing: -0.01em; text-shadow: none; }
   .gate__acts {
     inset-block-start: env(safe-area-inset-top, 0px);
     inset-inline-end: calc(var(--space-xs) + env(safe-area-inset-right, 0px));
@@ -1739,7 +1820,7 @@ body { font-size: var(--text-base); line-height: 1.5; }
     background: var(--dock-bg); border-block-start: 1px solid var(--dock-rule);
     color: var(--color-ink);
   }
-  .gate__tag {
+  .gate__tag, .gate__poster .gate__tag {
     font-size: var(--text-sm); line-height: 1.35; padding: 0; text-shadow: none;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
@@ -1761,14 +1842,17 @@ body { font-size: var(--text-base); line-height: 1.5; }
     mask-image: linear-gradient(to right, transparent 0, #000 var(--fade-s), #000 calc(100% - var(--fade-e)), transparent 100%);
   }
   .gate__jump-row::-webkit-scrollbar { display: none; }
-  .gate__jump-row[data-more~="start"] { --fade-s: 2rem; }
-  .gate__jump-row[data-more~="end"] { --fade-e: 2.5rem; }
+  /* Wide enough to be seen as a fade, not as a name cut at the edge: the row goes on. */
+  .gate__jump-row[data-more~="start"] { --fade-s: 3rem; }
+  .gate__jump-row[data-more~="end"] { --fade-e: 5rem; }
   .gate__jump-go {
     flex: none; scroll-snap-align: start;
     min-block-size: 44px; padding: 0 var(--space-md);
     display: inline-flex; align-items: center;
     font-size: var(--text-sm); white-space: nowrap; text-shadow: none;
   }
+  /* The talk and the whole sky share one line at the foot, not a row each. */
+  .gate .gate__feet { display: flex; flex-wrap: wrap; gap: 0 var(--space-xs); margin: 0; }
   .gate .gate__foot {
     display: inline-flex; justify-self: start;
     margin-inline-start: calc(-1 * var(--space-sm));
@@ -1893,4 +1977,117 @@ body { font-size: var(--text-base); line-height: 1.5; }
     --gate-chip-over: oklch(89% 0.016 285);
     color: var(--color-ink);
   }
+}
+
+/* The whole sky and the flight, opened over the front page: one place at
+   other scales. It fades in over the sky it came from. */
+.world {
+  position: fixed; inset: 0; z-index: var(--z-modal);
+  background: var(--color-well);
+  opacity: 0; transition: opacity 600ms var(--ease-in-out);
+}
+.world[hidden] { display: none; }
+.world--on { opacity: 1; }
+.world__frame { inline-size: 100%; block-size: 100%; border: 0; display: block; }
+
+/* One control for the scale you are at — the sky, the whole sky in
+   SPHEREx, space — the same in each, on the sky itself. */
+.scale {
+  position: absolute; z-index: 6;
+  inset-inline: 0; margin-inline: auto; inline-size: fit-content;
+  inset-block-start: calc(var(--gate-bar, 3.5rem) + 0.75rem);
+  display: flex; gap: var(--space-3xs); padding: var(--space-3xs);
+  border-radius: var(--radius-round);
+  background: var(--gate-veil-deep);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.scale__key {
+  min-block-size: var(--hit); padding-inline: var(--space-md);
+  border: 0; border-radius: var(--radius-round); cursor: pointer;
+  color: var(--color-muted); background: transparent;
+  font: inherit; font-size: var(--text-sm); font-weight: 600; white-space: nowrap;
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-micro) var(--ease-out);
+}
+.scale__key:hover { color: var(--color-ink); background: var(--color-paper-3); }
+.scale__key[aria-pressed="true"] { color: var(--color-accent-ink); background: var(--color-accent); cursor: default; }
+@media (max-width: 640px) { .scale__key { padding-inline: var(--space-sm); font-size: var(--text-xs); } }
+
+/*
+ * The way into space and the way back: one pill on one spot. The front page
+ * puts "Explore in 3D" here and the flight, opened over it full-screen, puts
+ * "Back to the sky" on the same spot, so the two read as one control that
+ * changes its word. Both pages read this rule, and the spot is worked out
+ * from the window alone, which the two share.
+ */
+.way-3d {
+  --way-top: calc(clamp(0.875rem, 1.5vw, 1.5rem) + env(safe-area-inset-top, 0px));
+  position: fixed; z-index: 6;
+  inset-block-start: var(--way-top); inset-inline-start: 50%; translate: -50% 0;
+  display: inline-flex; align-items: center; gap: var(--space-xs);
+  min-block-size: 2.5rem; padding-inline: var(--space-md) var(--space-lg);
+  border: 0; border-radius: var(--radius-round); cursor: pointer;
+  font: inherit; font-size: var(--text-sm); font-weight: 600; line-height: 1; white-space: nowrap;
+  color: var(--color-ink);
+  background: var(--gate-veil-deep);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-micro) var(--ease-out), opacity var(--dur-short) var(--ease-out);
+}
+.way-3d[hidden] { display: none; }
+.way-3d svg { inline-size: 1.125rem; block-size: 1.125rem; fill: none; stroke: var(--color-accent); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.way-3d:hover { background: var(--color-accent); color: var(--color-accent-ink); }
+.way-3d:hover svg { stroke: currentColor; }
+.way-3d:active { scale: 0.97; }
+.way-3d:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 3px; }
+/* Under the links on a screen too narrow for both on one row. */
+@media (max-width: 64rem) {
+  .way-3d { --way-top: calc(clamp(0.875rem, 1.5vw, 1.5rem) + env(safe-area-inset-top, 0px) + 2.75rem); }
+}
+/* On a phone, at the top of the sky, under the bar. */
+@media (max-width: 48rem) and (min-height: 30.0625rem) {
+  .way-3d { --way-top: calc(3.5rem + env(safe-area-inset-top, 0px) + var(--space-sm)); }
+}
+/* Held sideways, over the middle of the sky, beside the panel. */
+@media (max-height: 30rem) and (orientation: landscape) and (pointer: coarse) {
+  .way-3d {
+    --way-top: calc(3.25rem + env(safe-area-inset-top, 0px) + var(--space-xs));
+    inset-inline-start: calc(min(21rem, 44vw) + (100% - min(21rem, 44vw)) / 2);
+  }
+}
+.gate[data-entering="true"] :is(.way-3d, .gate__grid) { opacity: 0; pointer-events: none; }
+
+/* The grid's switch: small and quiet, in the corner the links leave free. */
+.gate__grid {
+  position: absolute; z-index: 3;
+  inset-block-start: calc(var(--gutter) + env(safe-area-inset-top, 0px));
+  inset-inline-start: calc(var(--gutter) + env(safe-area-inset-left, 0px));
+  display: inline-flex; align-items: center; gap: var(--space-2xs);
+  min-block-size: var(--hit); padding-inline: var(--space-sm);
+  border: 0; border-radius: var(--radius-round); cursor: pointer;
+  font: inherit; font-size: var(--text-xs); line-height: 1; white-space: nowrap;
+  color: var(--color-muted); background: var(--gate-veil);
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-micro) var(--ease-out);
+}
+.gate__grid svg { inline-size: 0.875rem; block-size: 0.875rem; fill: none; stroke: currentColor; stroke-width: 1.3; }
+.gate__grid:hover { color: var(--color-ink); background: var(--gate-chip); }
+.gate__grid[aria-pressed="true"] { color: var(--color-accent); box-shadow: inset 0 0 0 1px var(--color-accent); }
+.gate__grid:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+/* On a phone the bar has the top corners: the switch sits at the foot of the sky, right. */
+@media (max-width: 48rem) and (min-height: 30.0625rem) {
+  .gate__grid {
+    inset-block-start: auto; inset-inline-start: auto;
+    inset-block-end: calc(var(--gate-dock, 12rem) + var(--space-sm));
+    inset-inline-end: calc(var(--space-sm) + env(safe-area-inset-right, 0px));
+  }
+  /* The name of what a finger is on steps under the pill at the top of the sky. */
+  .gate__pin, .gate__pin[data-flip="true"] { inset-block-start: calc(var(--gate-bar) + var(--space-sm) + 3rem); }
+}
+@media (max-height: 30rem) and (orientation: landscape) and (pointer: coarse) {
+  .gate__grid { inset-block-start: auto; inset-inline-start: auto; inset-block-end: var(--space-sm); inset-inline-end: var(--space-sm); }
+}
+
+/* The note under "How to read this" is gone from the opening sky: the ring
+   alone says the sheet has not been opened yet. */
+@media (min-width: 721px) {
+  .gate .link[data-cue]::after { display: none; }
 }

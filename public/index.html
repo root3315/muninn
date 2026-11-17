@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Muninn — SPHEREx time-domain viewer</title>
-<meta name="description" content="Muninn stacks NASA SPHEREx all-sky visits on one patch of sky and shows what moved between them.">
+<meta name="description" content="Muninn aligns every NASA SPHEREx visit to one field of sky and shows what moved between them.">
 <meta name="color-scheme" content="dark light">
 <meta name="theme-color" content="#171721">
 <!-- The link preview (Telegram, Slack, X). Real frames: (152) Atala on one
@@ -22,18 +22,27 @@
 <script src="js/theme-boot.js"></script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23171721'/%3E%3Ccircle cx='11' cy='13' r='2.5' fill='%23e6f0f7'/%3E%3Ccircle cx='21' cy='19' r='2.5' fill='%23b9a5f5'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com" crossorigin>
-<!-- Which fields ship with their frame lists: the first question a link to a
-     field asks, so it is on its way while the page is still being read. -->
-<link rel="preload" href="data/fields/index.json" as="fetch" crossorigin>
+<link rel="preload" href="img/opening.jpg" as="image" fetchpriority="high">
 <link rel="stylesheet" href="css/fonts.css">
 <!-- Every module, named up front: found one import at a time they arrive
      three round trips deep. -->
 <link rel="modulepreload" href="js/app.js">
 <link rel="modulepreload" href="js/catalog.js">
+<link rel="modulepreload" href="js/datafiles.js">
+<link rel="modulepreload" href="js/datanames.js">
 <link rel="modulepreload" href="js/depth.js">
 <link rel="modulepreload" href="js/markfacts.js">
 <link rel="modulepreload" href="js/ephemeris.js">
 <link rel="modulepreload" href="js/fits.js">
+<link rel="modulepreload" href="js/gate-band.js">
+<link rel="modulepreload" href="js/gate-sky.js">
+<link rel="modulepreload" href="js/world.js">
+<link rel="modulepreload" href="js/allsky/view.js">
+<link rel="modulepreload" href="js/allsky/fills.js">
+<link rel="modulepreload" href="js/starcolour.js">
+<link rel="modulepreload" href="js/allsky/healpix.js">
+<link rel="modulepreload" href="js/allsky/hips.js">
+<link rel="modulepreload" href="js/allsky/maps.js">
 <link rel="modulepreload" href="js/gate.js">
 <link rel="modulepreload" href="js/hunt.js">
 <link rel="modulepreload" href="js/huntcore.js">
@@ -44,6 +53,7 @@
 <link rel="modulepreload" href="js/render.js">
 <link rel="modulepreload" href="js/sectors.js">
 <link rel="modulepreload" href="js/sky.js">
+<link rel="modulepreload" href="js/motion-vector.js">
 <link rel="modulepreload" href="js/stack.js">
 <link rel="modulepreload" href="js/stamp.js">
 <link rel="modulepreload" href="js/ranges.js">
@@ -89,13 +99,29 @@
   Every point is a catalogued star at its own position, sized by its own
   magnitude and tinted by its own colour index, down to the naked-eye limit.
   Move the pointer and the sky names itself; press, and the view falls through
-  that position into SPHEREx's frames of it. The soft band behind is the Milky
-  Way, computed from galactic coordinates — a model of the disc, said so in the
-  fine print, because it is the one thing here that is not a measurement.
+  that position into SPHEREx's frames of it. The band behind is the Milky Way
+  as SPHEREx surveyed it, in false colour; a model of the disc stands in for
+  it for the moment it takes to arrive, and the fine print says which is up.
 -->
 <section class="gate" id="gate" aria-label="The sky" data-i18n-label="aria.gate">
+  <!-- The opening view as one picture (the real survey, 70 KB): on screen before any script has run. -->
+  <div class="gate__sky gate__band gate__intro" aria-hidden="true"></div>
   <canvas class="gate__sky" id="gate-sky" aria-hidden="true"></canvas>
   <div class="gate__vignette" aria-hidden="true"></div>
+
+  <!-- The way out into space, from where the sky faces. The flight puts its
+       way back on the same spot, so the two read as one control. The keys
+       (W A S D, the arrows) and a pinch out past the widest still do it. -->
+  <button type="button" class="way-3d" id="gate-3d" data-i18n-title="gate.explore3dWhen">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2.6"/><ellipse cx="12" cy="12" rx="9.5" ry="4.2" transform="rotate(-24 12 12)"/></svg>
+    <span data-i18n="gate.explore3d"></span>
+  </button>
+  <!-- The sky's HEALPix cells, the tiles the all-sky cube is served in:
+       faint lines that never take a press from a star or a target. -->
+  <button type="button" class="gate__grid" id="gate-grid" aria-pressed="false" data-i18n-title="gate.gridWhen">
+    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 2.5h11v11h-11zM8 2.5v11M2.5 8h11"/></svg>
+    <span data-i18n="gate.grid"></span>
+  </button>
 
   <!-- The type sits in one corner and everything else is sky. Anything put
        over a picture is a thing standing in front of it, so there is as little
@@ -140,7 +166,9 @@
          sky opens facing the galactic centre and none of them is in view. -->
     <p class="gate__jump" id="gate-jump" hidden></p>
     <!-- On a phone the talk leaves the bar for the foot of the panel. -->
-    <a class="link gate__foot" href="talk.html" data-i18n="gate.talk"></a>
+    <p class="gate__feet">
+      <a class="link gate__foot" href="talk.html" data-i18n="gate.talk"></a>
+    </p>
 
   </div>
 
@@ -159,6 +187,8 @@
       <img id="gate-card-img" alt="" width="280" height="280" decoding="async">
       <!-- Where no frame is stored, one is read from the archive on the spot. -->
       <canvas id="gate-card-live" width="280" height="280" hidden></canvas>
+      <!-- Until the archive answers, or where it cannot: the all-sky cube at that point. -->
+      <canvas id="gate-card-cube" hidden></canvas>
       <figcaption class="gate-card__tag num" id="gate-card-tag"></figcaption>
     </figure>
     <div class="gate-card__body">
@@ -372,6 +402,7 @@
         <label class="pill"><input type="checkbox" id="ov-skybot" checked><span data-i18n="overlay.skybot"></span></label>
         <label class="pill"><input type="checkbox" id="ov-marks" checked><span data-i18n="overlay.marks"></span></label>
         <label class="pill"><input type="checkbox" id="ov-sectors"><span data-i18n="overlay.sectors"></span></label>
+        <label class="pill"><input type="checkbox" id="ov-motion" checked><span data-i18n="overlay.motion"></span></label>
       </div>
 
       <!-- Where other missions' catalogues put their sources, over the plate. -->
@@ -410,6 +441,8 @@
          picture, and the picture is the one thing on this page that needs it. -->
     <section class="verdict" aria-label="This field" data-i18n-label="aria.field">
       <h2 class="verdict__line" id="verdict" aria-live="polite"></h2>
+      <!-- A challenge target's own case under a short headline: why its motion can or cannot be seen. -->
+      <p class="verdict__sub" id="verdict-sub" hidden></p>
       <dl class="facts" id="stat-line"></dl>
       <!-- A field on a star with known planets: its system, one press away. -->
       <a class="link field-planets" id="field-planets" rel="noopener" hidden></a>
@@ -518,6 +551,7 @@
         <label class="segment" data-i18n-title="mode.diffWhen"><input type="radio" name="mode" value="difference"><span data-i18n="mode.diff"></span></label>
         <label class="segment" data-i18n-title="mode.singleWhen"><input type="radio" name="mode" value="single"><span data-i18n="mode.single"></span></label>
         <label class="segment" data-i18n-title="mode.stackWhen"><input type="radio" name="mode" value="stack"><span data-i18n="mode.stack"></span></label>
+        <label class="segment" data-i18n-title="mode.depthWhen"><input type="radio" name="mode" value="depth"><span data-i18n="mode.depth"></span></label>
       </fieldset>
     </div>
 

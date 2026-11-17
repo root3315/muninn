@@ -13,10 +13,12 @@
  * the mission was built around is something you should be able to see.
  */
 
+import { openWorld, wireWorld, preloadWorld } from './world.js';
 import { t, tIn, setLanguage, getLanguage, applyTranslations, fmt, fmtDate, fmtDay, fmtTime } from './i18n.js';
 import { skySigma, stackDepth, shortfall, limitAB, PLANET_NINE_V } from './depth.js';
 import { scoreSectors, standouts, SECTOR_COUNT } from './sectors.js';
 import { Gate, loadStars } from './gate.js';
+import { createCubeCutout } from './gate-sky.js';
 import { drawStrip } from './strip.js';
 import { themeTransition } from './twilight.js';
 import { planetsNow } from './ephemeris.js';
@@ -30,7 +32,9 @@ import { toast, watchNetwork, onUnplannedFailure, reloadForCode } from './safety
 import { paint, rampFromToken, sortedFinite, limitsFromSorted } from './render.js';
 import { seasonChunks, chunkAt, forStack, averaged } from './stack.js';
 import { TangentGrid, separation, deltaRA } from './wcs.js';
-import { loadStamp, loadWavelength } from './stamp.js';
+import { loadStamp, loadWavelength, knowFile } from './stamp.js';
+import { bakedOrLive, cardsOf } from './fieldstore.js';
+import { fetchData, FIELD_LIST, BAKED_FIELDS } from './datafiles.js';
 import { motionOf, visitPool, chooseMeasured, visitPoint, placeInBand, channelOverlap } from './spectrum.js';
 import { spectrumBlock } from './spectrum-view.js';
 import { trackCSV } from './export.js';
@@ -38,26 +42,28 @@ import { SkyView, shortName } from './sky.js';
 import {
   measureLink, planLink, markCall, skybotVerdict as skybotVerdictOf, skybotLine as skybotLineOf, skybotTone, seenAt,
   matchArcsec, identifyMark as identifyMarkOf, tagOf, STILL, whoWords, verdict, sharpWords,
-  saturatedMotion as saturatedMotionOf, linkArc, linkWords, pct, predictedWords, peaksOf, brightnessWords,
+  saturatedMotion as saturatedMotionOf, saturatedShift, linkArc, linkWords, pct, predictedWords, peaksOf, brightnessWords,
   brightNeighbourWords,
 } from './marks.js';
 import { brightStars } from './brightstars.js';
 import { loadWise, WISE_BANDS } from './wise.js';
-import { planetHostNear, systemUrl } from './exovision.js';
+import { planetHostNear, systemUrl, detectorUrl } from './exovision.js';
 import { drawGaiaSky, psfFor } from './gaiasky.js';
 import { fieldArchives, cadcSearchUrl } from './archives.js';
 import { markFacts } from './markfacts.js';
+import { bodyNodes, foldOnPhone } from './bodycard.js';
 import {
-  searchFrames, searchAhead, askMissingFrames, NoRelayError, UpstreamError, groupVisits, findHeldVisit, bandsPresent, bandRange, parseCoordinates,
+  searchFrames, searchAhead, askMissingFrames, askLiveFrames, NoRelayError, UpstreamError, groupVisits, findHeldVisit, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, fieldObjects, toS3, surveySources,
 } from './catalog.js';
-import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP } from './overlay.js';
+import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP, propagate, epochOfMjd } from './overlay.js';
 import { spread, nextVisits, mergeFrames, mergeVisits, VISITS_PER_BATCH } from './visits.js';
 import { encodeHash, decodeHash, FOV_CHOICES } from './hash.js';
 import { buildIndex, suggest } from './suggest.js';
 import { attachSuggest } from './suggest-box.js';
 import { initRead, relabelCue } from './read.js';
 import { startTour, maybeStartTour, relabelTour, tourKnowsLoading } from './tour.js';
+import { DEEP_GAPS, CORE_STAR_COUNT } from './allsky/fills.js';
 
 /* The catalogue's stars bright enough to saturate (brightstars.js): read once, after the page is up. */
 let brightList = [];
@@ -117,6 +123,12 @@ const state = {
   /** What B of the wipe shows instead of a visit: AllWISE band 1 or 2, 'gaia' (the model), or null. */
   reference: null,
   skyLayers: { stars: false, deep: false },
+  /**
+   * A ready-made field's kept pixels (fieldstore.js), when this field has
+   * them: { key, band, date, check }, where `check` is what the archive said
+   * when asked whether anything has changed since.
+   */
+  bake: null,
 };
 
 let sky;
@@ -232,9 +244,66 @@ function workersBroken() {
   for (const waiter of stampWorkers.waiting.splice(0)) waiter.give(null);
 }
 
+/*
+ * Visits already on a grid are kept, so a field opened again (back from the
+ * sky, another band and back, the browser's Back) is drawn from memory with
+ * nothing read at all. Kept by the bytes they hold, the least recently used
+ * let go first; less on a phone. A stamp is never changed once made, so the
+ * one kept and the one on screen can be the same object.
+ */
+const STAMP_BUDGET = matchMedia('(pointer: coarse)').matches || (navigator.deviceMemory ?? 8) <= 4 ? 60e6 : 150e6;
+const keptStamps = new Map();
+let keptStampBytes = 0;
+
+const stampBytes = (s) => (s ? s.data.byteLength + s.quality.byteLength + (s.detector?.data?.byteLength ?? 0) : 0);
+const stampKey = (url, g) => `${url} ${g.ra} ${g.dec} ${g.fovDeg} ${g.width} ${g.height}`;
+
+function keepStamp(key, stamp) {
+  if (keptStamps.has(key)) keptStampBytes -= stampBytes(keptStamps.get(key));
+  keptStamps.delete(key);
+  keptStamps.set(key, stamp);
+  keptStampBytes += stampBytes(stamp);
+  for (const [k, s] of keptStamps) {
+    if (keptStampBytes <= STAMP_BUDGET) break;
+    keptStamps.delete(k);
+    keptStampBytes -= stampBytes(s);
+  }
+}
+
 async function readStamp(url, grid, { signal, onHeader } = {}) {
+  const key = stampKey(url, grid);
+  if (keptStamps.has(key)) {
+    const kept = keptStamps.get(key);
+    keepStamp(key, kept);
+    onHeader?.();
+    return kept;
+  }
+  const stamp = await readStampNow(url, grid, { signal, onHeader });
+  keepStamp(key, stamp);
+  return stamp;
+}
+
+/** A ready-made field's visit as the worker takes it: where its file is and how to read it. */
+const bakedPart = (b) => ({
+  href: b.href, bytes: b.bytes, nx: b.nx, ny: b.ny, rowFrom: b.rowFrom, rows: b.rows, colFrom: b.colFrom, cols: b.cols,
+  offset: b.offset, scale: b.scale, flags: b.flags, maskedPerRow: b.maskedPerRow, cards: b.cards,
+});
+
+/**
+ * Whether a grid lies inside the one a field was baked for: the same scale,
+ * no larger. Another size of field is read from the archive straight away,
+ * not after fetching a kept file that cannot cover it.
+ */
+const bakeFits = (baked, g) => Boolean(baked?.grid) && Math.abs(g.scale / (baked.grid.fovDeg / baked.grid.width) - 1) < 1e-9
+  && g.width <= baked.grid.width && g.height <= baked.grid.height;
+
+async function readStampNow(url, grid, { signal, onHeader } = {}) {
+  const found = bakes.byUrl.get(url);
+  const baked = bakeFits(found, grid) ? found : null;
+  // A frame the bake found off the field is off it now too: same file, same pixels.
+  if (baked?.none) { onHeader?.(); return null; }
   const worker = await takeWorker(signal);
-  if (!worker) return loadStamp(url, grid, { signal, onHeader });
+  if (!worker) return baked ? bakedOrLive(baked, url, grid, { signal, onHeader }) : loadStamp(url, grid, { signal, onHeader });
   const id = ++stampWorkers.seq;
   return new Promise((resolve, reject) => {
     let silence = 0;
@@ -273,7 +342,7 @@ async function readStamp(url, grid, { signal, onHeader } = {}) {
       console.warn('[muninn] a frame worker stopped; starting another', e.message ?? '');
       if (stampWorkers.restarts > WORKER_RESTARTS) workersBroken();
       if (signal?.aborted) { reject(new DOMException('The read was cancelled', 'AbortError')); return; }
-      readStamp(url, grid, { signal, onHeader }).then(resolve, reject);
+      readStampNow(url, grid, { signal, onHeader }).then(resolve, reject);
     };
     // Silent past every deadline its reads have: let go of it and of this
     // read, which is counted as not read and asked for again later.
@@ -296,10 +365,141 @@ async function readStamp(url, grid, { signal, onHeader } = {}) {
     signal?.addEventListener('abort', onAbort, { once: true });
     listen();
     worker.postMessage({
-      id, url, header: Boolean(onHeader),
+      id, url, header: Boolean(onHeader), baked: baked ? bakedPart(baked) : null,
       grid: { ra: grid.ra, dec: grid.dec, fovDeg: grid.fovDeg, width: grid.width, height: grid.height },
     });
   });
+}
+
+/* -------------------------------------------------------- ready-made fields */
+
+/**
+ * The preset fields' kept pixels (fieldstore.js, tools/bake-fields.mjs): which
+ * fields and bands have them, each band's manifest asked for once, and every
+ * visit in them by the file it stands for. A visit found here is put on the
+ * grid from its kept file, a few hundred kilobytes from this site, in place
+ * of a few reads of a 70 MB file at the archive; the stamp it gives is the
+ * same, so nothing after the read knows the difference.
+ */
+const bakes = { manifests: new Map(), byUrl: new Map() };
+
+/**
+ * The manifest of the ready-made field at this spot in this band, its visits
+ * filed by file; null where none was baked. Found by position, as the frame
+ * lists are (catalog.js), so a link opened before the presets are read finds it.
+ */
+async function loadBake(ra, dec, band) {
+  const cos = Math.cos((dec * Math.PI) / 180);
+  const [key, field] = Object.entries(BAKED_FIELDS)
+    .find(([, f]) => Math.hypot(deltaRA(f.ra, ra) * cos, f.dec - dec) < 0.01) ?? [];
+  if (!field?.bands?.[band]) return null;
+  const at = `${key}/${band}`;
+  if (!bakes.manifests.has(at)) {
+    const asked = fetchData(`data/fields/${at}/manifest.json`, { signal: deadline(null, CATALOG_DEADLINE_MS) })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((manifest) => {
+        if (!Array.isArray(manifest?.visits)) return null;
+        for (const e of manifest.visits) fileBaked(e, at, manifest.grid);
+        return manifest;
+      })
+      .catch(() => null);
+    bakes.manifests.set(at, asked);
+    // A manifest that did not come is asked again next time, not given up on.
+    asked.then((m) => { if (!m) bakes.manifests.delete(at); });
+  }
+  return bakes.manifests.get(at);
+}
+
+/** One kept visit, filed by its file; its header and wavelength table are taken as read. */
+function fileBaked(entry, at, grid) {
+  const url = toS3(entry.url);
+  if (entry.none) { bakes.byUrl.set(url, { none: true, grid }); return; }
+  const href = new URL(`data/fields/${at}/${entry.file}`, document.baseURI).href;
+  bakes.byUrl.set(url, { ...entry, href, grid });
+  const table = entry.waveTable;
+  knowFile(url, {
+    cards: cardsOf(entry), dataStart: entry.dataStart, dataBytes: entry.dataBytes,
+    // A table the bake could not read is left to be read live, not taken as absent.
+    waveTable: table ? { ...table, values: Float32Array.from(table.values) } : undefined,
+  });
+}
+
+/** What the facts say about where the pixels came from, and whether the archive has moved on since. */
+function bakeWords(bake) {
+  const date = fmtDate(bake.date);
+  const c = bake.check;
+  if (!c) return t('bake.checking', { date });
+  if (c.failed) return t('bake.unchecked', { date });
+  if (!c.added && !c.changed) return t('bake.current', { date });
+  return t('bake.newer', { date, n: c.added + c.changed });
+}
+
+/**
+ * Ask the archive, past the bundled list, whether a ready-made field has
+ * moved on since it was baked. A visit it has now and the bake has not is
+ * added to the run and read live, as any other visit is; a visit it now
+ * gives under a newer file (a reprocessing) is read again from that file and
+ * takes the kept one's place. Never silent: the facts say what was found, or
+ * that the archive could not be asked. One answer is kept per field for a
+ * quarter of an hour, so going back and forth asks once.
+ */
+const bakeChecks = new Map();
+const BAKE_CHECK_KEPT_MS = 15 * 60_000;
+
+async function checkBake(gen, signal) {
+  const bake = state.bake;
+  const { ra, dec } = state;
+  const at = `${bake.key}/${bake.band}`;
+  let live = bakeChecks.get(at);
+  if (!live || Date.now() - live.at > BAKE_CHECK_KEPT_MS) {
+    try {
+      live = { at: Date.now(), ...(await askLiveFrames({ ra, dec }, { signal })) };
+      if (!live.partial) bakeChecks.set(at, live);
+    } catch {
+      if (gen !== fieldSeq) return;
+      bake.check = { failed: true };
+      renderFacts();
+      return;
+    }
+  }
+  if (gen !== fieldSeq) return;
+  const now = new Map(live.frames.map((f) => [`${f.obsId} ${f.band}`, f]));
+  const changed = state.allVisits.filter((v) => {
+    const fresh = now.get(`${v.obsId} ${v.band}`);
+    return fresh?.url && fresh.url !== v.url && bakes.byUrl.has(toS3(v.url));
+  });
+  const before = state.allVisits.length;
+  const want = state.allVisits[state.wantVisit];
+  const lead = state.allVisits[state.leadVisit];
+  state.frames = mergeFrames(state.frames ?? [], live.frames);
+  state.allVisits = mergeVisits(state.allVisits, groupVisits(state.frames, { ra, dec, band: state.band }));
+  // Both are places in the list, which the new visits may have moved.
+  if (want) state.wantVisit = state.allVisits.indexOf(want);
+  if (lead) state.leadVisit = state.allVisits.indexOf(lead);
+  bake.check = { added: state.allVisits.length - before, changed: changed.length, partial: Boolean(live.partial) };
+  populateBands();
+  renderFacts();
+  for (const v of changed) {
+    Object.assign(v, now.get(`${v.obsId} ${v.band}`), { offset: v.offset });
+    if (sky.visits.some((x) => x.frame === v)) readAgain(v, gen, signal);
+  }
+  if (bake.check.added && !state.filling && !state.loading) fillVisits(Math.max(state.visitGoal, fillCap()));
+  updateIdentity();
+  drawAxis();
+}
+
+/** A visit already on screen, read again from its newer file. */
+async function readAgain(frame, gen, signal) {
+  try {
+    const stamp = await readStamp(toS3(frame.url), sky.grid, { signal });
+    if (gen !== fieldSeq || !stamp) return;
+    sky.replaceVisit(frame, stamp);
+    const entry = state.visits.find((e) => e.frame === frame);
+    if (entry) entry.baked = false;
+    renderPlateLog();
+  } catch (err) {
+    if (!signal.aborted) console.warn('[muninn] newer file not read', frame.obsId, err?.message ?? err);
+  }
 }
 
 const fovLabel = (deg) => (deg >= 1 / 60 ? `${fmt(deg * 60, 1)}′` : `${fmt(deg * 3600, 0)}″`);
@@ -321,7 +521,7 @@ function hashNow() {
   const held = heldVisit();
   return encodeHash({
     ra: state.ra, dec: state.dec, fov: state.fov, band: state.band, lang: getLanguage(),
-    name: state.label, survey: state.survey, mode: sky?.mode ?? null,
+    name: state.label, survey: state.survey, mode: modeNow(),
     // A named object's motion, when the name came with one and is not a preset's.
     pm: state.target?.key == null && Number.isFinite(state.target?.pmRA) ? [state.target.pmRA, state.target.pmDE] : null,
     visit: state.wantVisit ?? held,
@@ -345,6 +545,9 @@ function writeHash() {
 }
 
 const readHash = () => decodeHash(location.hash);
+
+/** The mode as chosen: the depth view draws over a single visit, but a link names it as depth. */
+const modeNow = () => (inDepthChosen() ? 'depth' : sky?.mode ?? null);
 
 /**
  * The visit held on screen, as its place in the archive's own list of the
@@ -370,7 +573,7 @@ function renderPlateLog() {
   const show = !$('plate-state').hidden && state.visits.length > 0 && !sky?.visits.length;
   log.hidden = !show;
   if (!show) return;
-  log.replaceChildren(...state.visits.map(({ frame, status, bytes, final }) => {
+  log.replaceChildren(...state.visits.map(({ frame, status, bytes, final, baked }) => {
     const li = document.createElement('li');
     li.className = 'plate__log-row';
     li.dataset.status = status;
@@ -383,7 +586,7 @@ function renderPlateLog() {
     const what = document.createElement('span');
     what.className = 'plate__log-what';
     what.textContent = status === 'ready'
-      ? t('log.ready', { mb: fmt((bytes ?? 0) / 1048576, 1) })
+      ? (baked && state.bake ? t('log.baked', { date: fmtDate(state.bake.date) }) : t('log.ready', { mb: fmt((bytes ?? 0) / 1048576, 1) }))
       // A visit not read is skipped, not given up on: it is asked for again
       // once the rest are in, and says so until that has failed too.
       : status === 'failed' && !final ? t('log.retrying')
@@ -563,6 +766,8 @@ function renderFacts() {
   if (state.truncated) rows.push([t('facts.list'), t('facts.listCapped')]);
   // IRSA did not answer, and the list came from Muninn's own copy of its index.
   if (state.ownIndexDate) rows.push([t('facts.list'), t('facts.listOwnIndex', { date: fmtDate(state.ownIndexDate) })]);
+  // Pixels kept beside the page are said as such, with their date and what the archive has said since.
+  if (state.bake) rows.push([t('bake.pixels'), bakeWords(state.bake)]);
   // One collection of the archive did not answer: the run is short, and
   // "nothing moved" would be said about visits nobody was shown.
   if (state.partial && !state.loading) {
@@ -650,9 +855,9 @@ function bodiesLine() {
 /* ----------------------------------------------------------------- presets */
 
 async function loadPresets() {
-  for (const url of ['data/targets.json', 'api/targets']) {
+  for (const ask of [fetchData, fetch]) {
     try {
-      const res = await fetch(url, { signal: deadline(null, CATALOG_DEADLINE_MS) });
+      const res = await ask(ask === fetch ? 'api/targets' : 'data/targets.json', { signal: deadline(null, CATALOG_DEADLINE_MS) });
       if (!res.ok) continue;
       const body = await res.json();
       if (Array.isArray(body.targets) && body.targets.length) {
@@ -692,14 +897,11 @@ async function readyFieldsIndex() {
   const field = (key, ra, dec) => ({
     key, ra, dec, fov: 0.3, band: bands.get(key) ?? 'all', ...(CHALLENGE_FIELDS.has(key) ? { group: 'challenge' } : {}),
   });
-  try {
-    const res = await fetch('data/fields/index.json', { signal: deadline(null, CATALOG_DEADLINE_MS) });
-    const index = res.ok ? await res.json() : null;
-    if (Array.isArray(index) && index.length) {
-      return index.filter((f) => f.key && Number.isFinite(f.ra) && Number.isFinite(f.dec))
-        .map((f) => field(f.key, f.ra, f.dec));
-    }
-  } catch { /* the page's own list */ }
+  // The frame indexes' own list travels with the code (datanames.js).
+  if (FIELD_LIST.length) {
+    return FIELD_LIST.filter((f) => f.key && Number.isFinite(f.ra) && Number.isFinite(f.dec))
+      .map((f) => field(f.key, f.ra, f.dec));
+  }
   return READY_FIELDS.map(([key, ra, dec]) => field(key, ra, dec));
 }
 
@@ -1666,6 +1868,7 @@ function syncScrub() {
   fillSlots();
   // The stack's line carries the season's own numbers, which change with it.
   if (sky?.mode === 'stack') refreshStack();
+  inDepth?.update();
   writeHash();
 }
 
@@ -1843,10 +2046,14 @@ function startPlayback() {
  * code's own pauses (a theme change, a new field), which should leave the
  * choice alone.
  */
-function selectMode(mode) {
+function selectMode(mode, { asked = false } = {}) {
+  // The depth view holds one visit too: a step changes its plate, not the mode
+  // (unless a link going back asks for single by name).
+  if (mode === 'single' && inDepthChosen() && !asked) return;
+  const was = modeNow();
   const radio = document.querySelector(`input[name="mode"][value="${mode}"]`);
   if (radio && !radio.checked) radio.checked = true;
-  if (sky.mode !== mode) applyMode(mode);
+  if (was !== mode) applyMode(mode);
 }
 
 /** The user wants the visits to run. */
@@ -2083,7 +2290,9 @@ async function prefetchKnownObjects(signal) {
   // question needs a date and a place, and both are known from the index. Asked
   // while the frames are still being read, the answers are mostly in by the
   // time the pictures are.
-  const shown = sky.current?.frame;
+  // The visit on screen first, or before any is, the one the field will open on:
+  // Atala's own night named before the others, not after.
+  const shown = sky.current?.frame ?? state.allVisits[state.wantVisit ?? state.leadVisit];
   const pending = plannedVisits()
     .filter((v) => !sky.knownObjects.has(v.frame.obsId) && !skybot.asking.has(v.frame.obsId))
     .sort((a, b) => (b.frame === shown) - (a.frame === shown));
@@ -2167,6 +2376,7 @@ async function refreshKnownObjects() {
 /** An answer came in, or failed to: everything that quotes SkyBoT says so again. */
 function catalogChanged() {
   reportKnownObjects();
+  inDepth?.update();
   nameMarks();
   renderMarks();
   renderHunt();
@@ -2598,6 +2808,20 @@ function factsLine(bits, className) {
   return p;
 }
 
+/**
+ * The flight, from the Earth, facing a mark: where in space the thing is. An
+ * asteroid or comet goes with the orbit JPL gave its card, so the flight can
+ * draw it and fly to it; anything else goes as a direction and a name.
+ */
+function showInSpace(m) {
+  const k = m.orbitAsk?.state === 'done' ? m.orbitAsk.orbit : null;
+  const body = k && {
+    name: k.name, a: k.a, e: k.e, i: k.i, om: k.om, w: k.w, ma: k.ma, n: k.n, epoch: k.epoch, tp: k.tp, years: k.years,
+  };
+  const name = (k && (m.catalog?.name || k.name)) || tagOf(m) || null;
+  openWorld('fly', { ra: m.ra, dec: m.dec, mark: { name, body, near: body && m.nearAsk?.state === 'done' ? m.nearAsk.closest : [] } }, getLanguage());
+}
+
 function renderMarks() {
   const ul = $('marks');
   // A spectrum's button outlives the rebuild; so must the focus resting on it.
@@ -2749,7 +2973,18 @@ function renderMarks() {
     // The verdict's own sentence reads as its subtitle: a heading "Verdict"
     // over it only repeated the title.
     for (const node of verdictNodes) node.classList.add('mark__lead');
+    // What the thing is comes first among the groups: what goes round what is
+    // the question a mark answers before any of the evidence for it.
+    const bodyLines = bodyNodes(m, {
+      t, fmt, lang: getLanguage(),
+      live: () => sky.marks.includes(m),
+      onChange: renderMarks,
+      showInSpace,
+      visits: (sky.visits ?? []).map((v) => v.frame.mjd),
+      current: sky.current?.frame.mjd ?? null,
+    });
     body.append(...verdictNodes, ...[
+      group('mark.kBody', ...bodyLines),
       group('mark.kWho', ...whoNodes),
       group('mark.kLight', ...lightNodes),
       group('mark.kWhere', pos),
@@ -2814,7 +3049,11 @@ function renderMarks() {
       body.append(csv);
     }
     if (sky.visits.length) body.append(...linkLines(m));
-    if (sky.visits.length) li.append(spectrumBlock(m, () => readSpectrum(m)));
+    if (sky.visits.length) {
+      const spectrum = foldOnPhone(m, 'spectrumOpen', t('mark.moreSpectrum'), [spectrumBlock(m, () => readSpectrum(m))]);
+      if (spectrum[0].tagName === 'DETAILS') spectrum[0].className = 'mark__more';
+      li.append(...spectrum);
+    }
     ul.append(li);
   });
   if (held?.isConnected) held.focus({ preventScroll: true });
@@ -3140,6 +3379,27 @@ function fieldGrid(ra, dec) {
   return grid;
 }
 
+/**
+ * The grid a field was last drawn on, used again when the room has hardly
+ * changed: the plate's shape moves by a sample or two as the page settles,
+ * and a grid two samples wider is another grid, on which every visit kept
+ * in memory (keptStamps) would be read again.
+ */
+const lastGrids = new Map();
+
+function fieldGridAgain(ra, dec) {
+  const fresh = fieldGrid(ra, dec);
+  const key = `${ra} ${dec} ${state.fov}`;
+  const kept = lastGrids.get(key);
+  if (kept && kept.height === fresh.height && Math.abs(kept.width / fresh.width - 1) < 0.03) {
+    document.querySelector('.mount')?.style.setProperty('--aspect', String(kept.width / kept.height));
+    return kept;
+  }
+  lastGrids.set(key, fresh);
+  while (lastGrids.size > 64) lastGrids.delete(lastGrids.keys().next().value);
+  return fresh;
+}
+
 /** The preset centred on this spot, if one is. */
 function presetAt(ra, dec) {
   const cos = Math.cos((dec * Math.PI) / 180);
@@ -3287,11 +3547,15 @@ async function readOne(entry, grid, signal, { onHeader } = {}) {
     entry.status = 'ready';
     entry.landedAt = performance.now();
     entry.bytes = stamp.meta.bytesRead;
+    entry.baked = Boolean(stamp.baked);
     // A held visit is waited for: the plate stays on its loading note rather
     // than showing another night first and then jumping (it is uncovered at
     // the end of the batch regardless, if that visit cannot be read).
     const waiting = (state.wantVisit != null && state.allVisits[state.wantVisit] !== entry.frame) || leadPending(entry.frame);
     addVisitInPlace(entry.frame, stamp);
+    // On the page's own timeline (DevTools' Performance panel, or a script
+    // timing a field): each visit as it is drawn, against the field's start.
+    performance.mark('muninn:visit', { detail: { landed: sky.visits.length, of: state.allVisits.length, baked: entry.baked } });
     if (sky.visits.length === 1) waitForLead();
     if (!waiting && (sky.visits.length === 1 || state.wantVisit == null || sky.current?.frame === entry.frame)) {
       setPlateState('', { hidden: true });
@@ -3598,6 +3862,7 @@ function retryUnread() {
 }
 
 async function openField({ ra, dec, label = '', band = null, target, pm, marks = [], visit = null, held = null }) {
+  performance.mark('muninn:field');
   dropMarksUndo();
   fieldSeq += 1;
   const gen = fieldSeq;
@@ -3624,6 +3889,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.partial = false;
   state.missing = [];
   state.ownIndexDate = null;
+  state.bake = null;
   resetListRetry();
   // What the last field measured goes with it: the reading is now built up as
   // this field's visits land, and must not start from someone else's numbers.
@@ -3640,7 +3906,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
 
   // The field is cut to the room the plate has, and all of it is shown. See
   // fieldGrid for why its short side is the one the size control sets.
-  let grid = fieldGrid(ra, dec);
+  let grid = fieldGridAgain(ra, dec);
   sky.reset(grid);
   sky.target = state.target;
   placeMarks(marks);
@@ -3677,6 +3943,10 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   setPlateState(t('epochs.searching'), { progress: 0 });
   drawAxis();
   warmWorkers();
+
+  // A ready-made field's kept pixels are asked for beside its frame list.
+  const bakingBand = state.band;
+  let baking = loadBake(ra, dec, bakingBand);
 
   let frames;
   let truncated = false;
@@ -3729,12 +3999,20 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   if (wanted && !chosen.includes(wanted)) chosen.push(wanted);
   // Without one, a preset leads with the visit its card shows.
   if (!wanted) {
-    const lead = await presetLead(ra, dec, state.allVisits);
+    const { index: lead, hold } = await presetLead(ra, dec, state.allVisits);
     if (ctrl.signal.aborted) return;
     const first = state.allVisits[lead];
     if (first) {
       state.leadVisit = lead;
       if (!chosen.includes(first)) chosen.push(first);
+      // A preset that is about one night ((152) Atala, dead centre on 25 Dec
+      // 2025 and nowhere else) opens held on that night, as a link holding it
+      // would: blinking from it, the field was on 3 Jan by the time anyone
+      // looked, with Atala nowhere on it.
+      if (hold) {
+        state.wantVisit = visit = lead;
+        writeHash();
+      }
     }
   }
   chosen.sort((p, q) => p.mjd - q.mjd);
@@ -3743,8 +4021,8 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   // The run has just taken its place at the foot of the page, which changes the
   // room the plate has. If that changes the shape the field should be, it is cut
   // again now — before a single pixel has been read onto the old one.
-  const refit = fieldGrid(ra, dec);
-  if (Math.abs(refit.width / refit.height - grid.width / grid.height) > 0.03) {
+  const refit = fieldGridAgain(ra, dec);
+  if (refit !== grid && Math.abs(refit.width / refit.height - grid.width / grid.height) > 0.03) {
     grid = refit;
     sky.reset(grid);
     placeMarks(marks);
@@ -3755,6 +4033,14 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   updateIdentity();
 
   if (!chosen.length) { state.loading = false; setPlateState(t('epochs.none')); return; }
+  // The band may have been settled by the list (populateBands).
+  if (state.band !== bakingBand) baking = loadBake(ra, dec, state.band);
+  const manifest = await baking;
+  if (ctrl.signal.aborted) return;
+  if (manifest) {
+    state.bake = { key: manifest.key, band: state.band, date: manifest.baked, check: null };
+    checkBake(gen, ctrl.signal);
+  }
   if (state.reference) loadReference(ctrl.signal);
   // SkyBoT is asked about every planned visit now, alongside the pixels, rather
   // than after the last of them: the question needs only a date and a place.
@@ -4072,6 +4358,42 @@ function recordBlink(btn) {
  * point of saying how deep the search went — so it is stated rather than left
  * blank.
  */
+/**
+ * A challenge target's own case, for the headline: a star with a catalogue
+ * motion is read at its place across the visits as a mark would be, and a
+ * saturated one says so, with how far its motion carried it against the
+ * detector's pixel. Barnard's Star's headline spoke only of solar-system
+ * movers, and why its own 10″ a year cannot be seen here waited for someone
+ * to mark it. Null for anything else, or until three visits are in.
+ */
+let targetCaseFor = null;
+function targetCase() {
+  const tg = state.target;
+  if (!tg || !Number.isFinite(tg.pmRA) || !Number.isFinite(tg.pmDE) || !Number.isFinite(tg.epoch) || !sky?.grid) return null;
+  if (sky.visits.length < 3) return null;
+  const key = `${tg.ra},${tg.dec},${sky.visits.length}`;
+  if (targetCaseFor?.key === key) return targetCaseFor.text;
+  const mid = sky.visits.reduce((s, v) => s + v.frame.mjd, 0) / sky.visits.length;
+  const at = propagate(tg, epochOfMjd(mid), tg.epoch);
+  const mark = { ra: at.ra, dec: at.dec, analysis: sky.trackMark(at.ra, at.dec) };
+  const a = mark.analysis;
+  let text = null;
+  if (a.kind === 'saturated') {
+    // A short headline, and the arithmetic under it: seven lines of display
+    // type read as a wall, not as an answer.
+    const s = saturatedShift(mark, tg);
+    const words = { name: tg.label ?? '', n: a.saturated, total: a.total };
+    text = {
+      head: t('verdict.targetSaturated', words),
+      detail: s ? t(s.shift < DETECTOR_ARCSEC ? 'verdict.targetShiftUnder' : 'verdict.targetShiftOver', {
+        pm: fmt(s.pm, s.pm < 1 ? 2 : 1), shift: fmt(s.shift, 1), days: fmt(s.days, 0), px: fmt(s.shift / DETECTOR_ARCSEC, 1),
+      }) : '',
+    };
+  }
+  targetCaseFor = { key, text };
+  return text;
+}
+
 function renderVerdict() {
   const line = $('verdict');
   const ready = state.visits.filter((v) => v.status === 'ready');
@@ -4097,14 +4419,28 @@ function renderVerdict() {
     // no place for "probably nothing". A known asteroid caught is a finding.
     const moved = found.list?.length ?? 0;
     const caught = [...new Set((state.caught ?? []).map((c) => c.catalog.name))];
+    // The body a preset is named for comes first and by name: the Atala field
+    // said "Caught 3 known asteroids", or named whichever was brightest.
+    const presetName = presetAt(state.ra, state.dec)?.name ?? '';
+    const own = caught.find((name) => presetName.startsWith(name));
     const flashes = found.flashes?.filter((c) => !c.tooSharp).length ?? 0;
     line.textContent = moved
       ? t('verdict.moved', { n: moved })
-      : caught.length
-        ? t(caught.length === 1 ? 'verdict.caught' : 'verdict.caughtMany', { name: caught[0], n: caught.length })
+      : own && caught.length > 1
+        ? t('verdict.caughtOwn', { name: own, n: caught.length - 1 })
+        : caught.length
+        ? t(caught.length === 1 ? 'verdict.caught' : 'verdict.caughtMany', { name: own ?? caught[0], n: caught.length })
         : flashes && !skybotSettled()
           ? t('verdict.flashesOpen', { n: flashes })
           : t('verdict.still');
+    // A challenge target's own case goes first; the solar-system answer after it.
+    const ownCase = targetCase();
+    const sub = $('verdict-sub');
+    sub.hidden = !ownCase;
+    if (ownCase) {
+      sub.textContent = [ownCase.detail, line.textContent].filter(Boolean).join(' ');
+      line.textContent = ownCase.head;
+    }
     // The signal colour is for what nobody has catalogued; a known asteroid
     // caught is the check working, not a discovery.
     line.dataset.found = String(moved > 0);
@@ -4179,6 +4515,8 @@ function gateTargets(deep) {
       kind: 'field', key: f.key, ra: f.ra, dec: f.dec,
       // The name in the reader's language, as the list under the search has it.
       label: f.key ? t(`preset.${f.key}`) : f.name, sub: t('stats.visits') + ` ${f.visits ?? '—'}`,
+      // The deep fields are blank in the all-sky cube: the marker says where their frames are.
+      note: DEEP_GAPS.some((g) => g.key === f.key) ? t('sky.gapNote') : null,
       fov: f.fov, band: f.band ?? 'all', ready: true,
     });
   }
@@ -4226,7 +4564,7 @@ function nameOnSky(hit) {
 let cardThumbs = null;
 /** The stored card frames, fields and sky, asked for once. */
 const loadThumbs = () => (cardThumbs ? Promise.resolve(cardThumbs) : Promise.all(['data/thumbs.json', 'data/sky/thumbs.json'].map((url) => (
-  fetch(url, { signal: deadline(null, CATALOG_DEADLINE_MS) }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}))
+  fetchData(url, { signal: deadline(null, CATALOG_DEADLINE_MS) }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}))
 ))).then(([fields, deep]) => { cardThumbs ??= { fields, deep }; return cardThumbs; }));
 
 /**
@@ -4236,10 +4574,15 @@ const loadThumbs = () => (cardThumbs ? Promise.resolve(cardThumbs) : Promise.all
  */
 async function presetLead(ra, dec, visits) {
   const preset = presetAt(ra, dec);
-  if (!preset) return -1;
+  if (!preset) return { index: -1, hold: false };
   const thumb = (await loadThumbs()).fields?.[preset.key];
   const mjd = thumb?.iso ? Date.parse(`${thumb.iso}Z`) / 86400000 + 40587 : NaN;
-  return Number.isFinite(mjd) ? findHeldVisit(visits, { mjd, band: thumb.band }) : -1;
+  // A card that blinks its night against one other (thumbs.json `blink`) is
+  // about that night: the field is held on it rather than blinked from it.
+  return {
+    index: Number.isFinite(mjd) ? findHeldVisit(visits, { mjd, band: thumb.band }) : -1,
+    hold: Boolean(thumb?.blink),
+  };
 }
 /** The frame lists of ready fields, asked for once each. */
 const cardFields = new Map();
@@ -4251,7 +4594,7 @@ const BLINK_CARD_MS = 900;
 
 function fieldIndex(key) {
   if (!cardFields.has(key)) {
-    cardFields.set(key, fetch(`data/fields/${key}.json`, { signal: deadline(null, CATALOG_DEADLINE_MS) })
+    cardFields.set(key, fetchData(`data/fields/${key}.json`, { signal: deadline(null, CATALOG_DEADLINE_MS) })
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null));
   }
@@ -4300,8 +4643,21 @@ async function showFieldPlanets() {
   const at = state.target ?? { ra: state.ra, dec: state.dec };
   if (!Number.isFinite(at?.ra) || !Number.isFinite(at?.dec)) return;
   const host = await planetHostNear(at.ra, at.dec);
-  if (gen !== fieldSeq || !host) return;
-  offerSystem(link, host, state.label ? state.label.split(' · ')[0] : null, 'field.planets');
+  if (gen !== fieldSeq) return;
+  const label = state.label ? state.label.split(' · ')[0] : null;
+  if (host) {
+    offerSystem(link, host, label, 'field.planets');
+    return;
+  }
+  // No known planets: the field's star can still be searched for transits.
+  // Only a named target is a star to search; a field's middle is just sky,
+  // and a brown dwarf (WISE 0855, ε Indi B) is no star for a TESS transit search.
+  if (!state.target || state.target.substellar) return;
+  link.href = detectorUrl({ name: label, ra: at.ra, dec: at.dec }, getLanguage());
+  link.textContent = t('field.detect');
+  link.title = t('field.detectTitle');
+  link.onclick = null;
+  link.hidden = false;
 }
 
 /** Point `link` at a host's system in ExoVision, entered by the flight in. */
@@ -4359,7 +4715,8 @@ async function showCard(hit, { focus = false } = {}) {
   $('gate-pin').hidden = true;
 
   const preset = hit.kind === 'field' ? state.presets.find((p) => p.key === hit.key) : null;
-  $('gate-card-name').textContent = hit.label ?? t('card.sky');
+  // A cell of the sky grid is named as one: its centre is the place on the card.
+  $('gate-card-name').textContent = hit.label ?? (hit.cell ? t('gate.gridCell', hit.cell) : t('card.sky'));
   $('gate-card-kind').textContent = preset ? (preset.why?.[getLanguage()] ?? preset.why?.en ?? '')
     : hit.kind === 'planet' ? t('card.planet')
       : hit.kind === 'star' ? (hit.what ?? t('card.star'))
@@ -4414,6 +4771,7 @@ async function showCard(hit, { focus = false } = {}) {
   frame.hidden = !thumb;
   cardLive?.abort();
   $('gate-card-live').hidden = true;
+  $('gate-card-cube').hidden = true;
   img.hidden = false;
   delete frame.dataset.live;
   $('gate-card-visits').hidden = true;
@@ -4499,17 +4857,45 @@ const CARD_PX = 280;
 /** As long as the card's own fade in the stylesheet. */
 const CARD_LEAVE_MS = 260;
 const CARD_FOV_DEG = 0.1;
+/** How long the archive has before the card shows the all-sky cube in its place, ms. */
+const CUBE_AFTER_MS = 3000;
+/** The waits before the archive is asked again, while the cube stands in, ms. */
+const LIVE_RETRY_MS = [8000, 20000];
+
+/** The card's cutout of the all-sky cube, made the first time one is wanted; false where it cannot be. */
+let cardCube = null;
+
+/**
+ * The all-sky cube at the card's place, in the square a frame would fill,
+ * named for what it is: the survey's sky, not one visit. Never an empty
+ * square: whatever the archive does, the card shows the sky there.
+ */
+function showCube(hit) {
+  cardCube ??= createCubeCutout($('gate-card-cube')) ?? false;
+  if (!cardCube) return false;
+  const frame = $('gate-card-frame');
+  $('gate-card-live').hidden = true;
+  $('gate-card-cube').hidden = false;
+  $('gate-card').dataset.band = '';
+  frame.dataset.live = 'cube';
+  frame.dataset.ready = 'true';
+  $('gate-card-tag').textContent = t('card.cube');
+  cardCube.show(hit.ra, hit.dec);
+  return true;
+}
 
 /**
  * Read one real frame for a place that has none stored: ask the archive which
  * frames cover it, take the first D2 visit that fills the picture, and paint
  * it the way the plate would. Each step is said on the card while it runs.
+ * If the archive is slow (past three seconds), has nothing, or fails, the
+ * all-sky cube stands in; a failure is asked again a little later, and a real
+ * frame that comes in then takes the cube's place.
  */
 async function previewLive(hit, where) {
   const card = $('gate-card');
   const frame = $('gate-card-frame');
   const canvas = $('gate-card-live');
-  const tag = $('gate-card-tag');
   const ctrl = new AbortController();
   cardLive = ctrl;
   const mine = () => cardHit === hit && !ctrl.signal.aborted;
@@ -4523,24 +4909,61 @@ async function previewLive(hit, where) {
   frame.dataset.ring = 'false';
   frame.dataset.ready = 'false';
   frame.dataset.live = 'asking';
-  tag.textContent = t('card.asking');
+  $('gate-card-tag').textContent = t('card.asking');
 
+  const slow = setTimeout(() => { if (mine() && frame.dataset.live !== 'shown') showCube(hit); }, CUBE_AFTER_MS);
+  const counted = { visits: false };
   try {
-    const { frames } = await searchFrames({ ra: hit.ra, dec: hit.dec }, { signal: ctrl.signal });
-    if (!mine()) return;
-    const visits = groupVisits(frames, { ra: hit.ra, dec: hit.dec, band: 'D2' });
-    if (!visits.length) { frame.dataset.live = 'none'; tag.textContent = t('card.noFrames'); return; }
-    where.before(cardFact(t('card.bandVisits', { band: 'D2' }), String(visits.length)));
+    for (let attempt = 0; ; attempt++) {
+      const outcome = await readLiveFrame(hit, where, ctrl.signal, mine, counted);
+      if (!mine() || outcome === 'shown') return;
+      if (!showCube(hit)) {
+        // No WebGL for the cube: the card says what the archive did instead.
+        frame.dataset.live = outcome;
+        $('gate-card-tag').textContent = t(outcome === 'failed' ? 'card.liveFailed' : 'card.noFrames');
+      }
+      if (outcome === 'none' || attempt >= LIVE_RETRY_MS.length) return;
+      await pause(LIVE_RETRY_MS[attempt], ctrl.signal);
+    }
+  } catch {
+    // Left: the card has gone or moved on.
+  } finally {
+    clearTimeout(slow);
+  }
+}
 
-    frame.dataset.live = 'reading';
-    tag.textContent = t('card.reading');
+/**
+ * One try at the card's real frame: 'shown', 'none' (no D2 visit covers the
+ * place) or 'failed' (the network's doing, not the sky's). While the cube
+ * stands in, the steps are not said over its caption.
+ */
+async function readLiveFrame(hit, where, signal, mine, counted) {
+  const frame = $('gate-card-frame');
+  const canvas = $('gate-card-live');
+  const tag = $('gate-card-tag');
+  const say = (state, words) => {
+    if (frame.dataset.live === 'cube') return;
+    frame.dataset.live = state;
+    tag.textContent = words;
+  };
+  try {
+    const { frames } = await searchFrames({ ra: hit.ra, dec: hit.dec }, { signal });
+    if (!mine()) return 'none';
+    const visits = groupVisits(frames, { ra: hit.ra, dec: hit.dec, band: 'D2' });
+    if (!visits.length) return 'none';
+    if (!counted.visits) {
+      counted.visits = true;
+      where.before(cardFact(t('card.bandVisits', { band: 'D2' }), String(visits.length)));
+    }
+
+    say('reading', t('card.reading'));
     const grid = new TangentGrid(hit.ra, hit.dec, CARD_FOV_DEG, CARD_PX, CARD_PX);
     const tried = visits.slice(0, 4);
     let failed = 0;
     for (const visit of tried) {
-      const stamp = await loadStamp(toS3(visit.url), grid, { signal: ctrl.signal, minCoverage: 0.9 })
+      const stamp = await loadStamp(toS3(visit.url), grid, { signal, minCoverage: 0.9 })
         .catch(() => { failed += 1; return null; });
-      if (!mine()) return;
+      if (!mine()) return 'none';
       if (!stamp) continue;
       const ctx = canvas.getContext('2d');
       const picture = ctx.createImageData(CARD_PX, CARD_PX);
@@ -4549,19 +4972,19 @@ async function previewLive(hit, where) {
         lo, hi, stretch: 'asinh', blankAlpha: 255, quality: stamp.quality,
       });
       ctx.putImageData(picture, 0, 0);
+      // The real frame takes the cube's place.
+      $('gate-card-cube').hidden = true;
+      canvas.hidden = false;
+      $('gate-card').dataset.band = 'D2';
       frame.dataset.live = 'shown';
       frame.dataset.ready = 'true';
       tag.textContent = `D2 · ${fmtDate(visit.iso).replace(/\s*г\.?$/, '')}`;
-      return;
+      return 'shown';
     }
-    // Every read failing is the network's doing, not the sky's.
-    const unread = failed === tried.length;
-    frame.dataset.live = unread ? 'failed' : 'none';
-    tag.textContent = t(unread ? 'card.liveFailed' : 'card.noFrames');
-  } catch {
-    if (!mine()) return;
-    frame.dataset.live = 'failed';
-    tag.textContent = t('card.liveFailed');
+    return failed === tried.length ? 'failed' : 'none';
+  } catch (err) {
+    if (signal.aborted) throw err;
+    return 'failed';
   }
 }
 
@@ -4743,7 +5166,7 @@ let skyLayersAsked = null;
 function loadSkyLayers() {
   skyLayersAsked ??= Promise.all([
     gate.stars ? null : loadStars().catch(() => null),
-    gateDeep ? null : fetch('data/sky/deepsky.json', { signal: deadline(null, CATALOG_DEADLINE_MS) })
+    gateDeep ? null : fetchData('data/sky/deepsky.json', { signal: deadline(null, CATALOG_DEADLINE_MS) })
       .then((r) => (r.ok ? r.json() : null)).catch(() => null),
   ]).then(([stars, deep]) => {
     if (stars) gate.setStars(stars);
@@ -4760,12 +5183,71 @@ function loadSkyLayers() {
   return skyLayersAsked;
 }
 
+/** Where the sky in the entry screen comes from, with the other credits. */
+function showSkyCredit() {
+  const skyCredit = [
+    state.skyLayers.stars && t('credit.stars'), state.skyLayers.deep && t('credit.deep'),
+    t(gate?.survey ? 'gate.surveyed' : 'gate.modelled'),
+    gate?.surveyCube && t('sky.fills', { n: CORE_STAR_COUNT }),
+  ].filter(Boolean).join(' · ');
+  $('credit').textContent = [t('foot.short'), skyCredit].filter(Boolean).join(String.fromCharCode(10));
+}
+
+/** Where the front page's sky faces, for a layer opened over it. */
+const gateLook = () => ({ ra: gate?.cam?.ra ?? 266, dec: gate?.cam?.dec ?? -12, fov: gate?.cam?.fov ?? 78 });
+
+// The whole sky and the flight open over this page, not as pages of their own.
+wireWorld({
+  look: gateLook,
+  lang: getLanguage,
+  // Back from a layer, facing where it faced.
+  face: ({ ra, dec }) => {
+    if (!gate || !Number.isFinite(ra) || !Number.isFinite(dec)) return;
+    gate.cam.ra = ra;
+    gate.cam.dec = dec;
+    gate.draw();
+  },
+});
+
+/** Where the sky grid's switch is kept between visits. */
+const GRID_KEY = 'muninn.skyGrid';
+
+/**
+ * The sky's two pills: "Explore in 3D", the way out into space from where the
+ * sky faces (the flight puts its way back on the same spot), and the sky grid,
+ * off until asked for and remembered.
+ */
+function wireSkyKeys() {
+  $('gate-3d').addEventListener('click', () => openWorld('fly', gateLook(), getLanguage()));
+  const button = $('gate-grid');
+  let on = false;
+  try { on = localStorage.getItem(GRID_KEY) === '1'; } catch { /* private window */ }
+  const set = (value) => {
+    on = value;
+    button.setAttribute('aria-pressed', String(on));
+    gate.setGrid(on);
+  };
+  set(on);
+  button.addEventListener('click', () => {
+    set(!on);
+    try { localStorage.setItem(GRID_KEY, on ? '1' : '0'); } catch { /* private window */ }
+  });
+}
+
 async function buildGate() {
   gate = new Gate($('gate-sky'), {
+    onStepOut: (look) => openWorld('fly', look, getLanguage()),
     // A press shows what was pressed. The flight starts from the card.
     onPick: (hit) => { gate.select(hit); showCard(hit); },
     onName: nameOnSky,
+    // The colophon names what is drawn: the survey once it is here.
+    onSurvey: () => {
+      showSkyCredit();
+      // The sky is up: now, in the background, the layers it opens onto.
+      setTimeout(() => preloadWorld('fly', getLanguage()), 3000);
+    },
   });
+  wireSkyKeys();
   window.addEventListener('resize', () => { if (!$('gate').hidden) gate.resize(); });
   // On a phone the sky is the space between the bar and the panel under it,
   // and the panel changes height without the window doing so (the fields
@@ -4791,8 +5273,12 @@ async function buildGate() {
       kind: 'field', key: proven.key, ra: proven.ra, dec: proven.dec, fov: proven.fov,
       band: proven.band ?? 'all', label: t(`preset.${proven.key}`),
     };
-    showCard(hit);
     provenCard = hit;
+    // The first seconds belong to the sky; the proof comes in after them,
+    // unless the visitor has already picked something.
+    setTimeout(() => {
+      if (!$('gate').hidden && !cardHit && provenCard === hit && !document.querySelector('.gate-card:not([hidden])')) showCard(hit);
+    }, 5000);
   }
 }
 
@@ -4842,7 +5328,9 @@ function renderGateJump() {
     row.addEventListener('scroll', () => edgeRow(row), { passive: true });
     line.append(head, row);
     box.append(line);
-    requestAnimationFrame(() => edgeRow(row));
+    // Measured when the row has a size: built while the gate was still out of
+    // sight, the row had none, and its far end never faded.
+    new ResizeObserver(() => edgeRow(row)).observe(row);
   }
 }
 
@@ -4950,14 +5438,20 @@ function pickInField(row) {
 
 /* --------------------------------------------------------------------- wiring */
 
-const MODE_HINT = { blink: 'mode.blinkHint', wipe: 'mode.wipeHint', difference: 'mode.diffHint', single: 'mode.singleHint' };
+const MODE_HINT = { blink: 'mode.blinkHint', wipe: 'mode.wipeHint', difference: 'mode.diffHint', single: 'mode.singleHint', depth: 'mode.depthHint' };
 
 /**
  * The line under the run for a mode. The stack's says what this season adds
  * up to: how many visits, and roughly how deep — the per-visit depth of the
  * band plus what averaging those visits buys.
  */
+// On a wide screen the hint gives way at its end rather than wrap (app.css): its title says all of it.
+new MutationObserver(() => { $('mode-hint').title = $('mode-hint').textContent; })
+  .observe($('mode-hint'), { childList: true, characterData: true, subtree: true });
+
 function modeHint(mode) {
+  // The depth view leaves the plate on one visit: the sky says "single", the line says depth.
+  if (mode === 'single' && inDepthChosen()) return t(MODE_HINT.depth);
   if (mode === 'wipe' && state.reference) return referenceHint();
   if (mode !== 'stack') return t(MODE_HINT[mode] ?? MODE_HINT.blink);
   const band = sky?.current?.frame.band ?? '';
@@ -5457,8 +5951,55 @@ function gaiaHint() {
   return `${head}${cut} ${t('ref.gaiaUse')}`;
 }
 
+/*
+ * In depth: the visit on the plate, laid out in 3-D (indepth.js). The plate
+ * under it holds that one visit still, as "single" does. Its module, and
+ * three.js with it, is fetched the first time the mode is chosen, so the
+ * page does not carry them for everyone.
+ */
+let inDepth = null;
+let inDepthModule = null;
+function inDepthChosen() {
+  return document.querySelector('input[name="mode"][value="depth"]')?.checked === true;
+}
+
+/** The plate's line while the 3-D view's code is on the way, or null. */
+let inDepthWait = null;
+function waitForInDepth(on) {
+  if (!on) { inDepthWait?.remove(); inDepthWait = null; return; }
+  if (inDepthWait) return;
+  inDepthWait = document.createElement('p');
+  inDepthWait.className = 'indepth-wait';
+  inDepthWait.setAttribute('role', 'status');
+  inDepthWait.dataset.i18n = 'indepth.loading';
+  inDepthWait.textContent = t('indepth.loading');
+  $('plate').append(inDepthWait);
+}
+
+function showInDepth(on) {
+  if (!on) { waitForInDepth(false); inDepth?.unmount(); inDepth = null; return; }
+  if (inDepth) { inDepth.update(); return; }
+  // The module and three.js are a megabyte the first time: said, not a still plate.
+  waitForInDepth(true);
+  inDepthModule ??= import('./indepth.js');
+  inDepthModule.then((m) => {
+    waitForInDepth(false);
+    if (inDepth || !inDepthChosen()) return;
+    inDepth = m.mountInDepth($('plate'), {
+      sky,
+      field: () => ({ ra: state.ra, dec: state.dec, target: state.target, label: state.label, key: presetAt(state.ra, state.dec)?.key ?? null }),
+    });
+  }).catch((err) => {
+    console.error(err);
+    waitForInDepth(false);
+    inDepthModule = null;
+    $('mode-hint').textContent = t('indepth.loadFailed');
+  });
+}
+
 function applyMode(mode) {
-  sky.setMode(mode);
+  sky.setMode(mode === 'depth' ? 'single' : mode);
+  showInDepth(mode === 'depth');
   // A minus B is taken between two SPHEREx visits only: AllWISE or the Gaia
   // model as B would have been named in the picker while a visit was
   // subtracted. Difference goes back to a visit as B, and the picker says so.
@@ -5615,7 +6156,7 @@ function wire() {
 
   const overlays = {
     'ov-grid': 'grid', 'ov-compass': 'compass', 'ov-catalog': 'catalog', 'ov-skybot': 'skybot',
-    'ov-marks': 'marks', 'ov-sectors': 'sectors',
+    'ov-marks': 'marks', 'ov-sectors': 'sectors', 'ov-motion': 'motion',
   };
   for (const [id, key] of Object.entries(overlays)) {
     $(id).addEventListener('change', (e) => {
@@ -5752,7 +6293,7 @@ function wire() {
       return;
     }
     if (next.survey !== state.survey) chooseSurvey(next.survey);
-    if (next.mode && sky.mode !== next.mode) selectMode(next.mode);
+    if (next.mode && modeNow() !== next.mode) selectMode(next.mode, { asked: true });
     const moved = state.ra == null
       || Math.abs(deltaRA(next.position.ra, state.ra)) > 1e-4
       || Math.abs(next.position.dec - state.dec) > 1e-4
@@ -5804,6 +6345,7 @@ function wire() {
 /** The words the picture draws itself, in the reader's language. */
 function labelSky() {
   sky.labels.rate = (r) => t('overlay.rate', { rate: fmt(r, r < 10 ? 1 : 0) });
+  sky.labels.motion = (factor) => (factor > 1 ? t('overlay.motionX', { factor }) : t('overlay.motion1'));
   sky.labels.saturated = (name, n) => (name
     ? t('plate.saturated', { name, n: fmt(n, 0) })
     : t('plate.saturatedAnon', { n: fmt(n, 0) }));
@@ -5819,6 +6361,7 @@ function relabel() {
     showCard(cardHit.kind === 'field' && cardHit.key ? { ...cardHit, label: t(`preset.${cardHit.key}`) } : cardHit);
   }
   if (sky) { labelSky(); sky.draw(); }
+  inDepth?.relabel();
   readRunPaint();
   labelTheme();
   const otherLanguage = getLanguage() === 'en' ? 'RU' : 'EN';
@@ -5837,11 +6380,7 @@ function relabel() {
   renderPresets();
   renderArchives();
   if (state.ra != null) showFieldPlanets();
-  // Where the sky in the entry screen comes from, with the other credits.
-  const skyCredit = [
-    state.skyLayers.stars && t('credit.stars'), state.skyLayers.deep && t('credit.deep'), t('gate.modelled'),
-  ].filter(Boolean).join(' · ');
-  $('credit').textContent = [t('foot.short'), skyCredit].filter(Boolean).join(String.fromCharCode(10));
+  showSkyCredit();
   updateIdentity();
   renderBytes();
   renderDepth();
@@ -5910,9 +6449,11 @@ async function boot() {
   }
   let stored = null;
   try { stored = localStorage.getItem('muninn.lang'); } catch { /* private window */ }
-  // The hash for a shared field, the query for a plain link (/?lang=en), then what this browser chose before.
+  // The hash for a shared field, the query for a plain link (/?lang=ru), then
+  // what this browser chose before; a first visit opens in English, whatever
+  // the browser's own language, since the judging and the archive are in it.
   const asked = hash.lang ?? new URLSearchParams(location.search).get('lang');
-  setLanguage(['en', 'ru'].includes(asked) ? asked : stored ?? (navigator.language?.startsWith('ru') ? 'ru' : 'en'));
+  setLanguage(['en', 'ru'].includes(asked) ? asked : ['en', 'ru'].includes(stored) ? stored : 'en');
   wireSafety();
   loadExamined();
 

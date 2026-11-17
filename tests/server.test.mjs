@@ -92,6 +92,16 @@ test('small-body relay: refuses a time that is not UTC to the second', async () 
   assert.equal((await get('/api/sbident?ra=330&dec=95&time=2025-08-15T12:00:00')).status, 400);
 });
 
+test('CDS relay: only a plain name, or one of the page\'s two SIMBAD questions about a place', async () => {
+  for (const path of [
+    '/api/cds', '/api/cds?ask=tap&query=SELECT%201', '/api/cds?ask=sesame&name=', '/api/cds?ask=sesame&name=%3Cscript%3E',
+    `/api/cds?ask=sesame&name=${'x'.repeat(81)}`, '/api/cds?ask=near&ra=269.4&dec=95&r=8', '/api/cds?ask=near&ra=269.4&dec=4.7&r=600',
+    '/api/cds?ask=near&ra=269.4&dec=4.7', '/api/cds?ask=field&ra=269.4&dec=4.7&r=5', '/api/cds?ask=field&ra=269.4&dec=4.7&r=1e-1',
+  ]) {
+    assert.equal((await get(path)).status, 400, path);
+  }
+});
+
 test('names relay: only an asteroid or comet name or designation goes to JPL', async () => {
   for (const name of ['', 'M51', 'TRAPPIST-1', 'NGC 4565', '<script>', 'Ceres&sstr=1', 'a'.repeat(41), '148.1 +1.0', 'ab']) {
     const res = await get(`/api/smallbody?name=${encodeURIComponent(name)}`);
@@ -99,6 +109,18 @@ test('names relay: only an asteroid or comet name or designation goes to JPL', a
     assert.equal((await res.json()).ok, false);
   }
   assert.equal((await get('/api/smallbody')).status, 400);
+});
+
+test('same-orbit relay: only three numbers of a closed orbit go to JPL', async () => {
+  for (const query of [
+    '', 'a=3.1', 'a=3.1&e=0.08', 'a=abc&e=0.08&i=12', 'a=3.1&e=1.2&i=12', 'a=3.1&e=0.08&i=200',
+    'a=-3&e=0.08&i=12', 'a=0&e=0.08&i=12', 'a=3e2&e=0.08&i=12', 'a=3.1&e=0.08&i=12%7C',
+    `a=3.1&e=0.08&i=${encodeURIComponent('12|RG|0|180')}`, 'a=3.1&e=0.08&i=Infinity',
+  ]) {
+    const res = await get(`/api/sbdb-near?${query}`);
+    assert.equal(res.status, 400, query);
+    assert.equal((await res.json()).ok, false);
+  }
 });
 
 test('a malformed request line is a 400, and the server is still there', async () => {
@@ -142,6 +164,46 @@ test('only code under the current tag is kept for good, not the page or its data
   assert.doesNotMatch((await get(`/talk.html?v=${tag}`)).headers.get('cache-control'), IMMUTABLE_RE);
   assert.doesNotMatch((await get(`/data/targets.json?v=${tag}`)).headers.get('cache-control'), IMMUTABLE_RE);
   assert.doesNotMatch((await get('/js/app.js?v=0000000000')).headers.get('cache-control'), IMMUTABLE_RE);
+});
+
+test('a data file under its own hash is the file, kept for good; under another hash it is not kept', async () => {
+  const { DATA_NAMES } = await import('../public/js/datanames.js');
+  const named = DATA_NAMES['data/targets.json'];
+  assert.match(named, /^data\/targets\.[0-9a-f]{10}\.bin$/, 'an extension the edge keeps');
+  const res = await get(`/${named}`);
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('cache-control'), IMMUTABLE_RE);
+  assert.match(res.headers.get('content-type'), /json/);
+  assert.deepEqual(await res.json(), await (await get('/data/targets.json')).json());
+  const stale = await get('/data/targets.0000000000.bin');
+  assert.equal(stale.status, 200);
+  assert.equal(stale.headers.get('cache-control'), 'no-cache');
+  assert.equal((await get('/data/nothing.0000000000.bin')).status, 404);
+  // A picture and a binary file keep their own extension under their hash.
+  for (const path of ['data/sky/milkyway.png', 'data/fly/stars.bin']) {
+    const hit = await get(`/${DATA_NAMES[path]}`);
+    assert.equal(hit.status, 200, path);
+    assert.match(hit.headers.get('cache-control'), IMMUTABLE_RE, path);
+    assert.equal(Buffer.compare(Buffer.from(await hit.arrayBuffer()), Buffer.from(await (await get(`/${path}`)).arrayBuffer())), 0, path);
+  }
+  assert.ok([403, 404].includes((await get('/data/..%2f..%2fpackage.0000000000.bin')).status));
+});
+
+test('the sky relay passes on only files the all-sky cube has', async () => {
+  // Each of these is refused before IRSA is asked: a wrong order, a directory
+  // that does not hold that index, an index past the order, a frame past the
+  // cube, an Allsky at an order that has none, a way out of the cube, and
+  // numbers with leading zeros, which would keep one tile under two names.
+  for (const path of [
+    'Norder6/Dir0/Npix1.png', 'Norder3/Dir10000/Npix300.png', 'Norder3/Dir0/Npix768.png',
+    'Norder3/Dir0/Npix300_102.png', 'Norder3/Dir0/Npix300_0.png', 'Norder4/Allsky.png',
+    'Norder3/Dir0/../../../properties', 'Norder3/Dir0/Npix300.fits', 'properties',
+    'Norder3/Dir00/Npix300.png', 'Norder3/Dir0/Npix0300.png', 'Norder3/Dir0/Npix300_01.png',
+    'Norder3/Allsky_007.png', 'Norder03/Allsky.png',
+  ]) {
+    const res = await get(`/api/hips/${path}`);
+    assert.equal(res.status, 404, path);
+  }
 });
 
 test('the headset page is served with the same policy, and its library under the tag for good', async () => {
@@ -570,6 +632,57 @@ describe('frame search against a fake IRSA', () => {
     // Asked once the SIA had failed, its three asks done.
     assert.equal(tapHits.get('spherex_dr1 113.5'), 1);
     assert.equal(hits.get('spherex_dr1 113.5'), 3);
+  });
+});
+
+/* ------------------------------------------- the sky relay against a fake IRSA */
+
+describe('the sky relay against a fake IRSA', () => {
+  test('a tile IRSA does not have is asked for once, then answered from memory', async () => {
+    const port = PORT + 21;
+    const cacheDir = join(tmpdir(), `muninn-hips-test-${process.pid}`);
+    await mkdir(cacheDir, { recursive: true });
+    const asked = [];
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, ...new Array(32).fill(0)]);
+    const fake = createServer((req, res) => {
+      asked.push(req.url);
+      if (req.url.endsWith('/Npix5.png')) { res.writeHead(200, { 'content-type': 'image/png' }); res.end(png); return; }
+      res.writeHead(404);
+      res.end('no');
+    });
+    await new Promise((resolve) => { fake.listen(0, '127.0.0.1', resolve); });
+    const proc = spawn(process.execPath, ['server.js'], {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      env: {
+        ...process.env, PORT: String(port), HOST: '127.0.0.1', MUNINN_CACHE_DIR: cacheDir, MUNINN_INDEX_DIR: NO_INDEX,
+        MUNINN_HIPS_URL: `http://127.0.0.1:${fake.address().port}/hips/`,
+      },
+      stdio: ['ignore', 'pipe', 'inherit'],
+    });
+    try {
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('server did not start')), 10000);
+        proc.stdout.on('data', (chunk) => { if (String(chunk).includes(`:${port}`)) { clearTimeout(timer); resolve(); } });
+      });
+      const tile = (path) => fetch(`http://127.0.0.1:${port}/api/hips/${path}`);
+      for (let i = 0; i < 3; i += 1) {
+        const res = await tile('Norder3/Dir0/Npix4.png');
+        assert.equal(res.status, 404);
+        assert.equal(res.headers.get('x-muninn-hips'), '1');
+      }
+      assert.deepEqual(asked, ['/hips/Norder3/Dir0/Npix4.png']);
+      // A tile it has is passed on, and kept.
+      for (let i = 0; i < 2; i += 1) {
+        const res = await tile('Norder3/Dir0/Npix5.png');
+        assert.equal(res.status, 200);
+        assert.deepEqual(Buffer.from(await res.arrayBuffer()), png);
+      }
+      assert.equal(asked.length, 2);
+    } finally {
+      proc.kill();
+      fake.close();
+      await rm(cacheDir, { recursive: true, force: true });
+    }
   });
 });
 
