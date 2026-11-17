@@ -30,6 +30,16 @@ export function isCodeLoadError(err) {
   return /dynamically imported module|Importing a module script failed|error loading dynamically imported|ChunkLoadError|Unable to preload/i.test(text);
 }
 
+/** Whether a script element that failed is the page's own code: a module from this origin. */
+export function isOwnCode(script, origin) {
+  if (script?.type !== 'module' || !script.src) return false;
+  try {
+    return new URL(script.src, `${origin}/`).origin === origin;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Load the page again for its code, once per window, under a flag no cache
  * holds an answer for. Returns whether it did; without session storage there
@@ -149,9 +159,15 @@ if (typeof window !== 'undefined') {
   // caught on the way down): the code under this page's tag is gone.
   window.addEventListener('error', (e) => {
     const el = e.target;
-    if (el instanceof HTMLScriptElement && el.type === 'module') {
-      quietly('code did not load', el.src);
-      reloadForCode();
+    if (el instanceof HTMLScriptElement) {
+      // Only this site's own code is a reason to reload. A script someone
+      // else put in the page (Cloudflare adds its analytics beacon, which the
+      // page's content-security policy refuses) failing is theirs, and
+      // reloading for it only showed the page twice.
+      if (isOwnCode(el, location.origin)) {
+        quietly('code did not load', el.src);
+        reloadForCode();
+      }
       return;
     }
     if (el && el !== window) return;

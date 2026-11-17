@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 
 import { backoffMs, worthRetry, withRetry, pause } from '../public/js/net.js';
 import { onHost, rangeProblem, S3_HOSTS } from '../public/js/ranges.js';
-import { mayReload, isCodeLoadError, reloadForCode, RELOAD_WINDOW_MS } from '../public/js/safety.js';
+import { mayReload, isCodeLoadError, isOwnCode, reloadForCode, RELOAD_WINDOW_MS } from '../public/js/safety.js';
 import { loadStamp } from '../public/js/stamp.js';
 import { TangentGrid } from '../public/js/wcs.js';
 import { syntheticFrame, serve } from './fixtures.mjs';
@@ -127,6 +127,16 @@ test('only the page\'s own code not arriving counts as a code load failure', () 
   assert.equal(isCodeLoadError(new TypeError('Importing a module script failed.')), true);
   assert.equal(isCodeLoadError(new TypeError('Failed to fetch')), false);
   assert.equal(isCodeLoadError(undefined), false);
+});
+
+test('a script someone else put in the page failing is never a reason to reload', () => {
+  const site = 'https://muninn.mydevbox.xyz';
+  assert.equal(isOwnCode({ type: 'module', src: `${site}/js/app.js?v=1` }, site), true);
+  assert.equal(isOwnCode({ type: 'module', src: 'js/app.js?v=1' }, site), true);
+  // Cloudflare's analytics beacon, which the page's CSP refuses.
+  assert.equal(isOwnCode({ type: 'module', src: 'https://static.cloudflareinsights.com/beacon.min.js/v1' }, site), false);
+  assert.equal(isOwnCode({ type: '', src: 'https://static.cloudflareinsights.com/beacon.min.js/v1' }, site), false);
+  assert.equal(isOwnCode({ type: '', src: `${site}/js/theme-boot.js` }, site), false);
 });
 
 /* ------------------------------------------- reads that fail, end to end */

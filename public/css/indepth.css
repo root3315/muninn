@@ -139,3 +139,12 @@
   display: grid; place-content: center; padding: var(--space-xl); text-align: center;
   color: var(--color-muted);
 }
+
+/* The catalogues still being asked, said at the head of the corridor. */
+.indepth__busy {
+  position: absolute; left: 50%; top: var(--space-xs); transform: translateX(-50%); margin: 0;
+  padding: 0 var(--space-xs); border-radius: var(--radius-xs);
+  background: color-mix(in oklch, var(--color-well) 82%, transparent);
+  font-size: var(--text-xs); line-height: 1.8; color: var(--color-muted); pointer-events: none;
+}
+.indepth__busy[hidden] { display: none; }

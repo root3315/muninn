@@ -12,6 +12,8 @@
  * blank and are never asked for.
  */
 
+import { dataUrl } from '../datafiles.js';
+
 export const HIPS_BASE = 'https://irsa.ipac.caltech.edu/data/hips/SPHEREx/spherex_allsky_cube';
 export const MAX_ORDER = 5;
 /** The order whose whole sky comes as one image, `Allsky.png`: 768 tiles of 64 px. */
@@ -68,11 +70,12 @@ export const AVERAGED_FRAMES = new Set([8, 25, 42, 59, 76, 93]);
 
 const irsaAllsky = (frame) => `${HIPS_BASE}/Norder${ALLSKY_ORDER}/Allsky${suffix(frame)}.png`;
 
-export const allskyUrl = (frame) => (AVERAGED_FRAMES.has(frame) ? `data/allsky/Allsky_${frame}.png` : irsaAllsky(frame));
+// The averaged pictures under their hashed names (datafiles.js), which the edge keeps for good.
+export const allskyUrl = (frame) => (AVERAGED_FRAMES.has(frame) ? dataUrl(`data/allsky/Allsky_${frame}.png`) : irsaAllsky(frame));
 
 /** Where to look when the site's own Allsky is not there: IRSA's, for the same frame; null for any other address. */
 export function allskyFallback(url) {
-  const m = /^data\/allsky\/Allsky_(\d+)\.png$/.exec(url);
+  const m = /^data\/allsky\/Allsky_(\d+)(?:\.[0-9a-f]{10})?\.png$/.exec(url);
   return m ? irsaAllsky(Number(m[1])) : null;
 }
 

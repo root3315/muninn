@@ -13,6 +13,7 @@
 import { setLanguage, getLanguage, t, applyTranslations, fmt, formatDay } from './i18n.js';
 import { starColour, direction } from './gate.js';
 import { encodeHash } from './hash.js';
+import { fetchData, dataUrl } from './datafiles.js';
 import { embedded, goTo } from './embed.js';
 import { systemUrl } from './exovision.js';
 import { radecOf } from './allsky/healpix.js';
@@ -101,8 +102,9 @@ const basis = () => ({ eye: cam.eye, F: cam.F, U: cam.U, R: cross(cam.F, cam.U) 
  */
 async function loadStars() {
   const [first, info] = await Promise.all([
-    fetch('data/fly/stars.bin').then((r) => r.arrayBuffer()),
-    fetch('data/fly/named.json', { cache: 'no-cache' }).then((r) => r.json()),
+    fetchData('data/fly/stars.bin').then((r) => r.arrayBuffer()),
+    // Under its own hash (datafiles.js), so a new build of the list is a new name.
+    fetchData('data/fly/named.json').then((r) => r.json()),
   ]);
   // A file of another size is an older build still in the browser's cache:
   // read as this one it would scatter the stars, so it is fetched again.
@@ -304,7 +306,7 @@ function placeGapLabels(w, h) {
 
 async function loadSky() {
   try {
-    const res = await fetch('data/sky/milkyway.png');
+    const res = await fetchData('data/sky/milkyway.png');
     return res.ok ? await createImageBitmap(await res.blob()) : null;
   } catch {
     return null;
@@ -695,7 +697,7 @@ const axesOf = new Map();
 
 async function loadSurfaces() {
   try {
-    const res = await fetch('data/fly/tex/maps.json');
+    const res = await fetchData('data/fly/tex/maps.json');
     if (!res.ok) return;
     const info = await res.json();
     surfaceInfo = info.maps ?? {};
@@ -704,7 +706,10 @@ async function loadSurfaces() {
   for (const [key, m] of Object.entries(surfaceInfo)) {
     const img = new Image();
     img.decoding = 'async';
-    img.src = `data/fly/tex/${m.file}`;
+    // Under its hashed name, and under its plain one if that is not answered.
+    const plain = `data/fly/tex/${m.file}`;
+    img.addEventListener('error', () => { if (img.getAttribute('src') !== plain) img.src = plain; }, { once: true });
+    img.src = dataUrl(plain);
     img.decode().then(() => { space.setMap(key, img); wake(); }).catch(() => {});
   }
 }
@@ -732,7 +737,7 @@ function loadRelief(key) {
     });
   }
   const meta = heightInfo[key];
-  const url = new URL(`data/fly/tex/${meta.file}`, location.href).href;
+  const url = new URL(dataUrl(`data/fly/tex/${meta.file}`), location.href).href;
   reliefWorker.postMessage({ url, meta, key, seaLevel: key === 'earth' ? 0 : null });
 }
 
@@ -1389,7 +1394,7 @@ function cardRow(k, v) {
 let family = null;
 async function loadFamily() {
   try {
-    const res = await fetch('data/fly/family.json');
+    const res = await fetchData('data/fly/family.json');
     if (res.ok) family = await res.json();
   } catch { /* the cards say the planets alone */ }
 }
@@ -2201,7 +2206,7 @@ let hostMatch = null;
 
 async function loadSystems() {
   try {
-    const res = await fetch('data/fly/exoplanets.json');
+    const res = await fetchData('data/fly/exoplanets.json');
     if (!res.ok) return;
     const body = await res.json();
     exo = body.systems ?? [];
@@ -2278,7 +2283,7 @@ function cellsNear(sys) {
 let motion = null;
 async function loadMotion() {
   try {
-    const res = await fetch('data/fly/motion.bin');
+    const res = await fetchData('data/fly/motion.bin');
     if (!res.ok) return;
     const buf = await res.arrayBuffer();
     if (buf.byteLength !== (stars.firstBody - 2) * 4) return;
@@ -3531,11 +3536,27 @@ function quietLabels() {
 
 /* ---- language and start ----------------------------------------------- */
 
+/**
+ * What the flight is still loading, said in a quiet line while it is: on a
+ * slow first visit the screen stayed black for twenty seconds with only the
+ * row of places under it, and nothing said anything was coming.
+ */
+const loadingParts = new Set(['stars', 'sky', 'planets']);
+function sayLoading() {
+  const el = $('loading');
+  el.hidden = !loadingParts.size;
+  if (loadingParts.size) {
+    el.textContent = t('fly.loading', { what: [...loadingParts].map((part) => t(`fly.loading.${part}`)).join(' · ') });
+  }
+}
+const loaded = (part) => () => { loadingParts.delete(part); sayLoading(); };
+
 function applyLanguage() {
   applyTranslations();
   document.title = t('fly.doc');
   $('lang').textContent = getLanguage() === 'ru' ? 'EN' : 'RU';
   $('hint').textContent = t(matchMedia('(pointer: coarse)').matches ? 'fly.hintHold' : 'fly.hint');
+  sayLoading();
   if (named.length) nameLabels();
   if (starCount) $('source').textContent = t('fly.source', { n: fmt(starCount, 0) }) + (survey ? ` · ${t('sky.fills', { n: CORE_STAR_COUNT })}` : '');
   nameGapLabels();
@@ -3560,11 +3581,16 @@ $('lang').addEventListener('click', () => {
 
 applyLanguage();
 readHash();
-const [data, skyImage] = await Promise.all([loadStars(), loadSky()]);
+const [data, skyImage] = await Promise.all([
+  loadStars().finally(loaded('stars')),
+  loadSky().finally(loaded('sky')),
+]);
 makeSurvey();
 // The catalogue's stars come first; the Sun, WISE 0855 and the planets after.
 space = createSpace(canvas, { stars: data.stars, sky: skyImage, stored: data.sun });
 if (!space) {
+  loadingParts.clear();
+  sayLoading();
   $('nogl').hidden = false;
 } else {
   stars = data.stars;
@@ -3586,7 +3612,7 @@ if (!space) {
   buildReach();
   if (pendingLook?.mark) showMark(pendingLook.ra, pendingLook.dec, pendingLook.mark);
   else if (pendingLook) lookFromEarth(pendingLook.ra, pendingLook.dec);
-  loadSystems();
+  loadSystems().finally(loaded('planets'));
   loadFamily();
   loadMotion();
   applyLanguage();

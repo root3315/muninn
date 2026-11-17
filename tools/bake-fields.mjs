@@ -36,6 +36,7 @@ import { spread, nextVisits, VISITS_PER_BATCH } from '../public/js/visits.js';
 import { cropSource, encodeVisit, decodeVisit, widestGrid, KEEP_MARGIN, KEPT_CARD, FIELD_FORMAT } from '../public/js/fieldstore.js';
 import { SkyView } from '../public/js/sky.js';
 import { dataLength } from '../public/js/fits.js';
+import { writeDataNames } from './name-data.mjs';
 
 function option(name, fallback) {
   const at = process.argv.indexOf(`--${name}`);
@@ -269,6 +270,8 @@ async function main() {
     }
   }
   await writeIndex();
+  // The manifests and the index have new hashes: the page's names for them follow.
+  await writeDataNames();
   console.log(`\n${(total / 2 ** 20).toFixed(1)} MB in the fields baked this run${failed ? `; ${failed} visits failed` : ''}`);
   if (failed) process.exitCode = 1;
 }

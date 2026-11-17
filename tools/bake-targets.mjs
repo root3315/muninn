@@ -143,6 +143,8 @@ const FIELDS = [
     target: {
       ra: 331.07645260, dec: -56.79381207, epoch: 2016.0, pmRA: 3981.977, pmDE: -2466.832,
       ref: 'Gaia DR3 6412596012146801152',
+      // Brown dwarfs, not stars: no transit search is offered for them (app.js showFieldPlanets).
+      substellar: true,
     },
     why: {
       en: 'A pair of brown dwarfs; their star, ε Indi A, is in the same field.',
@@ -164,6 +166,7 @@ const FIELDS = [
       ra: 133.81890825, dec: -7.24704800, epoch: 2000.0, pmRA: -8123.7, pmDE: 673.2,
       plx: 439.0, plxErr: 2.4,
       ref: 'Kirkpatrick et al. 2021, ApJS 253, 7',
+      substellar: true,
     },
     why: {
       en: 'The coldest known brown dwarf, bright only near 4.6 µm, so the field opens in D6. Centred where it was in 2026: 2.1′ west of the challenge’s 08h55m10.83s −07°14′42.5″, its 2010 WISE position.',

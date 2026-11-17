@@ -16,6 +16,7 @@ import { toS3 } from './catalog.js';
 import { sortedFinite, limitsFromSorted, paint, rampFromToken } from './render.js';
 import { FRAME_FILE_MB } from './release.js';
 import { deadline, CATALOG_DEADLINE_MS } from './net.js';
+import { fetchData } from './datafiles.js';
 import { COLLECTIONS } from './release.js';
 import { Gate, loadStars } from './gate.js';
 import { t as tool, setLanguage as setToolLanguage } from './i18n.js';
@@ -735,7 +736,7 @@ async function readFrames() {
   const grid = new TangentGrid(FIELD.ra, FIELD.dec, FIELD.fovDeg, GRID_PX, GRID_PX);
   let frames;
   try {
-    const index = await (await fetch('data/fields/atala.json', { signal: deadline(null, CATALOG_DEADLINE_MS) })).json();
+    const index = await (await fetchData('data/fields/atala.json', { signal: deadline(null, CATALOG_DEADLINE_MS) })).json();
     frames = index.frames.filter((f) => f.band === FIELD.band);
   } catch {
     frames = [];
@@ -909,7 +910,7 @@ function renderTargets() {
 
 async function loadTargets() {
   try {
-    const all = await (await fetch('data/targets.json', { signal: deadline(null, CATALOG_DEADLINE_MS) })).json();
+    const all = await (await fetchData('data/targets.json', { signal: deadline(null, CATALOG_DEADLINE_MS) })).json();
     allTargets = all.targets;
     targets = all.targets.filter((tg) => tg.group === 'challenge');
   } catch {
@@ -1047,7 +1048,7 @@ let domeReady = null;
 let allTargets = [];
 
 async function getJSON(url) {
-  const res = await fetch(url, { signal: deadline(null, CATALOG_DEADLINE_MS) });
+  const res = await fetchData(url, { signal: deadline(null, CATALOG_DEADLINE_MS) });
   if (!res.ok) throw new Error(`${url} ${res.status}`);
   return res.json();
 }

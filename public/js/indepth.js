@@ -242,7 +242,12 @@ export function mountInDepth(plate, { sky, field }) {
   tip.hidden = true;
   const note = el('p', 'indepth__note');
   note.hidden = true;
-  root.append(canvas, tags, legend, corner, kinds, tip, note);
+  // While the catalogues are asked, a line over the corridor says so: on a
+  // plate too small for the legend to open, nothing did for a dozen seconds.
+  const busy = el('p', 'indepth__busy');
+  busy.setAttribute('role', 'status');
+  busy.hidden = true;
+  root.append(canvas, tags, legend, corner, kinds, tip, note, busy);
   plate.append(root);
   // The corridor is the picture: the account of what is placed by what opens by itself only on a large plate.
   legend.open = plate.clientWidth >= 720 && plate.clientHeight >= 560;
@@ -1011,6 +1016,8 @@ export function mountInDepth(plate, { sky, field }) {
       legendBody.append(again);
     }
     if (asking) legendBody.append(el('p', 'indepth__fine', t('indepth.asking')));
+    busy.hidden = !asking;
+    if (asking) busy.textContent = t('indepth.asking');
     // The names over the corridor step round the panels, which have just changed size.
     queueMicrotask(() => { dirty = true; invalidate(); });
   }

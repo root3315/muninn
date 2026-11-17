@@ -36,7 +36,7 @@ import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parseVOTable } from './public/js/votable.js';
-import { frameFromRow } from './public/js/catalog.js';
+import { frameFromRow, SESAME, SIMBAD_TAPS, simbadNearQuery, simbadFieldQuery } from './public/js/catalog.js';
 import { COLLECTIONS } from './public/js/release.js';
 import { parseCsv } from './public/js/csv.js';
 import { CATALOGUES, ROW_CAP, coneQuery, renameRow, mastGaiaRows, columnsTag } from './public/js/overlay.js';
@@ -109,6 +109,7 @@ const CACHE_MAX_BYTES = envMs('MUNINN_CACHE_MAX_BYTES', 300 * 1024 * 1024);
 const TAP_TIMEOUT_MS = 75_000;
 /** JPL's second pass takes 20–70 s on a crowded ecliptic field. */
 const SBIDENT_TIMEOUT_MS = 120_000;
+const SBIDENT_KEEP_MS = 30 * 24 * 3600 * 1000;
 /**
  * A position the archive has not seen before routinely takes 70 s or more. The
  * answer keeps its connection alive while it waits (see answerSlowly), so
@@ -790,21 +791,44 @@ const POOL_MAX = { search: 6, catalog: 8, jpl: 3, wise: 3, names: 3 };
 const pools = Object.fromEntries(Object.keys(POOL_MAX).map((k) => [k, new Set()]));
 
 /**
+ * How many questions may wait for a slot, per kind, instead of being answered
+ * "busy" at once. JPL's sb_ident takes 20 to 70 s a question, and a field with
+ * twenty visits asks twenty; two pages on WISE 0855 filled the three slots
+ * and every other question came back 503, again and again, though each would
+ * have had its turn within a minute or two. Now they queue (the answer starts
+ * at once and stays alive, answerSlowly), and only a queue this long is busy.
+ */
+const QUEUE_MAX = { jpl: 40, names: 12 };
+const waiting = Object.fromEntries(Object.keys(POOL_MAX).map((k) => [k, []]));
+
+/** Run `ask` in a slot of `pool`, waiting in line for one. */
+async function inPool(pool, key, ask) {
+  while (pools[pool].size >= POOL_MAX[pool]) await new Promise((go) => waiting[pool].push(go));
+  pools[pool].add(key);
+  try {
+    return await ask();
+  } finally {
+    pools[pool].delete(key);
+    waiting[pool].shift()?.();
+  }
+}
+
+/**
  * A question for an archive, answered from the cache, by joining the same
  * question already out, or by asking. `ask` caches its own answer, since only
  * it knows whether the answer is whole.
  */
-async function relay(res, key, ask, pool = 'catalog', keep = KEEP_PRIVATE) {
-  const cached = await readCache(key);
+async function relay(res, key, ask, pool = 'catalog', keep = KEEP_PRIVATE, keepMs = CACHE_TTL_MS) {
+  const cached = (await readEntry(key, keepMs))?.value;
   if (cached) return json(res, 200, { ok: true, cached: true, ...cached }, keep);
 
   let pending = inflight.get(key);
-  if (!pending && pools[pool].size >= POOL_MAX[pool]) {
-    return json(res, 503, { ok: false, error: 'The archive relay is busy with other questions; try again in a moment.' });
+  const full = pools[pool].size >= POOL_MAX[pool];
+  if (!pending && full && waiting[pool].length >= (QUEUE_MAX[pool] ?? 0)) {
+    return json(res, 503, { ok: false, error: 'The archive relay is busy with other questions; try again in a moment.' }, { 'retry-after': '20' });
   }
   if (!pending) {
-    pools[pool].add(key);
-    pending = ask().finally(() => { inflight.delete(key); pools[pool].delete(key); });
+    pending = inPool(pool, key, ask).finally(() => inflight.delete(key));
     inflight.set(key, pending);
   }
   return answerSlowly(res, pending);
@@ -1088,6 +1112,77 @@ function askGalaxies({ ra, dec, radiusDeg }) {
     return { rows: body.data, via };
   });
   return firstOf([ask(DEPTH_UPSTREAM.simbadCds, 'SIMBAD CDS'), ask(DEPTH_UPSTREAM.simbadCfa, 'SIMBAD CfA')]);
+}
+
+/* ------------------------------------------ names and SIMBAD, for the page */
+
+/**
+ * What the page asks of CDS, through the box: a name of Sesame, and SIMBAD's
+ * two questions (catalog.js simbadNearQuery, simbadFieldQuery).
+ *
+ *   ask=sesame&name=…           a name; letters, digits and . + - ' ( ) * [ ] / : _ only
+ *   ask=near&ra&dec&r=<arcsec>  the brightest object within r (1–60″) of a mark
+ *   ask=field&ra&dec&r=<deg>    a field's notable objects within r (0.005–1°)
+ *
+ * The browser cannot read CDS itself: its Sesame now redirects to a mirror
+ * that sends no CORS headers, and its SIMBAD sends none either. The box asks
+ * CDS and the CfA mirror at once and takes the first answer, as the page
+ * did. Nothing in the request names a host or writes the query: the query is
+ * the page's own, built here from the checked numbers. A name is kept for a
+ * month; SIMBAD's answer about a place for a week.
+ */
+const CDS_UPSTREAM = {
+  sesame: (process.env.MUNINN_SESAME_URLS || SESAME.join(' ')).split(/\s+/).filter(Boolean),
+  simbad: (process.env.MUNINN_SIMBAD_URLS || SIMBAD_TAPS.join(' ')).split(/\s+/).filter(Boolean),
+};
+const CDS_TIMEOUT_MS = 25_000;
+const NAMES_KEEP_MS = 30 * 24 * 3600 * 1000;
+const SIMBAD_KEEP_MS = 7 * 24 * 3600 * 1000;
+const NAME_TEXT = /^[\p{L}\p{N}\p{M}'’ .+*()[\]/:_,-]{1,80}$/u;
+
+async function handleCds(url, res) {
+  const ask = url.searchParams.get('ask') ?? '';
+  if (ask === 'sesame') {
+    const name = (url.searchParams.get('name') ?? '').replace(/\s+/g, ' ').trim();
+    if (!NAME_TEXT.test(name)) return json(res, 400, { ok: false, error: 'name: up to 80 letters, digits and . + - ( ) only' });
+    const key = `sesame_${createHash('sha1').update(name.toLowerCase()).digest('hex').slice(0, 20)}`;
+    return relay(res, key, () => askSesameNow(name, key), 'names', KEEP_PRIVATE, NAMES_KEEP_MS);
+  }
+  if (ask !== 'near' && ask !== 'field') return json(res, 400, { ok: false, error: 'ask must be sesame, near or field' });
+  const at = position(url);
+  if (!at) return json(res, 400, BAD_POSITION);
+  const r = param(url, 'r');
+  const [lo, hi] = ask === 'near' ? [1, 60] : [0.005, 1];
+  if (!(r >= lo && r <= hi)) return json(res, 400, { ok: false, error: `r must be ${lo}–${hi}` });
+  const query = ask === 'near' ? simbadNearQuery(at.ra, at.dec, r) : simbadFieldQuery(at.ra, at.dec, r);
+  const key = safeKey(`simbad_${ask}_${at.ra.toFixed(6)}_${at.dec.toFixed(6)}_${r}`);
+  return relay(res, key, () => askSimbadNow(query, key), 'catalog', KEEP_PRIVATE, SIMBAD_KEEP_MS);
+}
+
+async function askSesameNow(name, key) {
+  const text = await firstOf(CDS_UPSTREAM.sesame.map((base) => withTimeout(base + encodeURIComponent(name), CDS_TIMEOUT_MS)
+    .then(async (r2) => {
+      const body = await r2.text();
+      // A mirror's error page is not Sesame's "not found".
+      if (!r2.ok || !/^#/m.test(body)) throw new Error(`Sesame ${r2.status}`);
+      return body;
+    })));
+  const payload = { text };
+  await writeCache(key, payload);
+  return { ok: true, cached: false, ...payload };
+}
+
+async function askSimbadNow(adql, key) {
+  const query = new URLSearchParams({ request: 'doQuery', lang: 'adql', format: 'json', query: adql });
+  const answer = await firstOf(CDS_UPSTREAM.simbad.map((base) => withTimeout(`${base}?${query}`, CDS_TIMEOUT_MS)
+    .then(async (r2) => {
+      const body = r2.ok ? await r2.json().catch(() => null) : null;
+      if (!Array.isArray(body?.data)) throw new Error(`SIMBAD ${r2.status}`);
+      return { metadata: body.metadata, data: body.data };
+    })));
+  const payload = { answer, via: 'SIMBAD' };
+  await writeCache(key, payload);
+  return { ok: true, cached: false, ...payload };
 }
 
 /* ------------------------------------------------------- Gaia DR3 at MAST */
@@ -1935,7 +2030,10 @@ async function handleSbIdent(url, res) {
     magLimit: Math.round(clamp(param(url, 'mag') || 20, 10, 25)),
   };
   const key = safeKey(`sbid_${field.ra.toFixed(4)}_${field.dec.toFixed(4)}_${field.halfWidthDeg.toFixed(4)}_${field.iso}_${field.magLimit}`);
-  return relay(res, key, () => askJpl(field, key), 'jpl');
+  // Where the known bodies stood at a past instant does not change, short of a
+  // new discovery: an answer is kept for weeks, and a field opened again, by
+  // anyone, does not queue at JPL for it.
+  return relay(res, key, () => askJpl(field, key), 'jpl', KEEP_PRIVATE, SBIDENT_KEEP_MS);
 }
 
 async function askJpl(field, key) {
@@ -2087,20 +2185,37 @@ async function serveStatic(pathname, req, res, asked = null) {
   const rel = normalize(decoded).replace(/^([/\\])+/, '');
   if (rel.split(/[\\/]/).includes('..')) return send(res, 403, 'Forbidden');
 
-  const target = join(PUBLIC, rel === '' ? 'index.html' : rel);
+  let target = join(PUBLIC, rel === '' ? 'index.html' : rel);
   if (!target.startsWith(PUBLIC + sep) && target !== join(PUBLIC, 'index.html')) {
     return send(res, 403, 'Forbidden');
   }
   let file;
+  let hashed = null;
   try {
     file = await loadStatic(target);
   } catch {
-    return send(res, 404, 'Not found', { 'content-type': 'text/plain; charset=utf-8' });
+    const alias = dataAlias(rel);
+    // The file the hash names; failing that, the first there is, not kept.
+    for (const path of alias?.paths ?? []) {
+      const found = await loadStatic(join(PUBLIC, path)).catch(() => null);
+      if (!found) continue;
+      const same = contentHash(found) === alias.hash;
+      if (!file || same) {
+        file = found;
+        target = join(PUBLIC, path);
+        hashed = alias.hash;
+      }
+      if (same) break;
+    }
+    if (!file) return send(res, 404, 'Not found', { 'content-type': 'text/plain; charset=utf-8' });
   }
   const ext = extname(target);
+  const policy = hashed
+    ? (contentHash(file) === hashed ? IMMUTABLE : 'no-cache')
+    : await keptForGood(rel, asked, file) ? IMMUTABLE : cachePolicy(rel);
   const headers = {
     'content-type': TYPES[ext] ?? 'application/octet-stream',
-    'cache-control': await keptForGood(rel, asked, file) ? IMMUTABLE : cachePolicy(rel),
+    'cache-control': policy,
     etag: file.etag,
     vary: 'accept-encoding',
   };
@@ -2113,6 +2228,27 @@ async function serveStatic(pathname, req, res, asked = null) {
   if (file.gzip && /\bgzip\b/.test(accepts)) return send(res, 200, file.gzip, { ...headers, 'content-encoding': 'gzip' });
   return send(res, 200, file.raw, headers);
 }
+
+/**
+ * A data file under its hashed name (tools/name-data.mjs): `data/x.<hash>.bin`
+ * is data/x.json (or data/x.bin), `data/x.<hash>.png` is data/x.png.
+ * Cloudflare keeps a .bin at its edge and never a .json, so the page asks for
+ * its data under these names. Answered with the file as it is now: kept for
+ * good when its hash is the one asked for, and `no-cache` when the file has
+ * changed since the name was written, so the edge never keeps new bytes
+ * under an old name.
+ */
+const DATA_ALIAS = /^data\/([\w./-]+)\.([0-9a-f]{10})\.(bin|png|jpg)$/;
+
+function dataAlias(rel) {
+  const m = DATA_ALIAS.exec(rel.replace(/\\/g, '/'));
+  if (!m) return null;
+  const [, stem, hash, ext] = m;
+  return { paths: ext === 'bin' ? [`data/${stem}.json`, `data/${stem}.bin`] : [`data/${stem}.${ext}`], hash };
+}
+
+/** The first ten hex digits of a file's sha256, worked out once per file read. */
+const contentHash = (file) => (file.sha256 ??= createHash('sha256').update(file.raw).digest('hex').slice(0, 10));
 
 /**
  * Text is sent compressed. The page's own code is 700 KB as written and about
@@ -2332,6 +2468,7 @@ const server = createServer(async (req, res) => {
     if (url.pathname === '/api/search') return await handleSearch(url, res);
     if (url.pathname === '/api/tap') return await handleTap(url, res);
     if (url.pathname === '/api/depth') return await handleDepth(url, res);
+    if (url.pathname === '/api/cds') return await handleCds(url, res);
     if (url.pathname === '/api/sbident') return await handleSbIdent(url, res);
     if (url.pathname === '/api/smallbody') return await handleSmallBody(url, req, res);
     if (url.pathname === '/api/sbdb') return await handleSbdb(url, req, res);
@@ -2390,7 +2527,9 @@ async function sweepCache() {
       // The cube's tiles, for as long as the frame lists: a release does not change.
       // A frame's blocks, for as long as there is room: they go by their ceiling alone.
       if (name.startsWith('frame_')) { keptFrames.push({ file, at: info.mtimeMs, size: info.size }); continue; }
-      const keep = name.startsWith('frames_') || name.startsWith('hips_') ? SEARCH_KEEP_MS : name.startsWith('depth_') ? DEPTH_KEEP_MS : CACHE_TTL_MS;
+      const keep = name.startsWith('frames_') || name.startsWith('hips_') ? SEARCH_KEEP_MS
+        : name.startsWith('depth_') ? DEPTH_KEEP_MS : name.startsWith('sbid_') ? SBIDENT_KEEP_MS
+          : name.startsWith('sesame_') ? NAMES_KEEP_MS : name.startsWith('simbad_') ? SIMBAD_KEEP_MS : CACHE_TTL_MS;
       if (now - info.mtimeMs > keep) await unlink(file);
       else (name.startsWith('hips_') ? keptTiles : kept).push({ file, at: info.mtimeMs, size: info.size });
     } catch { /* gone already, or busy: the next sweep has it */ }

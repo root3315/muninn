@@ -14,6 +14,7 @@
 import { setLanguage, getLanguage, t, applyTranslations, fmt } from './i18n.js';
 import { parseCoordinates, resolveSesame, formatRA, formatDec } from './catalog.js';
 import { encodeHash } from './hash.js';
+import { FIELD_LIST } from './datafiles.js';
 import { openInTool, embedded, goTo } from './embed.js';
 import { createSkyView, FOV_MIN, FOV_MAX } from './allsky/view.js';
 import { galacticOf } from './allsky/maps.js';
@@ -441,7 +442,7 @@ function fovText(fov) {
 /* ---- the ready fields, as rings ---------------------------------------- */
 
 let fields = [];
-fetch('data/fields/index.json').then((r) => (r.ok ? r.json() : [])).then((list) => {
+Promise.resolve(FIELD_LIST).then((list) => {
   fields = list.map((f) => {
     const a = document.createElement('a');
     a.className = 'as-ring';

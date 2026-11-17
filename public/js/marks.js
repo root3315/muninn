@@ -553,6 +553,20 @@ export function sharpWords(a) {
  * the mark sits on it.
  */
 export function saturatedMotion(m, tg) {
+  const s = saturatedShift(m, tg);
+  if (!s) return null;
+  return t(s.shift < DETECTOR_ARCSEC ? 'mark.saturatedUnder' : 'mark.saturatedOver', {
+    pm: fmt(s.pm, s.pm < 1 ? 2 : 1), shift: fmt(s.shift, 1), days: fmt(s.days, 0),
+    px: fmt(DETECTOR_ARCSEC, 2), n: fmt(s.shift / DETECTOR_ARCSEC, 1),
+  });
+}
+
+/**
+ * The numbers behind saturatedMotion: the catalogue motion (″/yr), how far
+ * it carried the source over the visits (″), and over how many days; null
+ * where there is no saturated source with a known, fast motion.
+ */
+export function saturatedShift(m, tg) {
   const a = m.analysis;
   if (a?.kind !== 'saturated' || !(a.spanDays > 0)) return null;
   const r = whoSoFar(m);
@@ -564,11 +578,7 @@ export function saturatedMotion(m, tg) {
   const pm = Math.hypot(source.pmRA, source.pmDE) / 1000;
   // An ordinary star's motion rounds to nothing here; only a fast one is worth a line.
   if (pm < 0.1) return null;
-  const shift = (pm * a.spanDays) / 365.25;
-  return t(shift < DETECTOR_ARCSEC ? 'mark.saturatedUnder' : 'mark.saturatedOver', {
-    pm: fmt(pm, pm < 1 ? 2 : 1), shift: fmt(shift, 1), days: fmt(a.spanDays, 0),
-    px: fmt(DETECTOR_ARCSEC, 2), n: fmt(shift / DETECTOR_ARCSEC, 1),
-  });
+  return { pm, shift: (pm * a.spanDays) / 365.25, days: a.spanDays };
 }
 
 /**

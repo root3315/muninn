@@ -5,6 +5,7 @@
  */
 import { nearestHost } from './catalog.js';
 import { deadline, CATALOG_DEADLINE_MS } from './net.js';
+import { fetchData } from './datafiles.js';
 
 /** Where a star's planetary system is shown. */
 export const EXOVISION_URL = 'https://exovision.mydevbox.xyz';
@@ -19,7 +20,7 @@ let planetHosts = null;
  * [ra, dec, planets, name, letters], or null.
  */
 export async function planetHostNear(ra, dec, reach = HOST_REACH_ARCSEC) {
-  planetHosts ??= fetch('data/planet-hosts.json', { signal: deadline(null, CATALOG_DEADLINE_MS) })
+  planetHosts ??= fetchData('data/planet-hosts.json', { signal: deadline(null, CATALOG_DEADLINE_MS) })
     .then((r) => (r.ok ? r.json() : { hosts: [] }))
     .then((body) => body.hosts ?? [])
     .catch(() => { planetHosts = null; return []; });

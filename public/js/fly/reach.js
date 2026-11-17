@@ -2,7 +2,10 @@
  * reach.js — how far SPHEREx can see a cold body, from numbers this project
  * already stands behind.
  *
- *   D6 one-visit limit   16.7 AB   measured on the tool's own frames (README)
+ *   D6 one-visit limit   16.58 AB  measured on the WISE 0855 field's own 17
+ *                                  D6 visits: the detector noise its field
+ *                                  page quotes (depth.js stackDepth), so the
+ *                                  card here and the field say 16.6 and 18.1
  *   WISE 0855−0714       W2 ≈ 13.9 Vega ≈ 17.2 AB at 2.28 pc (parallax
  *                        439 mas, Kirkpatrick et al. 2021)
  *   a stack of N visits  deeper by 2.5·log10(√N), the noise of a mean
@@ -19,7 +22,7 @@
 
 import { PLANET_NINE_V, PLANET_NINE_AU, PLANET_NINE_MAX_BETA } from '../depth.js';
 
-export const D6_ONE_VISIT_AB = 16.7;
+export const D6_ONE_VISIT_AB = 16.58;
 export const WISE0855_AB = 17.2;
 export const WISE0855_PC = 1000 / 439;
 /** Visits of the WISE 0855 field in the archive (targets.json). */

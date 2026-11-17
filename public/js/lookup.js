@@ -6,7 +6,7 @@
  */
 
 import { resolveSesame, resolveSmallBody } from './catalog.js';
-import { smallBodyQuery } from './smallbody.js';
+import { smallBodyQuery, bodyMatchesText } from './smallbody.js';
 
 /** SIMBAD's object types, as the kinds the list names. */
 const GALAXY = /^(G|G\?|GiG|GiC|GiP|BiC|IG|PaG|SBG|SyG|Sy1|Sy2|AGN|AG\?|LIN|H2G|EmG|rG|LSB|bCG|SCG|ClG|GrG|CGG|PoG|BClG|C\?G|Gr\?|Gx|LeG)$/;
@@ -61,7 +61,7 @@ export async function lookUp(text, { signal } = {}) {
     missed.push('sesame');
   }
   if (jpl.status === 'fulfilled' && jpl.value) {
-    for (const body of jpl.value.bodies) {
+    for (const body of jpl.value.bodies.filter((b) => bodyMatchesText(text, b.name))) {
       rows.push({
         kind: 'smallbody', label: body.name, ra: body.ra, dec: body.dec, day: jpl.value.day,
         ref: body, remote: true,

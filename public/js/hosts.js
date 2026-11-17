@@ -10,6 +10,7 @@
  */
 
 import { fold } from './suggest.js';
+import { fetchData } from './datafiles.js';
 
 /** The key a name is found by: folded, with spaces, hyphens, dots and quotes gone. */
 export const hostKey = (text) => fold(text).replace(/[\s·.'’()_-]+/g, '');
@@ -87,7 +88,7 @@ export function hostRows(text, index, max = 8) {
 let loading = null;
 
 /** The index, fetched and built once per page. An empty one if the file is missing. */
-export function loadHostIndex(fetcher = fetch) {
+export function loadHostIndex(fetcher = fetchData) {
   loading ??= fetcher('data/planet-hosts.json')
     .then((r) => (r.ok ? r.json() : { hosts: [] }))
     .then((body) => indexHosts(body.hosts ?? []))

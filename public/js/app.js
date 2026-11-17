@@ -34,6 +34,7 @@ import { seasonChunks, chunkAt, forStack, averaged } from './stack.js';
 import { TangentGrid, separation, deltaRA } from './wcs.js';
 import { loadStamp, loadWavelength, knowFile } from './stamp.js';
 import { bakedOrLive, cardsOf } from './fieldstore.js';
+import { fetchData, FIELD_LIST, BAKED_FIELDS } from './datafiles.js';
 import { motionOf, visitPool, chooseMeasured, visitPoint, placeInBand, channelOverlap } from './spectrum.js';
 import { spectrumBlock } from './spectrum-view.js';
 import { trackCSV } from './export.js';
@@ -41,7 +42,7 @@ import { SkyView, shortName } from './sky.js';
 import {
   measureLink, planLink, markCall, skybotVerdict as skybotVerdictOf, skybotLine as skybotLineOf, skybotTone, seenAt,
   matchArcsec, identifyMark as identifyMarkOf, tagOf, STILL, whoWords, verdict, sharpWords,
-  saturatedMotion as saturatedMotionOf, linkArc, linkWords, pct, predictedWords, peaksOf, brightnessWords,
+  saturatedMotion as saturatedMotionOf, saturatedShift, linkArc, linkWords, pct, predictedWords, peaksOf, brightnessWords,
   brightNeighbourWords,
 } from './marks.js';
 import { brightStars } from './brightstars.js';
@@ -55,7 +56,7 @@ import {
   searchFrames, searchAhead, askMissingFrames, askLiveFrames, NoRelayError, UpstreamError, groupVisits, findHeldVisit, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, fieldObjects, toS3, surveySources,
 } from './catalog.js';
-import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP } from './overlay.js';
+import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP, propagate, epochOfMjd } from './overlay.js';
 import { spread, nextVisits, mergeFrames, mergeVisits, VISITS_PER_BATCH } from './visits.js';
 import { encodeHash, decodeHash, FOV_CHOICES } from './hash.js';
 import { buildIndex, suggest } from './suggest.js';
@@ -380,14 +381,7 @@ async function readStampNow(url, grid, { signal, onHeader } = {}) {
  * of a few reads of a 70 MB file at the archive; the stamp it gives is the
  * same, so nothing after the read knows the difference.
  */
-const bakes = { index: null, manifests: new Map(), byUrl: new Map() };
-
-function bakeIndex() {
-  bakes.index ??= fetch('data/fields/baked.json', { signal: deadline(null, CATALOG_DEADLINE_MS) })
-    .then((r) => (r.ok ? r.json() : {}))
-    .catch(() => { bakes.index = null; return {}; });
-  return bakes.index;
-}
+const bakes = { manifests: new Map(), byUrl: new Map() };
 
 /**
  * The manifest of the ready-made field at this spot in this band, its visits
@@ -396,12 +390,12 @@ function bakeIndex() {
  */
 async function loadBake(ra, dec, band) {
   const cos = Math.cos((dec * Math.PI) / 180);
-  const [key, field] = Object.entries(await bakeIndex())
+  const [key, field] = Object.entries(BAKED_FIELDS)
     .find(([, f]) => Math.hypot(deltaRA(f.ra, ra) * cos, f.dec - dec) < 0.01) ?? [];
   if (!field?.bands?.[band]) return null;
   const at = `${key}/${band}`;
   if (!bakes.manifests.has(at)) {
-    const asked = fetch(`data/fields/${at}/manifest.json`, { signal: deadline(null, CATALOG_DEADLINE_MS) })
+    const asked = fetchData(`data/fields/${at}/manifest.json`, { signal: deadline(null, CATALOG_DEADLINE_MS) })
       .then((r) => (r.ok ? r.json() : null))
       .then((manifest) => {
         if (!Array.isArray(manifest?.visits)) return null;
@@ -861,9 +855,9 @@ function bodiesLine() {
 /* ----------------------------------------------------------------- presets */
 
 async function loadPresets() {
-  for (const url of ['data/targets.json', 'api/targets']) {
+  for (const ask of [fetchData, fetch]) {
     try {
-      const res = await fetch(url, { signal: deadline(null, CATALOG_DEADLINE_MS) });
+      const res = await ask(ask === fetch ? 'api/targets' : 'data/targets.json', { signal: deadline(null, CATALOG_DEADLINE_MS) });
       if (!res.ok) continue;
       const body = await res.json();
       if (Array.isArray(body.targets) && body.targets.length) {
@@ -903,14 +897,11 @@ async function readyFieldsIndex() {
   const field = (key, ra, dec) => ({
     key, ra, dec, fov: 0.3, band: bands.get(key) ?? 'all', ...(CHALLENGE_FIELDS.has(key) ? { group: 'challenge' } : {}),
   });
-  try {
-    const res = await fetch('data/fields/index.json', { signal: deadline(null, CATALOG_DEADLINE_MS) });
-    const index = res.ok ? await res.json() : null;
-    if (Array.isArray(index) && index.length) {
-      return index.filter((f) => f.key && Number.isFinite(f.ra) && Number.isFinite(f.dec))
-        .map((f) => field(f.key, f.ra, f.dec));
-    }
-  } catch { /* the page's own list */ }
+  // The frame indexes' own list travels with the code (datanames.js).
+  if (FIELD_LIST.length) {
+    return FIELD_LIST.filter((f) => f.key && Number.isFinite(f.ra) && Number.isFinite(f.dec))
+      .map((f) => field(f.key, f.ra, f.dec));
+  }
   return READY_FIELDS.map(([key, ra, dec]) => field(key, ra, dec));
 }
 
@@ -2299,7 +2290,9 @@ async function prefetchKnownObjects(signal) {
   // question needs a date and a place, and both are known from the index. Asked
   // while the frames are still being read, the answers are mostly in by the
   // time the pictures are.
-  const shown = sky.current?.frame;
+  // The visit on screen first, or before any is, the one the field will open on:
+  // Atala's own night named before the others, not after.
+  const shown = sky.current?.frame ?? state.allVisits[state.wantVisit ?? state.leadVisit];
   const pending = plannedVisits()
     .filter((v) => !sky.knownObjects.has(v.frame.obsId) && !skybot.asking.has(v.frame.obsId))
     .sort((a, b) => (b.frame === shown) - (a.frame === shown));
@@ -4006,12 +3999,20 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   if (wanted && !chosen.includes(wanted)) chosen.push(wanted);
   // Without one, a preset leads with the visit its card shows.
   if (!wanted) {
-    const lead = await presetLead(ra, dec, state.allVisits);
+    const { index: lead, hold } = await presetLead(ra, dec, state.allVisits);
     if (ctrl.signal.aborted) return;
     const first = state.allVisits[lead];
     if (first) {
       state.leadVisit = lead;
       if (!chosen.includes(first)) chosen.push(first);
+      // A preset that is about one night ((152) Atala, dead centre on 25 Dec
+      // 2025 and nowhere else) opens held on that night, as a link holding it
+      // would: blinking from it, the field was on 3 Jan by the time anyone
+      // looked, with Atala nowhere on it.
+      if (hold) {
+        state.wantVisit = visit = lead;
+        writeHash();
+      }
     }
   }
   chosen.sort((p, q) => p.mjd - q.mjd);
@@ -4357,6 +4358,42 @@ function recordBlink(btn) {
  * point of saying how deep the search went — so it is stated rather than left
  * blank.
  */
+/**
+ * A challenge target's own case, for the headline: a star with a catalogue
+ * motion is read at its place across the visits as a mark would be, and a
+ * saturated one says so, with how far its motion carried it against the
+ * detector's pixel. Barnard's Star's headline spoke only of solar-system
+ * movers, and why its own 10″ a year cannot be seen here waited for someone
+ * to mark it. Null for anything else, or until three visits are in.
+ */
+let targetCaseFor = null;
+function targetCase() {
+  const tg = state.target;
+  if (!tg || !Number.isFinite(tg.pmRA) || !Number.isFinite(tg.pmDE) || !Number.isFinite(tg.epoch) || !sky?.grid) return null;
+  if (sky.visits.length < 3) return null;
+  const key = `${tg.ra},${tg.dec},${sky.visits.length}`;
+  if (targetCaseFor?.key === key) return targetCaseFor.text;
+  const mid = sky.visits.reduce((s, v) => s + v.frame.mjd, 0) / sky.visits.length;
+  const at = propagate(tg, epochOfMjd(mid), tg.epoch);
+  const mark = { ra: at.ra, dec: at.dec, analysis: sky.trackMark(at.ra, at.dec) };
+  const a = mark.analysis;
+  let text = null;
+  if (a.kind === 'saturated') {
+    // A short headline, and the arithmetic under it: seven lines of display
+    // type read as a wall, not as an answer.
+    const s = saturatedShift(mark, tg);
+    const words = { name: tg.label ?? '', n: a.saturated, total: a.total };
+    text = {
+      head: t('verdict.targetSaturated', words),
+      detail: s ? t(s.shift < DETECTOR_ARCSEC ? 'verdict.targetShiftUnder' : 'verdict.targetShiftOver', {
+        pm: fmt(s.pm, s.pm < 1 ? 2 : 1), shift: fmt(s.shift, 1), days: fmt(s.days, 0), px: fmt(s.shift / DETECTOR_ARCSEC, 1),
+      }) : '',
+    };
+  }
+  targetCaseFor = { key, text };
+  return text;
+}
+
 function renderVerdict() {
   const line = $('verdict');
   const ready = state.visits.filter((v) => v.status === 'ready');
@@ -4382,14 +4419,28 @@ function renderVerdict() {
     // no place for "probably nothing". A known asteroid caught is a finding.
     const moved = found.list?.length ?? 0;
     const caught = [...new Set((state.caught ?? []).map((c) => c.catalog.name))];
+    // The body a preset is named for comes first and by name: the Atala field
+    // said "Caught 3 known asteroids", or named whichever was brightest.
+    const presetName = presetAt(state.ra, state.dec)?.name ?? '';
+    const own = caught.find((name) => presetName.startsWith(name));
     const flashes = found.flashes?.filter((c) => !c.tooSharp).length ?? 0;
     line.textContent = moved
       ? t('verdict.moved', { n: moved })
-      : caught.length
-        ? t(caught.length === 1 ? 'verdict.caught' : 'verdict.caughtMany', { name: caught[0], n: caught.length })
+      : own && caught.length > 1
+        ? t('verdict.caughtOwn', { name: own, n: caught.length - 1 })
+        : caught.length
+        ? t(caught.length === 1 ? 'verdict.caught' : 'verdict.caughtMany', { name: own ?? caught[0], n: caught.length })
         : flashes && !skybotSettled()
           ? t('verdict.flashesOpen', { n: flashes })
           : t('verdict.still');
+    // A challenge target's own case goes first; the solar-system answer after it.
+    const ownCase = targetCase();
+    const sub = $('verdict-sub');
+    sub.hidden = !ownCase;
+    if (ownCase) {
+      sub.textContent = [ownCase.detail, line.textContent].filter(Boolean).join(' ');
+      line.textContent = ownCase.head;
+    }
     // The signal colour is for what nobody has catalogued; a known asteroid
     // caught is the check working, not a discovery.
     line.dataset.found = String(moved > 0);
@@ -4513,7 +4564,7 @@ function nameOnSky(hit) {
 let cardThumbs = null;
 /** The stored card frames, fields and sky, asked for once. */
 const loadThumbs = () => (cardThumbs ? Promise.resolve(cardThumbs) : Promise.all(['data/thumbs.json', 'data/sky/thumbs.json'].map((url) => (
-  fetch(url, { signal: deadline(null, CATALOG_DEADLINE_MS) }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}))
+  fetchData(url, { signal: deadline(null, CATALOG_DEADLINE_MS) }).then((r) => (r.ok ? r.json() : {})).catch(() => ({}))
 ))).then(([fields, deep]) => { cardThumbs ??= { fields, deep }; return cardThumbs; }));
 
 /**
@@ -4523,10 +4574,15 @@ const loadThumbs = () => (cardThumbs ? Promise.resolve(cardThumbs) : Promise.all
  */
 async function presetLead(ra, dec, visits) {
   const preset = presetAt(ra, dec);
-  if (!preset) return -1;
+  if (!preset) return { index: -1, hold: false };
   const thumb = (await loadThumbs()).fields?.[preset.key];
   const mjd = thumb?.iso ? Date.parse(`${thumb.iso}Z`) / 86400000 + 40587 : NaN;
-  return Number.isFinite(mjd) ? findHeldVisit(visits, { mjd, band: thumb.band }) : -1;
+  // A card that blinks its night against one other (thumbs.json `blink`) is
+  // about that night: the field is held on it rather than blinked from it.
+  return {
+    index: Number.isFinite(mjd) ? findHeldVisit(visits, { mjd, band: thumb.band }) : -1,
+    hold: Boolean(thumb?.blink),
+  };
 }
 /** The frame lists of ready fields, asked for once each. */
 const cardFields = new Map();
@@ -4538,7 +4594,7 @@ const BLINK_CARD_MS = 900;
 
 function fieldIndex(key) {
   if (!cardFields.has(key)) {
-    cardFields.set(key, fetch(`data/fields/${key}.json`, { signal: deadline(null, CATALOG_DEADLINE_MS) })
+    cardFields.set(key, fetchData(`data/fields/${key}.json`, { signal: deadline(null, CATALOG_DEADLINE_MS) })
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null));
   }
@@ -4594,8 +4650,9 @@ async function showFieldPlanets() {
     return;
   }
   // No known planets: the field's star can still be searched for transits.
-  // Only a named target is a star to search; a field's middle is just sky.
-  if (!state.target) return;
+  // Only a named target is a star to search; a field's middle is just sky,
+  // and a brown dwarf (WISE 0855, ε Indi B) is no star for a TESS transit search.
+  if (!state.target || state.target.substellar) return;
   link.href = detectorUrl({ name: label, ra: at.ra, dec: at.dec }, getLanguage());
   link.textContent = t('field.detect');
   link.title = t('field.detectTitle');
@@ -5109,7 +5166,7 @@ let skyLayersAsked = null;
 function loadSkyLayers() {
   skyLayersAsked ??= Promise.all([
     gate.stars ? null : loadStars().catch(() => null),
-    gateDeep ? null : fetch('data/sky/deepsky.json', { signal: deadline(null, CATALOG_DEADLINE_MS) })
+    gateDeep ? null : fetchData('data/sky/deepsky.json', { signal: deadline(null, CATALOG_DEADLINE_MS) })
       .then((r) => (r.ok ? r.json() : null)).catch(() => null),
   ]).then(([stars, deep]) => {
     if (stars) gate.setStars(stars);
@@ -5906,11 +5963,27 @@ function inDepthChosen() {
   return document.querySelector('input[name="mode"][value="depth"]')?.checked === true;
 }
 
+/** The plate's line while the 3-D view's code is on the way, or null. */
+let inDepthWait = null;
+function waitForInDepth(on) {
+  if (!on) { inDepthWait?.remove(); inDepthWait = null; return; }
+  if (inDepthWait) return;
+  inDepthWait = document.createElement('p');
+  inDepthWait.className = 'indepth-wait';
+  inDepthWait.setAttribute('role', 'status');
+  inDepthWait.dataset.i18n = 'indepth.loading';
+  inDepthWait.textContent = t('indepth.loading');
+  $('plate').append(inDepthWait);
+}
+
 function showInDepth(on) {
-  if (!on) { inDepth?.unmount(); inDepth = null; return; }
+  if (!on) { waitForInDepth(false); inDepth?.unmount(); inDepth = null; return; }
   if (inDepth) { inDepth.update(); return; }
+  // The module and three.js are a megabyte the first time: said, not a still plate.
+  waitForInDepth(true);
   inDepthModule ??= import('./indepth.js');
   inDepthModule.then((m) => {
+    waitForInDepth(false);
     if (inDepth || !inDepthChosen()) return;
     inDepth = m.mountInDepth($('plate'), {
       sky,
@@ -5918,6 +5991,7 @@ function showInDepth(on) {
     });
   }).catch((err) => {
     console.error(err);
+    waitForInDepth(false);
     inDepthModule = null;
     $('mode-hint').textContent = t('indepth.loadFailed');
   });

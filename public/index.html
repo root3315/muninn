@@ -22,15 +22,14 @@
 <script src="js/theme-boot.js"></script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23171721'/%3E%3Ccircle cx='11' cy='13' r='2.5' fill='%23e6f0f7'/%3E%3Ccircle cx='21' cy='19' r='2.5' fill='%23b9a5f5'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://nasa-irsa-spherex.s3.us-east-1.amazonaws.com" crossorigin>
-<!-- Which fields ship with their frame lists: the first question a link to a
-     field asks, so it is on its way while the page is still being read. -->
-<link rel="preload" href="data/fields/index.json" as="fetch" crossorigin>
 <link rel="preload" href="img/opening.jpg" as="image" fetchpriority="high">
 <link rel="stylesheet" href="css/fonts.css">
 <!-- Every module, named up front: found one import at a time they arrive
      three round trips deep. -->
 <link rel="modulepreload" href="js/app.js">
 <link rel="modulepreload" href="js/catalog.js">
+<link rel="modulepreload" href="js/datafiles.js">
+<link rel="modulepreload" href="js/datanames.js">
 <link rel="modulepreload" href="js/depth.js">
 <link rel="modulepreload" href="js/markfacts.js">
 <link rel="modulepreload" href="js/ephemeris.js">
@@ -442,6 +441,8 @@
          picture, and the picture is the one thing on this page that needs it. -->
     <section class="verdict" aria-label="This field" data-i18n-label="aria.field">
       <h2 class="verdict__line" id="verdict" aria-live="polite"></h2>
+      <!-- A challenge target's own case under a short headline: why its motion can or cannot be seen. -->
+      <p class="verdict__sub" id="verdict-sub" hidden></p>
       <dl class="facts" id="stat-line"></dl>
       <!-- A field on a star with known planets: its system, one press away. -->
       <a class="link field-planets" id="field-planets" rel="noopener" hidden></a>

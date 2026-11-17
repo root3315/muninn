@@ -28,6 +28,7 @@ import { vecOf, radecOf, tileMesh, tileCentre } from './healpix.js';
 import {
   ALLSKY_ORDER, ALLSKY_TILE, ALLSKY_COLUMNS, TILE_PX, HIPS_BASE, allskySlot, allskyUrl, allskyFallback, tileUrl, orderFor, tileDegrees,
 } from './hips.js';
+import { fetchData } from '../datafiles.js';
 import { GALACTIC, mollweide, mollweideInverse, toGalactic, fromGalactic } from './maps.js';
 import { DEEP_GAPS, CORES_MAX, CORE_FOV, CORE_REACH_ARCMIN, coreStars, pickCores, coreSlots } from './fills.js';
 
@@ -873,7 +874,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     if (!coreList) {
       if (!coreAsked) {
         coreAsked = true;
-        fetch('data/sky/stars.json', { cache: 'force-cache' }).then((r) => (r.ok ? r.json() : null)).then((stars) => {
+        fetchData('data/sky/stars.json', { cache: 'force-cache' }).then((r) => (r.ok ? r.json() : null)).then((stars) => {
           if (!stars) return;
           coreList = coreStars(stars);
           coresFor.fov = NaN;

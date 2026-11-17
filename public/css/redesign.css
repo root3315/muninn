@@ -460,6 +460,8 @@ body { font-size: var(--text-base); line-height: 1.5; }
   font-size: var(--text-finding); line-height: 1.22; letter-spacing: -0.01em;
   text-wrap: balance;
 }
+.verdict__sub { margin: 0; font-size: var(--text-sm); line-height: 1.45; color: var(--color-muted); max-inline-size: 42ch; }
+.verdict__sub[hidden] { display: none; }
 .verdict__line[data-state="reading"] { font-family: var(--font-body); font-weight: 500; font-size: 1.0625rem; color: var(--color-muted); }
 .verdict__line[data-found="true"] { color: var(--color-counter); }
 

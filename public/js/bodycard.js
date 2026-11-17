@@ -318,8 +318,9 @@ function fixedNodes(m, { t, fmt, lang, live, onChange }) {
     // a galaxy too small to show its shape; SIMBAD has nothing on it.
     nodes.push(line(t('body.unnamed')));
   }
-  // Any star, planets known or not, can be searched for transits in ExoVision.
-  if (!FAR_FAMILIES.has(family)) {
+  // Any star, planets known or not, can be searched for transits in ExoVision;
+  // a brown dwarf or a planet (SIMBAD's BD*, BD?, Pl) is no star for that.
+  if (!FAR_FAMILIES.has(family) && !/^(BD\*|BD\?|Pl\??)$/.test(simbad?.otype ?? '')) {
     const p = line(`${t('body.detect')} · `);
     const a = document.createElement('a');
     a.className = 'mark__who-name';

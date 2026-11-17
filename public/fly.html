@@ -8,7 +8,7 @@
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#171721">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%23171721'/%3E%3Ccircle cx='11' cy='13' r='2.5' fill='%23e6f0f7'/%3E%3Ccircle cx='21' cy='19' r='2.5' fill='%2356c1f5'/%3E%3C/svg%3E">
-<link rel="preload" href="data/fly/stars.bin" as="fetch" crossorigin>
+<link rel="preload" href="data/fly/stars.8ecd0ea1d2.bin" as="fetch" crossorigin>
 <link rel="stylesheet" href="css/fonts.css">
 <link rel="stylesheet" href="css/tokens.css">
 <link rel="stylesheet" href="css/redesign.css">
@@ -23,6 +23,8 @@
 <link rel="modulepreload" href="js/fly/orbits.js">
 <link rel="modulepreload" href="js/exovision.js">
 <link rel="modulepreload" href="js/catalog.js">
+<link rel="modulepreload" href="js/datafiles.js">
+<link rel="modulepreload" href="js/datanames.js">
 <link rel="modulepreload" href="js/ephemeris.js">
 <link rel="modulepreload" href="js/depth.js">
 <link rel="modulepreload" href="js/hash.js">
@@ -57,6 +59,8 @@
   <div class="fly-labels" id="scale-labels"></div>
   <div class="fly-labels" id="pick-labels"></div>
   <p class="as-sky__hint" id="hint"></p>
+  <!-- What the flight is still waiting for: the screen is dark until the stars are in. -->
+  <p class="as-sky__hint fly-loading" id="loading" role="status" aria-live="polite" hidden></p>
   <p class="as-sky__nogl" id="nogl" hidden data-i18n="allsky.noGl"></p>
   <!-- Inside the front page: the way back to its sky, on the very spot its
        "Explore in 3D" stands, so the two read as one control. -->

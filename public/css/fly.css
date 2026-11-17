@@ -289,3 +289,7 @@
 .fly-label { transition: opacity var(--dur-micro) var(--ease-out); }
 .fly-label--picked .fly-label__dot { border-color: oklch(80% 0.14 70); box-shadow: 0 0 0 3px oklch(80% 0.14 70 / 0.18); }
 .fly-label--picked .fly-label__name { color: oklch(86% 0.13 70); font-weight: 600; }
+
+/* What is still loading, in the middle of the dark screen, until it is in. */
+.fly-loading { inset-block-end: auto; inset-block-start: 46%; }
+.fly-loading[hidden] { display: none; }

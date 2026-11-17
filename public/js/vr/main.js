@@ -20,6 +20,7 @@
 import * as THREE from '../vendor/three.module.js';
 import { setLanguage, getLanguage, t } from '../i18n.js';
 import { loadStars } from '../gate.js';
+import { fetchData } from '../datafiles.js';
 import { planetsNow } from '../ephemeris.js';
 import { createSky, SKY_RADIUS } from './sky3d.js';
 import { createCard } from './card.js';
@@ -124,7 +125,7 @@ export async function startVR({ canvas, lang, ui, session: asked = null, context
   ui.status(tv('vr.loadingSky'));
   const [stars, targets] = await Promise.all([
     loadStars().catch(() => null),
-    fetch('data/targets.json').then((r) => (r.ok ? r.json() : { targets: [] })).catch(() => ({ targets: [] })),
+    fetchData('data/targets.json').then((r) => (r.ok ? r.json() : { targets: [] })).catch(() => ({ targets: [] })),
   ]);
   const sky = createSky(stars);
   // The naked-eye stars whose stray light a mark near them is read against, as on the site.

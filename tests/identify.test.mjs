@@ -73,8 +73,8 @@ test('a still star a second off its Gaia position is asked about once', async ()
   }), () => identifySource({ ra: 180, dec: 0, epoch: 2026 }, { onUpdate: (u) => updates.push(u) }));
 
   assert.equal(result.simbad.name, 'HD 3');
-  // One question, sent to both SIMBAD mirrors.
-  assert.equal(calls.simbad, 2);
+  // One question, sent to the CfA's SIMBAD (and to the box, which asks both mirrors).
+  assert.equal(calls.simbad, 1);
   assert.equal(calls.twomass, 1);
   // SIMBAD answered before Gaia: held back, but no longer said to be asked.
   assert.ok(updates.some((u) => u.pending.includes('simbad') && !u.asking.includes('simbad') && u.asking.includes('gaia')));

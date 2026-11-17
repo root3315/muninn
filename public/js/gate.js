@@ -35,6 +35,7 @@
  */
 
 import { createBandLayer } from './gate-band.js';
+import { fetchData } from './datafiles.js';
 import { createSurveySky } from './gate-sky.js';
 import { starColour } from './starcolour.js';
 import { vecOfXyf, tileAt, tileCentre, radecOf } from './allsky/healpix.js';
@@ -201,7 +202,7 @@ export function paintBand(d, W, H) {
 
 /** The catalogue, fetched once. */
 export async function loadStars(url = 'data/sky/stars.json') {
-  const res = await fetch(url, { cache: 'force-cache', signal: AbortSignal.timeout(30_000) });
+  const res = await fetchData(url, { cache: 'force-cache', signal: AbortSignal.timeout(30_000) });
   if (!res.ok) throw new Error(`stars ${res.status}`);
   return res.json();
 }
@@ -642,7 +643,7 @@ export class Gate {
   async loadSurvey(url = 'data/sky/milkyway.png') {
     this.surveyAsked = true;
     try {
-      const res = await fetch(url, { cache: 'force-cache', signal: AbortSignal.timeout(30_000) });
+      const res = await fetchData(url, { cache: 'force-cache', signal: AbortSignal.timeout(30_000) });
       if (!res.ok) return;
       const bitmap = await createImageBitmap(await res.blob());
       if (this.bandLayer) {
