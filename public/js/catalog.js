@@ -291,7 +291,43 @@ function untilAborted(promise, signal) {
   });
 }
 
-async function askFrames({ ra, dec, radius }, signal) {
+/**
+ * Frame lists already answered in this session, whole ones only: a field
+ * opened again (back from the sky, another band and back, the browser's Back)
+ * asks nothing. Kept for a quarter of an hour, so a page left open still
+ * hears of a new visit.
+ */
+const answered = new Map();
+const ANSWER_KEPT_MS = 15 * 60_000;
+const ANSWERS_KEPT = 32;
+
+async function askFrames(question, signal) {
+  const key = `${question.ra},${question.dec},${question.radius}`;
+  const kept = answered.get(key);
+  if (kept && Date.now() - kept.at < ANSWER_KEPT_MS) return kept.answer;
+  const answer = await askFramesNow(question, signal);
+  if (!answer.partial && !answer.ownIndexDate) {
+    answered.delete(key);
+    answered.set(key, { at: Date.now(), answer });
+    while (answered.size > ANSWERS_KEPT) answered.delete(answered.keys().next().value);
+  }
+  return answer;
+}
+
+/**
+ * The archive's own list for a field that ships with the page, asked past
+ * the bundled copy (`live=1`), to see what has changed since it was made.
+ * Throws when there is no relay to ask or it did not answer.
+ */
+export async function askLiveFrames({ ra, dec, radius = 0.006 }, { signal } = {}) {
+  const res = await fetch(`api/search?ra=${ra.toFixed(6)}&dec=${dec.toFixed(6)}&radius=${radius}&live=1`, { signal: deadline(signal, SEARCH_DEADLINE_MS) });
+  if (!(res.headers.get('content-type') ?? '').includes('json')) throw new NoRelayError(new Error(`HTTP ${res.status}`));
+  const body = await res.json();
+  if (!body?.ok) throw new UpstreamError(body?.error ?? `HTTP ${res.status}`);
+  return readPartial(body);
+}
+
+async function askFramesNow({ ra, dec, radius }, signal) {
   const index = await loadBakedIndex(signal);
   const cos = Math.cos((dec * Math.PI) / 180);
   const hit = index.find((f) => Math.hypot(deltaRA(f.ra, ra) * cos, f.dec - dec) < 0.01);

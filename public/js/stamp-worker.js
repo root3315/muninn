@@ -9,6 +9,7 @@
  */
 
 import { loadStamp } from './stamp.js';
+import { bakedOrLive } from './fieldstore.js';
 import { TangentGrid } from './wcs.js';
 import { skySigmaFromSorted } from './depth.js';
 import { sortedFinite, limitsFromSorted, quantileTable } from './render.js';
@@ -21,13 +22,15 @@ const running = new Map();
 self.addEventListener('message', async ({ data: msg }) => {
   if (msg.type === 'abort') { running.get(msg.id)?.abort(); return; }
 
-  const { id, url, grid: g, header } = msg;
+  const { id, url, grid: g, header, baked } = msg;
   const ctrl = new AbortController();
   running.set(id, ctrl);
   try {
     const grid = new TangentGrid(g.ra, g.dec, g.fovDeg, g.width, g.height);
     const onHeader = header ? () => self.postMessage({ id, header: true }) : undefined;
-    const stamp = await loadStamp(url, grid, { signal: ctrl.signal, onHeader });
+    const stamp = baked
+      ? await bakedOrLive(baked, url, grid, { signal: ctrl.signal, onHeader })
+      : await loadStamp(url, grid, { signal: ctrl.signal, onHeader });
     if (!stamp) { self.postMessage({ id, stamp: null }); return; }
     // The WCS is a class instance and arrives as its plain fields (the
     // detector patch carries them for sharpness.js); the pixels are moved

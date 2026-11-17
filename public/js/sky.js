@@ -394,6 +394,23 @@ export class SkyView {
   }
 
   /**
+   * A visit read again from a newer file of the same exposure (a ready-made
+   * field the archive has reprocessed since): the new pixels take its place
+   * in the run, and everything worked out from the old ones is dropped.
+   */
+  replaceVisit(frame, stamp) {
+    const at = this.visits.findIndex((x) => x.frame === frame);
+    if (at < 0) return null;
+    const { canvas, ctx } = this.visits[at];
+    const entry = { frame, stamp, canvas, ctx, limits: null, cut: stamp.cut ?? null };
+    this.visits[at] = entry;
+    this.stackCache = null;
+    if (this.render.shared) this.repaintAll();
+    else { this.paintVisit(entry); this.diffCache = null; this.draw(); }
+    return entry;
+  }
+
+  /**
    * One visit's own black and white point, cut once per clip setting. Its
    * pixels are sorted once, into a table of percentiles, so a new clip is a
    * lookup rather than a sort.

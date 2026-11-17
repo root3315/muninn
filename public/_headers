@@ -19,6 +19,10 @@
   Cache-Control: public, max-age=0, must-revalidate
 /data/*
   Cache-Control: public, max-age=600, stale-while-revalidate=86400
+# A ready-made field's pixels are named by their own hash: a new bake is a new name.
+/data/fields/*.bin
+  ! Cache-Control
+  Cache-Control: public, max-age=31536000, immutable
 # A font file changes only with its name.
 /fonts/*
   Cache-Control: public, max-age=31536000, immutable

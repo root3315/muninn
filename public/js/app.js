@@ -32,7 +32,8 @@ import { toast, watchNetwork, onUnplannedFailure, reloadForCode } from './safety
 import { paint, rampFromToken, sortedFinite, limitsFromSorted } from './render.js';
 import { seasonChunks, chunkAt, forStack, averaged } from './stack.js';
 import { TangentGrid, separation, deltaRA } from './wcs.js';
-import { loadStamp, loadWavelength } from './stamp.js';
+import { loadStamp, loadWavelength, knowFile } from './stamp.js';
+import { bakedOrLive, cardsOf } from './fieldstore.js';
 import { motionOf, visitPool, chooseMeasured, visitPoint, placeInBand, channelOverlap } from './spectrum.js';
 import { spectrumBlock } from './spectrum-view.js';
 import { trackCSV } from './export.js';
@@ -51,7 +52,7 @@ import { fieldArchives, cadcSearchUrl } from './archives.js';
 import { markFacts } from './markfacts.js';
 import { bodyNodes, foldOnPhone } from './bodycard.js';
 import {
-  searchFrames, searchAhead, askMissingFrames, NoRelayError, UpstreamError, groupVisits, findHeldVisit, bandsPresent, bandRange, parseCoordinates,
+  searchFrames, searchAhead, askMissingFrames, askLiveFrames, NoRelayError, UpstreamError, groupVisits, findHeldVisit, bandsPresent, bandRange, parseCoordinates,
   resolveName, formatRA, formatDec, knownBodies, fieldObjects, toS3, surveySources,
 } from './catalog.js';
 import { magLimit, wiseLimit, searchRadius, properMotion, ROW_CAP } from './overlay.js';
@@ -121,6 +122,12 @@ const state = {
   /** What B of the wipe shows instead of a visit: AllWISE band 1 or 2, 'gaia' (the model), or null. */
   reference: null,
   skyLayers: { stars: false, deep: false },
+  /**
+   * A ready-made field's kept pixels (fieldstore.js), when this field has
+   * them: { key, band, date, check }, where `check` is what the archive said
+   * when asked whether anything has changed since.
+   */
+  bake: null,
 };
 
 let sky;
@@ -236,9 +243,66 @@ function workersBroken() {
   for (const waiter of stampWorkers.waiting.splice(0)) waiter.give(null);
 }
 
+/*
+ * Visits already on a grid are kept, so a field opened again (back from the
+ * sky, another band and back, the browser's Back) is drawn from memory with
+ * nothing read at all. Kept by the bytes they hold, the least recently used
+ * let go first; less on a phone. A stamp is never changed once made, so the
+ * one kept and the one on screen can be the same object.
+ */
+const STAMP_BUDGET = matchMedia('(pointer: coarse)').matches || (navigator.deviceMemory ?? 8) <= 4 ? 60e6 : 150e6;
+const keptStamps = new Map();
+let keptStampBytes = 0;
+
+const stampBytes = (s) => (s ? s.data.byteLength + s.quality.byteLength + (s.detector?.data?.byteLength ?? 0) : 0);
+const stampKey = (url, g) => `${url} ${g.ra} ${g.dec} ${g.fovDeg} ${g.width} ${g.height}`;
+
+function keepStamp(key, stamp) {
+  if (keptStamps.has(key)) keptStampBytes -= stampBytes(keptStamps.get(key));
+  keptStamps.delete(key);
+  keptStamps.set(key, stamp);
+  keptStampBytes += stampBytes(stamp);
+  for (const [k, s] of keptStamps) {
+    if (keptStampBytes <= STAMP_BUDGET) break;
+    keptStamps.delete(k);
+    keptStampBytes -= stampBytes(s);
+  }
+}
+
 async function readStamp(url, grid, { signal, onHeader } = {}) {
+  const key = stampKey(url, grid);
+  if (keptStamps.has(key)) {
+    const kept = keptStamps.get(key);
+    keepStamp(key, kept);
+    onHeader?.();
+    return kept;
+  }
+  const stamp = await readStampNow(url, grid, { signal, onHeader });
+  keepStamp(key, stamp);
+  return stamp;
+}
+
+/** A ready-made field's visit as the worker takes it: where its file is and how to read it. */
+const bakedPart = (b) => ({
+  href: b.href, bytes: b.bytes, nx: b.nx, ny: b.ny, rowFrom: b.rowFrom, rows: b.rows, colFrom: b.colFrom, cols: b.cols,
+  offset: b.offset, scale: b.scale, flags: b.flags, maskedPerRow: b.maskedPerRow, cards: b.cards,
+});
+
+/**
+ * Whether a grid lies inside the one a field was baked for: the same scale,
+ * no larger. Another size of field is read from the archive straight away,
+ * not after fetching a kept file that cannot cover it.
+ */
+const bakeFits = (baked, g) => Boolean(baked?.grid) && Math.abs(g.scale / (baked.grid.fovDeg / baked.grid.width) - 1) < 1e-9
+  && g.width <= baked.grid.width && g.height <= baked.grid.height;
+
+async function readStampNow(url, grid, { signal, onHeader } = {}) {
+  const found = bakes.byUrl.get(url);
+  const baked = bakeFits(found, grid) ? found : null;
+  // A frame the bake found off the field is off it now too: same file, same pixels.
+  if (baked?.none) { onHeader?.(); return null; }
   const worker = await takeWorker(signal);
-  if (!worker) return loadStamp(url, grid, { signal, onHeader });
+  if (!worker) return baked ? bakedOrLive(baked, url, grid, { signal, onHeader }) : loadStamp(url, grid, { signal, onHeader });
   const id = ++stampWorkers.seq;
   return new Promise((resolve, reject) => {
     let silence = 0;
@@ -277,7 +341,7 @@ async function readStamp(url, grid, { signal, onHeader } = {}) {
       console.warn('[muninn] a frame worker stopped; starting another', e.message ?? '');
       if (stampWorkers.restarts > WORKER_RESTARTS) workersBroken();
       if (signal?.aborted) { reject(new DOMException('The read was cancelled', 'AbortError')); return; }
-      readStamp(url, grid, { signal, onHeader }).then(resolve, reject);
+      readStampNow(url, grid, { signal, onHeader }).then(resolve, reject);
     };
     // Silent past every deadline its reads have: let go of it and of this
     // read, which is counted as not read and asked for again later.
@@ -300,10 +364,148 @@ async function readStamp(url, grid, { signal, onHeader } = {}) {
     signal?.addEventListener('abort', onAbort, { once: true });
     listen();
     worker.postMessage({
-      id, url, header: Boolean(onHeader),
+      id, url, header: Boolean(onHeader), baked: baked ? bakedPart(baked) : null,
       grid: { ra: grid.ra, dec: grid.dec, fovDeg: grid.fovDeg, width: grid.width, height: grid.height },
     });
   });
+}
+
+/* -------------------------------------------------------- ready-made fields */
+
+/**
+ * The preset fields' kept pixels (fieldstore.js, tools/bake-fields.mjs): which
+ * fields and bands have them, each band's manifest asked for once, and every
+ * visit in them by the file it stands for. A visit found here is put on the
+ * grid from its kept file, a few hundred kilobytes from this site, in place
+ * of a few reads of a 70 MB file at the archive; the stamp it gives is the
+ * same, so nothing after the read knows the difference.
+ */
+const bakes = { index: null, manifests: new Map(), byUrl: new Map() };
+
+function bakeIndex() {
+  bakes.index ??= fetch('data/fields/baked.json', { signal: deadline(null, CATALOG_DEADLINE_MS) })
+    .then((r) => (r.ok ? r.json() : {}))
+    .catch(() => { bakes.index = null; return {}; });
+  return bakes.index;
+}
+
+/**
+ * The manifest of the ready-made field at this spot in this band, its visits
+ * filed by file; null where none was baked. Found by position, as the frame
+ * lists are (catalog.js), so a link opened before the presets are read finds it.
+ */
+async function loadBake(ra, dec, band) {
+  const cos = Math.cos((dec * Math.PI) / 180);
+  const [key, field] = Object.entries(await bakeIndex())
+    .find(([, f]) => Math.hypot(deltaRA(f.ra, ra) * cos, f.dec - dec) < 0.01) ?? [];
+  if (!field?.bands?.[band]) return null;
+  const at = `${key}/${band}`;
+  if (!bakes.manifests.has(at)) {
+    const asked = fetch(`data/fields/${at}/manifest.json`, { signal: deadline(null, CATALOG_DEADLINE_MS) })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((manifest) => {
+        if (!Array.isArray(manifest?.visits)) return null;
+        for (const e of manifest.visits) fileBaked(e, at, manifest.grid);
+        return manifest;
+      })
+      .catch(() => null);
+    bakes.manifests.set(at, asked);
+    // A manifest that did not come is asked again next time, not given up on.
+    asked.then((m) => { if (!m) bakes.manifests.delete(at); });
+  }
+  return bakes.manifests.get(at);
+}
+
+/** One kept visit, filed by its file; its header and wavelength table are taken as read. */
+function fileBaked(entry, at, grid) {
+  const url = toS3(entry.url);
+  if (entry.none) { bakes.byUrl.set(url, { none: true, grid }); return; }
+  const href = new URL(`data/fields/${at}/${entry.file}`, document.baseURI).href;
+  bakes.byUrl.set(url, { ...entry, href, grid });
+  const table = entry.waveTable;
+  knowFile(url, {
+    cards: cardsOf(entry), dataStart: entry.dataStart, dataBytes: entry.dataBytes,
+    // A table the bake could not read is left to be read live, not taken as absent.
+    waveTable: table ? { ...table, values: Float32Array.from(table.values) } : undefined,
+  });
+}
+
+/** What the facts say about where the pixels came from, and whether the archive has moved on since. */
+function bakeWords(bake) {
+  const date = fmtDate(bake.date);
+  const c = bake.check;
+  if (!c) return t('bake.checking', { date });
+  if (c.failed) return t('bake.unchecked', { date });
+  if (!c.added && !c.changed) return t('bake.current', { date });
+  return t('bake.newer', { date, n: c.added + c.changed });
+}
+
+/**
+ * Ask the archive, past the bundled list, whether a ready-made field has
+ * moved on since it was baked. A visit it has now and the bake has not is
+ * added to the run and read live, as any other visit is; a visit it now
+ * gives under a newer file (a reprocessing) is read again from that file and
+ * takes the kept one's place. Never silent: the facts say what was found, or
+ * that the archive could not be asked. One answer is kept per field for a
+ * quarter of an hour, so going back and forth asks once.
+ */
+const bakeChecks = new Map();
+const BAKE_CHECK_KEPT_MS = 15 * 60_000;
+
+async function checkBake(gen, signal) {
+  const bake = state.bake;
+  const { ra, dec } = state;
+  const at = `${bake.key}/${bake.band}`;
+  let live = bakeChecks.get(at);
+  if (!live || Date.now() - live.at > BAKE_CHECK_KEPT_MS) {
+    try {
+      live = { at: Date.now(), ...(await askLiveFrames({ ra, dec }, { signal })) };
+      if (!live.partial) bakeChecks.set(at, live);
+    } catch {
+      if (gen !== fieldSeq) return;
+      bake.check = { failed: true };
+      renderFacts();
+      return;
+    }
+  }
+  if (gen !== fieldSeq) return;
+  const now = new Map(live.frames.map((f) => [`${f.obsId} ${f.band}`, f]));
+  const changed = state.allVisits.filter((v) => {
+    const fresh = now.get(`${v.obsId} ${v.band}`);
+    return fresh?.url && fresh.url !== v.url && bakes.byUrl.has(toS3(v.url));
+  });
+  const before = state.allVisits.length;
+  const want = state.allVisits[state.wantVisit];
+  const lead = state.allVisits[state.leadVisit];
+  state.frames = mergeFrames(state.frames ?? [], live.frames);
+  state.allVisits = mergeVisits(state.allVisits, groupVisits(state.frames, { ra, dec, band: state.band }));
+  // Both are places in the list, which the new visits may have moved.
+  if (want) state.wantVisit = state.allVisits.indexOf(want);
+  if (lead) state.leadVisit = state.allVisits.indexOf(lead);
+  bake.check = { added: state.allVisits.length - before, changed: changed.length, partial: Boolean(live.partial) };
+  populateBands();
+  renderFacts();
+  for (const v of changed) {
+    Object.assign(v, now.get(`${v.obsId} ${v.band}`), { offset: v.offset });
+    if (sky.visits.some((x) => x.frame === v)) readAgain(v, gen, signal);
+  }
+  if (bake.check.added && !state.filling && !state.loading) fillVisits(Math.max(state.visitGoal, fillCap()));
+  updateIdentity();
+  drawAxis();
+}
+
+/** A visit already on screen, read again from its newer file. */
+async function readAgain(frame, gen, signal) {
+  try {
+    const stamp = await readStamp(toS3(frame.url), sky.grid, { signal });
+    if (gen !== fieldSeq || !stamp) return;
+    sky.replaceVisit(frame, stamp);
+    const entry = state.visits.find((e) => e.frame === frame);
+    if (entry) entry.baked = false;
+    renderPlateLog();
+  } catch (err) {
+    if (!signal.aborted) console.warn('[muninn] newer file not read', frame.obsId, err?.message ?? err);
+  }
 }
 
 const fovLabel = (deg) => (deg >= 1 / 60 ? `${fmt(deg * 60, 1)}′` : `${fmt(deg * 3600, 0)}″`);
@@ -377,7 +579,7 @@ function renderPlateLog() {
   const show = !$('plate-state').hidden && state.visits.length > 0 && !sky?.visits.length;
   log.hidden = !show;
   if (!show) return;
-  log.replaceChildren(...state.visits.map(({ frame, status, bytes, final }) => {
+  log.replaceChildren(...state.visits.map(({ frame, status, bytes, final, baked }) => {
     const li = document.createElement('li');
     li.className = 'plate__log-row';
     li.dataset.status = status;
@@ -390,7 +592,7 @@ function renderPlateLog() {
     const what = document.createElement('span');
     what.className = 'plate__log-what';
     what.textContent = status === 'ready'
-      ? t('log.ready', { mb: fmt((bytes ?? 0) / 1048576, 1) })
+      ? (baked && state.bake ? t('log.baked', { date: fmtDate(state.bake.date) }) : t('log.ready', { mb: fmt((bytes ?? 0) / 1048576, 1) }))
       // A visit not read is skipped, not given up on: it is asked for again
       // once the rest are in, and says so until that has failed too.
       : status === 'failed' && !final ? t('log.retrying')
@@ -570,6 +772,8 @@ function renderFacts() {
   if (state.truncated) rows.push([t('facts.list'), t('facts.listCapped')]);
   // IRSA did not answer, and the list came from Muninn's own copy of its index.
   if (state.ownIndexDate) rows.push([t('facts.list'), t('facts.listOwnIndex', { date: fmtDate(state.ownIndexDate) })]);
+  // Pixels kept beside the page are said as such, with their date and what the archive has said since.
+  if (state.bake) rows.push([t('bake.pixels'), bakeWords(state.bake)]);
   // One collection of the archive did not answer: the run is short, and
   // "nothing moved" would be said about visits nobody was shown.
   if (state.partial && !state.loading) {
@@ -2622,7 +2826,7 @@ function showInSpace(m) {
     name: k.name, a: k.a, e: k.e, i: k.i, om: k.om, w: k.w, ma: k.ma, n: k.n, epoch: k.epoch, tp: k.tp, years: k.years,
   };
   const name = (k && (m.catalog?.name || k.name)) || tagOf(m) || null;
-  openWorld('fly', { ra: m.ra, dec: m.dec, mark: { name, body } }, getLanguage());
+  openWorld('fly', { ra: m.ra, dec: m.dec, mark: { name, body, near: body && m.nearAsk?.state === 'done' ? m.nearAsk.closest : [] } }, getLanguage());
 }
 
 function renderMarks() {
@@ -3182,6 +3386,27 @@ function fieldGrid(ra, dec) {
   return grid;
 }
 
+/**
+ * The grid a field was last drawn on, used again when the room has hardly
+ * changed: the plate's shape moves by a sample or two as the page settles,
+ * and a grid two samples wider is another grid, on which every visit kept
+ * in memory (keptStamps) would be read again.
+ */
+const lastGrids = new Map();
+
+function fieldGridAgain(ra, dec) {
+  const fresh = fieldGrid(ra, dec);
+  const key = `${ra} ${dec} ${state.fov}`;
+  const kept = lastGrids.get(key);
+  if (kept && kept.height === fresh.height && Math.abs(kept.width / fresh.width - 1) < 0.03) {
+    document.querySelector('.mount')?.style.setProperty('--aspect', String(kept.width / kept.height));
+    return kept;
+  }
+  lastGrids.set(key, fresh);
+  while (lastGrids.size > 64) lastGrids.delete(lastGrids.keys().next().value);
+  return fresh;
+}
+
 /** The preset centred on this spot, if one is. */
 function presetAt(ra, dec) {
   const cos = Math.cos((dec * Math.PI) / 180);
@@ -3329,11 +3554,15 @@ async function readOne(entry, grid, signal, { onHeader } = {}) {
     entry.status = 'ready';
     entry.landedAt = performance.now();
     entry.bytes = stamp.meta.bytesRead;
+    entry.baked = Boolean(stamp.baked);
     // A held visit is waited for: the plate stays on its loading note rather
     // than showing another night first and then jumping (it is uncovered at
     // the end of the batch regardless, if that visit cannot be read).
     const waiting = (state.wantVisit != null && state.allVisits[state.wantVisit] !== entry.frame) || leadPending(entry.frame);
     addVisitInPlace(entry.frame, stamp);
+    // On the page's own timeline (DevTools' Performance panel, or a script
+    // timing a field): each visit as it is drawn, against the field's start.
+    performance.mark('muninn:visit', { detail: { landed: sky.visits.length, of: state.allVisits.length, baked: entry.baked } });
     if (sky.visits.length === 1) waitForLead();
     if (!waiting && (sky.visits.length === 1 || state.wantVisit == null || sky.current?.frame === entry.frame)) {
       setPlateState('', { hidden: true });
@@ -3640,6 +3869,7 @@ function retryUnread() {
 }
 
 async function openField({ ra, dec, label = '', band = null, target, pm, marks = [], visit = null, held = null }) {
+  performance.mark('muninn:field');
   dropMarksUndo();
   fieldSeq += 1;
   const gen = fieldSeq;
@@ -3666,6 +3896,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   state.partial = false;
   state.missing = [];
   state.ownIndexDate = null;
+  state.bake = null;
   resetListRetry();
   // What the last field measured goes with it: the reading is now built up as
   // this field's visits land, and must not start from someone else's numbers.
@@ -3682,7 +3913,7 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
 
   // The field is cut to the room the plate has, and all of it is shown. See
   // fieldGrid for why its short side is the one the size control sets.
-  let grid = fieldGrid(ra, dec);
+  let grid = fieldGridAgain(ra, dec);
   sky.reset(grid);
   sky.target = state.target;
   placeMarks(marks);
@@ -3719,6 +3950,10 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   setPlateState(t('epochs.searching'), { progress: 0 });
   drawAxis();
   warmWorkers();
+
+  // A ready-made field's kept pixels are asked for beside its frame list.
+  const bakingBand = state.band;
+  let baking = loadBake(ra, dec, bakingBand);
 
   let frames;
   let truncated = false;
@@ -3785,8 +4020,8 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   // The run has just taken its place at the foot of the page, which changes the
   // room the plate has. If that changes the shape the field should be, it is cut
   // again now — before a single pixel has been read onto the old one.
-  const refit = fieldGrid(ra, dec);
-  if (Math.abs(refit.width / refit.height - grid.width / grid.height) > 0.03) {
+  const refit = fieldGridAgain(ra, dec);
+  if (refit !== grid && Math.abs(refit.width / refit.height - grid.width / grid.height) > 0.03) {
     grid = refit;
     sky.reset(grid);
     placeMarks(marks);
@@ -3797,6 +4032,14 @@ async function openField({ ra, dec, label = '', band = null, target, pm, marks =
   updateIdentity();
 
   if (!chosen.length) { state.loading = false; setPlateState(t('epochs.none')); return; }
+  // The band may have been settled by the list (populateBands).
+  if (state.band !== bakingBand) baking = loadBake(ra, dec, state.band);
+  const manifest = await baking;
+  if (ctrl.signal.aborted) return;
+  if (manifest) {
+    state.bake = { key: manifest.key, band: state.band, date: manifest.baked, check: null };
+    checkBake(gen, ctrl.signal);
+  }
   if (state.reference) loadReference(ctrl.signal);
   // SkyBoT is asked about every planned visit now, alongside the pixels, rather
   // than after the last of them: the question needs only a date and a place.

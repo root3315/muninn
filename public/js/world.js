@@ -46,8 +46,8 @@ function aim(kind, look) {
 /**
  * Open a layer: `kind` is 'allsky' or 'fly'; `look` the direction the front
  * page faces, { ra, dec, fov }, and for the flight from a mark `mark`, what
- * it is ({ name, body }: body a small body's orbital elements); `lang` the
- * page's language.
+ * it is ({ name, body, near }: body a small body's orbital elements, near
+ * the closest orbits to it its card found); `lang` the page's language.
  */
 export function openWorld(kind, look, lang) {
   const layer = layerOf(kind, lang);

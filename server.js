@@ -844,7 +844,9 @@ async function handleSearch(url, res) {
   const collections = askedCollections(url);
   if (!collections) return json(res, 400, BAD_COLLECTIONS);
 
-  const prebaked = findBaked(ra, dec);
+  // `live=1` is the page asking past the bundled list, whether the archive
+  // has moved on since the field was baked (see app.js checkBake).
+  const prebaked = url.searchParams.get('live') === '1' ? null : findBaked(ra, dec);
   if (prebaked) {
     return json(res, 200, {
       ok: true, cached: 'baked',
@@ -1785,8 +1787,11 @@ async function handleFrame(url, req, res) {
     'content-range': `bytes ${start}-${stop}/${meta.size}`,
     'accept-ranges': 'bytes',
     etag: meta.etag,
-    // A frame does not change; for a day a reopened field needs no question at all.
-    'cache-control': 'public, max-age=86400',
+    // A frame's path names its version, so the bytes of a range never
+    // change: the browser keeps them for good and a field opened again reads
+    // nothing. The browser only: an edge cache in front would have to key
+    // every answer on its Range, and that is not something to assume.
+    'cache-control': 'private, max-age=31536000, immutable',
     // Whether the bucket was asked: the warm-up and the tests count on it.
     'x-muninn-frame': got.fromDisk ? 'hit' : 'miss',
   });
@@ -2260,8 +2265,13 @@ function versioned(target, raw, version) {
  * (and answered with a 304 when nothing moved). Data and pictures change with
  * a data release. The same policy public/_headers gives Cloudflare Pages.
  */
+const BAKED_PIXELS = /^data\/fields\/[\w-]+\/\w+\/[\w.-]+_[0-9a-f]{10}\.bin$/;
+
 function cachePolicy(rel) {
   const path = rel.replace(/\\/g, '/');
+  // A ready-made field's pixels are named by their own hash (bake-fields.mjs):
+  // a new bake is a new name, so the edge may keep each for good.
+  if (BAKED_PIXELS.test(path)) return IMMUTABLE;
   if (path.startsWith('data/')) return 'public, max-age=600, stale-while-revalidate=86400';
   if (path.startsWith('img/')) return 'public, max-age=86400';
   if (path.startsWith('fonts/')) return 'public, max-age=31536000, immutable';
