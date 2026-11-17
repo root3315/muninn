@@ -29,6 +29,7 @@ import {
   ALLSKY_ORDER, ALLSKY_TILE, ALLSKY_COLUMNS, TILE_PX, HIPS_BASE, allskySlot, allskyUrl, allskyFallback, tileUrl, orderFor, tileDegrees,
 } from './hips.js';
 import { GALACTIC, mollweide, mollweideInverse, toGalactic, fromGalactic } from './maps.js';
+import { DEEP_GAPS, CORES_MAX, CORE_FOV, CORE_REACH_ARCMIN, coreStars, pickCores, coreSlots } from './fills.js';
 
 const DEG = Math.PI / 180;
 const COARSE = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
@@ -70,6 +71,13 @@ const ATLAS_H = Math.ceil(ALLSKY_COUNT / ALLSKY_COLUMNS) * ALLSKY_TILE;
 
 /* ---- shaders ------------------------------------------------------------ */
 
+/** A deep field's centre as a GLSL vector. */
+function gapVec(i) {
+  const g = DEEP_GAPS[i];
+  return [Math.cos(g.dec * DEG) * Math.cos(g.ra * DEG), Math.cos(g.dec * DEG) * Math.sin(g.ra * DEG), Math.sin(g.dec * DEG)]
+    .map((c) => c.toFixed(7)).join(', ');
+}
+
 /** One colour from one, or three, frames — shared by the sphere and the map. */
 const SHADE = `
 uniform sampler2D uR;
@@ -93,6 +101,48 @@ vec3 shade(vec3 raw) {
   bvec3 hole = lessThanEqual(raw, vec3(0.5 / 255.0));
   if (top > 0.2 && any(hole)) x = mix(x, vec3(top), vec3(hole));
   return x;
+}
+/*
+ * Where the cube is blank in every frame on screen (fills.js): inside a deep
+ * field, a quiet hatched tone, not sky; round a catalogued bright star, the
+ * star. Only blank pixels change, and only by how blank they are, so a core's
+ * edge is the cube's own edge, softened as the mipmaps soften it. Anywhere
+ * else a blank stays the black it is.
+ */
+uniform vec4 uCores[${CORES_MAX}];
+uniform vec3 uCoreTints[${CORES_MAX}];
+uniform int uCoreCount;
+const vec3 GAP_POLE_N = vec3(${gapVec(0)});
+const vec3 GAP_POLE_S = vec3(${gapVec(1)});
+const float GAP_COS = ${Math.cos(DEEP_GAPS[0].radius * DEG).toFixed(7)};
+vec3 fillBlank(vec3 raw, vec3 colour, vec3 dir) {
+  float top = max(raw.r, max(raw.g, raw.b));
+  if (top >= 0.15) return colour;
+  for (int i = 0; i < ${CORES_MAX}; i++) {
+    if (i >= uCoreCount) break;
+    // A chord, not a cosine: at arcminutes a cosine is 1 to the float's last digit.
+    float q = length(dir - uCores[i].xyz) / uCores[i].w;
+    if (q >= 1.0) continue;
+    // Right at a saturated star the sky is far above a tenth, so anything much
+    // darker there is the blank core, its edge blurred by the mipmaps; further
+    // out only what is as dark as blank counts, so no sky is drawn over.
+    float hi = mix(0.15, 2.5 / 255.0, smoothstep(0.2, 0.6, q));
+    float core = 1.0 - smoothstep(0.2 * hi, hi, top);
+    if (core <= 0.0) return colour;
+    float light = 1.0 - 0.25 * q * q;
+    vec3 star = uColour ? uCoreTints[i] * light : texture(uRamp, vec2(0.97 * light, 0.5)).rgb;
+    return mix(colour, star, core);
+  }
+  // Elsewhere the sky's darkest hundredth is 1 in 255 in the cube's own
+  // stretch: only what is darker still is blank.
+  float blank = 1.0 - smoothstep(0.4 / 255.0, 2.5 / 255.0, top);
+  if (blank > 0.0 && max(dot(dir, GAP_POLE_N), dot(dir, GAP_POLE_S)) > GAP_COS) {
+    // Fine diagonal lines on a dim grey, a little lighter than the empty
+    // background: plainly not sky, and quiet beside it.
+    float line = step(0.78, fract((gl_FragCoord.x + gl_FragCoord.y) / 9.0));
+    return mix(colour, mix(vec3(0.085, 0.09, 0.11), vec3(0.15, 0.155, 0.18), line), blank);
+  }
+  return colour;
 }`;
 
 const SPHERE_VS = `#version 300 es
@@ -103,16 +153,19 @@ uniform vec3 uE;
 uniform vec3 uN;
 uniform vec2 uScale;
 out vec2 vUv;
+out vec3 vDir;
 void main() {
   float d = dot(aPos, uC);
   vec2 p = vec2(-dot(aPos, uE), dot(aPos, uN)) / max(d, 1e-3);
   gl_Position = vec4(p * uScale, 0.0, 1.0);
   vUv = aUv;
+  vDir = aPos;
 }`;
 
 const SPHERE_FS = `#version 300 es
 precision highp float;
 in vec2 vUv;
+in vec3 vDir;
 uniform float uAlpha;
 uniform float uBias;
 out vec4 outColour;
@@ -130,7 +183,7 @@ void main() {
   // under IRSA's asinh stretch no real star's colour is that extreme.
   float top = max(raw.r, max(raw.g, raw.b));
   if (top > 0.45) raw = mix(raw, vec3(top), vec3(lessThan(raw, vec3(top / 7.0))));
-  outColour = vec4(shade(raw), uAlpha);
+  outColour = vec4(fillBlank(raw, shade(raw), normalize(vDir)), uAlpha);
 }`;
 
 const MAP_VS = `#version 300 es
@@ -157,12 +210,16 @@ ${SHADE}
 const float PI = 3.141592653589793;
 const float SQ2 = 1.4142135623730951;
 int spread3(int v) { return (v & 1) | ((v & 2) << 1) | ((v & 4) << 2); }
-/* The three frames' values at one point of the map. */
-vec3 skyValue(vec2 m) {
+/* The direction, in ICRS, under a point of the map. */
+vec3 dirOf(vec2 m) {
   float th = asin(clamp(m.y / SQ2, -1.0, 1.0));
   float b = asin(clamp((2.0 * th + sin(2.0 * th)) / PI, -1.0, 1.0));
   float L = clamp(-PI * m.x / (2.0 * SQ2 * max(cos(th), 1e-6)), -PI, PI);
-  vec3 v = uFromGal * vec3(cos(b) * cos(L), cos(b) * sin(L), sin(b));
+  return uFromGal * vec3(cos(b) * cos(L), cos(b) * sin(L), sin(b));
+}
+/* The three frames' values at one point of the map. */
+vec3 skyValue(vec2 m) {
+  vec3 v = dirOf(m);
 
   float z = clamp(v.z, -1.0, 1.0);
   float za = abs(z);
@@ -211,7 +268,7 @@ void main() {
   float q = 0.25 / uS;
   vec3 raw = 0.25 * (skyValue(m + vec2(-q, -q)) + skyValue(m + vec2(q, -q)) + skyValue(m + vec2(-q, q)) + skyValue(m + vec2(q, q)));
   float rim = 1.0 - smoothstep(1.0 - uEdge, 1.0 + uEdge, e);
-  outColour = vec4(shade(raw), uAlpha * rim);
+  outColour = vec4(fillBlank(raw, shade(raw), dirOf(m)), uAlpha * rim);
 }`;
 
 /*
@@ -791,6 +848,51 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
     gl.uniform3fv(sphere.u.E, cam.E);
     gl.uniform3fv(sphere.u.N, cam.N);
     gl.uniform2f(sphere.u.Scale, cam.k * cam.sx, cam.k * cam.sy);
+    gl.uniform1i(sphere.u.CoreCount, cores.count);
+    if (cores.count) {
+      gl.uniform4fv(sphere.u['Cores[0]'], cores.cores);
+      gl.uniform3fv(sphere.u['CoreTints[0]'], cores.tints);
+    }
+  }
+
+  /*
+   * The bright stars whose blank cores are filled (fills.js): the catalogue
+   * is read the first time the field is narrow enough for a core to show,
+   * and the few in view are chosen again only when the view has moved.
+   */
+  let coreList = null;
+  let coreAsked = false;
+  const cores = coreSlots();
+  const coresFor = { x: NaN, y: NaN, z: NaN, fov: NaN, w: 0, h: 0 };
+  function updateCores(cam) {
+    if (state.fov > CORE_FOV) {
+      cores.count = 0;
+      coresFor.fov = NaN;
+      return;
+    }
+    if (!coreList) {
+      if (!coreAsked) {
+        coreAsked = true;
+        fetch('data/sky/stars.json', { cache: 'force-cache' }).then((r) => (r.ok ? r.json() : null)).then((stars) => {
+          if (!stars) return;
+          coreList = coreStars(stars);
+          coresFor.fov = NaN;
+          redraw();
+        }).catch(() => {});
+      }
+      return;
+    }
+    const C = cam.C;
+    if (C[0] === coresFor.x && C[1] === coresFor.y && C[2] === coresFor.z && state.fov === coresFor.fov && cam.w === coresFor.w && cam.h === coresFor.h) return;
+    coresFor.x = C[0];
+    coresFor.y = C[1];
+    coresFor.z = C[2];
+    coresFor.fov = state.fov;
+    coresFor.w = cam.w;
+    coresFor.h = cam.h;
+    // From the middle of the screen to its corner, and a core's reach past it.
+    const corner = Math.atan(Math.hypot(1 / (cam.k * cam.sx), 1 / (cam.k * cam.sy))) + (CORE_REACH_ARCMIN / 60) * DEG;
+    pickCores(coreList, cam.C, Math.cos(Math.min(corner, Math.PI / 2)), cores);
   }
 
   function drawAllsky(cam) {
@@ -1048,6 +1150,7 @@ export function createSkyView(canvas, { ramp, ink, relay = null, onChange = () =
       result = { wanted: result.wanted + r.wanted, have: result.have + r.have, fading: result.fading || r.fading, base: result.base || r.base };
     };
     if (state.frames.length) {
+      if (m < 1) updateCores(cam);
       if (m < 1) layer(drawSphereLayer, 1);
       if (m > 0) layer(drawMapLayer, m);
       pump();

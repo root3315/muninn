@@ -98,6 +98,14 @@ button, input { font: inherit; }
 }
 .as-ring:hover .as-ring__name, .as-ring:focus-visible .as-ring__name { background: var(--color-counter); color: var(--color-accent-ink); text-shadow: none; }
 .as-ring:hover .as-ring__dot { transform: scale(1.2); }
+/* A deep field the cube leaves blank: the note under the name, quieter than it. */
+.as-ring--gap { flex-wrap: wrap; max-inline-size: 22rem; }
+.as-ring__note {
+  flex-basis: 100%; margin-inline-start: calc(9px + var(--space-2xs) + var(--space-xs));
+  color: var(--color-neutral); font-size: var(--text-2xs); white-space: normal;
+}
+.as-ring--gap:hover .as-ring__note { color: var(--color-ink); }
+body[data-map="true"] .as-ring__note { display: none; }
 
 .as-sky__hint, .as-sky__nogl {
   position: absolute; inset-inline: 0; inset-block-end: 9rem;
@@ -229,6 +237,7 @@ button.as-toggle:active { transform: scale(0.97); }
 .as-read--status[data-bad="true"] { color: var(--color-counter); }
 .as-read--status:empty { display: none; }
 .as-read--credit { margin-inline-start: auto; color: var(--color-neutral); }
+.as-read--fills { flex-basis: 100%; color: var(--color-neutral); font-size: var(--text-2xs); }
 .as-read--map { color: var(--color-neutral); }
 body:not([data-map="true"]) .as-read--map { display: none; }
 /* On the map, a ready field is a point among many: the ring smaller, the name quieter. */

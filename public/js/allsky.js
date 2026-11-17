@@ -20,6 +20,7 @@ import { galacticOf } from './allsky/maps.js';
 import {
   FRAMES, WAVELENGTHS, COLOUR_FRAMES, HIPS_BASE, bandOf, channelOf, bandFrame,
 } from './allsky/hips.js';
+import { DEEP_GAPS, CORE_STAR_COUNT } from './allsky/fills.js';
 
 const $ = (id) => document.getElementById(id);
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -445,6 +446,11 @@ fetch('data/fields/index.json').then((r) => (r.ok ? r.json() : [])).then((list) 
     a.className = 'as-ring';
     a.dataset.key = f.key;
     a.innerHTML = '<span class="as-ring__dot"></span><span class="as-ring__name"></span>';
+    // A deep field is blank in the cube, hatched on the sky: its ring says why, and opens its frames.
+    if (DEEP_GAPS.some((g) => g.key === f.key)) {
+      a.classList.add('as-ring--gap');
+      a.insertAdjacentHTML('beforeend', '<span class="as-ring__note"></span>');
+    }
     $('rings').append(a);
     return { ...f, el: a };
   });
@@ -456,6 +462,8 @@ function nameRings() {
   for (const f of fields) {
     const name = t(`preset.${f.key}`);
     f.el.querySelector('.as-ring__name').textContent = name;
+    const note = f.el.querySelector('.as-ring__note');
+    if (note) note.textContent = t('sky.gapNote');
     f.el.href = toolUrl({ ra: f.ra, dec: f.dec, name });
     f.el.title = t('allsky.openWhen');
   }
@@ -571,6 +579,7 @@ $('find').addEventListener('submit', async (e) => {
 function applyLanguage() {
   applyTranslations();
   document.title = t('allsky.doc');
+  $('fills').textContent = t('sky.fills', { n: CORE_STAR_COUNT });
   $('lang').textContent = getLanguage() === 'ru' ? 'EN' : 'RU';
   $('to-tool').href = `./?lang=${getLanguage()}`;
   nameRings();

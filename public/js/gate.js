@@ -36,6 +36,7 @@
 
 import { createBandLayer } from './gate-band.js';
 import { createSurveySky } from './gate-sky.js';
+import { starColour } from './starcolour.js';
 
 const D2R = Math.PI / 180;
 const R2D = 180 / Math.PI;
@@ -61,31 +62,8 @@ export function galactic(raDeg, decDeg) {
   return [l, b * R2D];
 }
 
-/**
- * Star colour from colour index.
- *
- * B−V to effective temperature by Ballesteros (2012), then temperature to a
- * screen colour by the usual blackbody approximation. A B star comes out blue
- * and Betelgeuse comes out orange because that is what they are.
- */
-export function starColour(bv) {
-  const t = 4600 * (1 / (0.92 * bv + 1.7) + 1 / (0.92 * bv + 0.62));
-  const k = Math.max(1000, Math.min(40000, t)) / 100;
-  let r;
-  let g;
-  let b;
-  if (k <= 66) {
-    r = 255;
-    g = 99.47 * Math.log(k) - 161.12;
-    b = k <= 19 ? 0 : 138.52 * Math.log(k - 10) - 305.04;
-  } else {
-    r = 329.7 * (k - 60) ** -0.1332;
-    g = 288.12 * (k - 60) ** -0.0755;
-    b = 255;
-  }
-  const clamp = (v) => Math.max(0, Math.min(255, Math.round(v)));
-  return [clamp(r), clamp(g), clamp(b)];
-}
+/** Star colour from colour index: starcolour.js, kept here under its old address. */
+export { starColour };
 
 /** An integer hash to the unit interval. No trigonometry, no table. */
 function hash2(x, y) {
@@ -1104,6 +1082,7 @@ export class Gate {
     if (this.fontFor !== dpr) {
       this.fontFor = dpr;
       this.font = `${12 * dpr}px ${this.paint.body}`;
+      this.noteFont = `${10.5 * dpr}px ${this.paint.body}`;
     }
     ctx.font = this.font;
     ctx.textBaseline = 'middle';
@@ -1138,6 +1117,16 @@ export class Gate {
         ctx.strokeText(tgt.label, lx, y);
         ctx.fillStyle = near ? ink : colour;
         ctx.fillText(tgt.label, lx, y);
+        // A deep field the cube leaves blank says so under its name, once the
+        // cube is the sky: the hatched disc round it is not sky.
+        if (tgt.note && this.surveyCube) {
+          ctx.font = this.noteFont;
+          ctx.globalAlpha = near ? 1 : 0.7;
+          ctx.strokeText(tgt.note, lx, y + 14 * dpr);
+          ctx.fillStyle = ink;
+          ctx.fillText(tgt.note, lx, y + 14 * dpr);
+          ctx.font = this.font;
+        }
       }
     }
     ctx.globalAlpha = 1;

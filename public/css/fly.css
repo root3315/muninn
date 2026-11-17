@@ -18,6 +18,10 @@
   transition: transform var(--dur-micro) var(--ease-out);
 }
 .fly-label--target .fly-label__dot { border-color: var(--color-counter); }
+/* A deep field the survey leaves blank: a link to its frames, quieter than a star's name. */
+.fly-label--gap { text-decoration: none; }
+.fly-label--gap .fly-label__dot { border-color: var(--color-neutral); border-style: dashed; }
+.fly-label--gap .fly-label__name { color: var(--color-muted); font-size: var(--text-2xs); }
 .fly-label__name, .fly-label__far { margin-block-start: -8px; }
 .fly-label__far { color: var(--color-muted); font-size: var(--text-2xs); }
 /* Over the stars and the lines, a name keeps a ground of its own. */

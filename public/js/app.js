@@ -60,6 +60,7 @@ import { buildIndex, suggest } from './suggest.js';
 import { attachSuggest } from './suggest-box.js';
 import { initRead, relabelCue } from './read.js';
 import { startTour, maybeStartTour, relabelTour, tourKnowsLoading } from './tour.js';
+import { DEEP_GAPS, CORE_STAR_COUNT } from './allsky/fills.js';
 
 /* The catalogue's stars bright enough to saturate (brightstars.js): read once, after the page is up. */
 let brightList = [];
@@ -4219,6 +4220,8 @@ function gateTargets(deep) {
       kind: 'field', key: f.key, ra: f.ra, dec: f.dec,
       // The name in the reader's language, as the list under the search has it.
       label: f.key ? t(`preset.${f.key}`) : f.name, sub: t('stats.visits') + ` ${f.visits ?? '—'}`,
+      // The deep fields are blank in the all-sky cube: the marker says where their frames are.
+      note: DEEP_GAPS.some((g) => g.key === f.key) ? t('sky.gapNote') : null,
       fov: f.fov, band: f.band ?? 'all', ready: true,
     });
   }
@@ -4817,6 +4820,7 @@ function showSkyCredit() {
   const skyCredit = [
     state.skyLayers.stars && t('credit.stars'), state.skyLayers.deep && t('credit.deep'),
     t(gate?.survey ? 'gate.surveyed' : 'gate.modelled'),
+    gate?.surveyCube && t('sky.fills', { n: CORE_STAR_COUNT }),
   ].filter(Boolean).join(' · ');
   $('credit').textContent = [t('foot.short'), skyCredit].filter(Boolean).join(String.fromCharCode(10));
 }

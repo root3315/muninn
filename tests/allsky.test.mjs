@@ -146,3 +146,27 @@ test('the Mollweide map is true both ways, centre in the middle and longitude to
   assert.equal(mollweideInverse(2.9, 0), null);
   assert.equal(mollweideInverse(0, 1.5), null);
 });
+
+test('the filled cores and the deep fields agree with the catalogue and the ready fields', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { DEEP_GAPS, CORE_VMAG, CORE_STAR_COUNT, CORES_MAX, coreStars, pickCores, coreSlots } = await import('../public/js/allsky/fills.js');
+  const stars = JSON.parse(readFileSync(new URL('../public/data/sky/stars.json', import.meta.url)));
+  assert.equal(CORE_STAR_COUNT, stars.mag.filter((m) => m < CORE_VMAG).length, 'the credit line counts the stars filled');
+  const list = coreStars(stars);
+  assert.equal(list.count, CORE_STAR_COUNT);
+  const targets = JSON.parse(readFileSync(new URL('../public/data/targets.json', import.meta.url))).targets;
+  for (const g of DEEP_GAPS) {
+    const t = targets.find((x) => x.key === g.key);
+    assert.ok(t, `${g.key} is a ready field`);
+    assert.ok(Math.abs(t.ra - g.field.ra) < 1e-6 && Math.abs(t.dec - g.field.dec) < 1e-6, `${g.key} opens its own field`);
+    assert.ok(angle(vecOf(g.ra, g.dec), vecOf(t.ra, t.dec)) < 0.5, `${g.key} gap is round its field`);
+  }
+  // Pointed at Sirius, Sirius first; never more than the shader holds.
+  const slots = coreSlots();
+  pickCores(list, vecOf(stars.ra[0], stars.dec[0]), Math.cos(0.5 * Math.PI / 180), slots);
+  assert.ok(slots.count >= 1 && slots.count <= CORES_MAX);
+  assert.ok(angle(Array.from(slots.cores.slice(0, 3)), vecOf(stars.ra[0], stars.dec[0])) < 1e-4);
+  pickCores(list, [0, 0, 1], -1, slots);
+  assert.equal(slots.count, CORES_MAX);
+  for (let i = 1; i < slots.count; i++) assert.ok(slots.near[i - 1] >= slots.near[i], 'nearest the centre first');
+});

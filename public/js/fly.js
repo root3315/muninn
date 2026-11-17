@@ -19,6 +19,7 @@ import { radecOf } from './allsky/healpix.js';
 import { createSpace, screenOf } from './fly/space.js';
 import { RELIEF, reliefScale } from './fly/relief.js';
 import { createSkyView } from './allsky/view.js';
+import { DEEP_GAPS, CORE_STAR_COUNT } from './allsky/fills.js';
 import { HIPS_BASE, COLOUR_FRAMES } from './allsky/hips.js';
 import { temperatureOf, luminosityOf, radiusOf, vMinusW2, vFromHp, R_SUN_PC, T_SUN } from './fly/stars.js';
 import { solarSystem, orbits as solarOrbits, moonOrbit, bodyAxes, FACTS, MOONS_AS_OF, AU_PC } from './fly/solar.js';
@@ -225,6 +226,7 @@ function makeSurvey() {
     return;
   }
   survey.setFrames(COLOUR_FRAMES);
+  buildGapLabels();
 }
 
 /** How much of the survey shows from here: 1 near the Sun, 0 a light-year out; none in the 4.6 µm view. */
@@ -244,6 +246,7 @@ function drawSurvey(share) {
   if (surveyLayer.style.visibility !== visibility) surveyLayer.style.visibility = visibility;
   if (share <= 0) {
     surveyDrawnFor = '';
+    for (const g of gapLabels) setHidden(g.el, true);
     return;
   }
   // The survey is the sky seen from the Sun: it changes only when the camera
@@ -258,6 +261,44 @@ function drawSurvey(share) {
   const across = (2 * Math.atan(Math.tan((FOV * Math.PI) / 360) * (Math.min(w, h) / h)) * 180) / Math.PI;
   survey.set({ basis: { C: cam.F, E: R.map((c) => -c), N: cam.U }, fov: across });
   survey.drawNow();
+  placeGapLabels(w, h);
+}
+
+/*
+ * The survey's two deep fields are blank in the cube and hatched on the sky
+ * (allsky/fills.js): each is named where it is, and opens its frames in the
+ * tool, as the ready fields do on the front page.
+ */
+let gapLabels = [];
+function buildGapLabels() {
+  gapLabels = DEEP_GAPS.map((g) => {
+    const el = document.createElement('a');
+    el.className = 'fly-label fly-label--gap';
+    el.hidden = true;
+    el.innerHTML = '<span class="fly-label__dot"></span><span class="fly-label__name"></span>';
+    $('labels').append(el);
+    return { g, el };
+  });
+  nameGapLabels();
+}
+
+function nameGapLabels() {
+  for (const { g, el } of gapLabels) {
+    const name = t(`preset.${g.key}`);
+    el.querySelector('.fly-label__name').textContent = `${name} · ${t('sky.gapNote')}`;
+    const url = new URL('./', location.href);
+    url.hash = encodeHash({ ra: g.field.ra, dec: g.field.dec, fov: 0.3, band: 'all', lang: getLanguage(), name });
+    el.href = url.href;
+  }
+}
+
+function placeGapLabels(w, h) {
+  for (const { g, el } of gapLabels) {
+    const at = survey.screenOf(g.ra, g.dec);
+    const inside = Boolean(at) && at.x > -20 && at.y > -20 && at.x < w + 20 && at.y < h + 20;
+    setHidden(el, !inside);
+    if (inside) setPlace(el, at);
+  }
 }
 
 async function loadSky() {
@@ -372,7 +413,8 @@ const posOf = (i) => [stars.pos[i * 3], stars.pos[i * 3 + 1], stars.pos[i * 3 + 
 const placeOf = (s) => (s.index >= 0 ? posOf(s.index) : s.pos);
 
 function buildLabels() {
-  $('labels').replaceChildren();
+  // The deep fields' names stay: they belong to the survey, not to the stars.
+  $('labels').replaceChildren(...gapLabels.map((g) => g.el));
   labels = named.map((s) => {
     const el = document.createElement('button');
     el.type = 'button';
@@ -464,7 +506,20 @@ function flyTo(s) {
   wake();
 }
 
+/** The field of view the flight rests at, degrees, and the easing back to it after a wide step out. */
+const FOV_REST = 70;
+let fovEase = null;
+
+function stepFov() {
+  if (!fovEase) return;
+  const x = Math.min(1, (performance.now() - fovEase.t0) / fovEase.ms);
+  const e = 1 - (1 - x) ** 3;
+  FOV = fovEase.from + (FOV_REST - fovEase.from) * e;
+  if (x >= 1) fovEase = null;
+}
+
 function steer(dt) {
+  stepFov();
   if (stepPullOut()) return;
   if (autopilot?.follow) {
     const to = autopilot.follow();
@@ -1130,7 +1185,7 @@ function frame(now) {
   placeMarks();
   readout();
   refreshCard(now);
-  if (autopilot || pullOut || flying() || racing()) requestAnimationFrame(frame);
+  if (autopilot || pullOut || fovEase || flying() || racing()) requestAnimationFrame(frame);
   else looping = false;
 }
 
@@ -1632,7 +1687,13 @@ addEventListener('message', (e) => {
   if (e.origin !== location.origin || e.data?.type !== 'muninn:look') return;
   const { ra, dec, key, fov, mark } = e.data;
   // The front page's field, so the sky stays as it was on screen.
-  if (Number.isFinite(fov)) FOV = Math.max(FOV_RANGE[0], Math.min(FOV_RANGE[1], fov));
+  if (Number.isFinite(fov)) {
+    FOV = Math.max(FOV_RANGE[0], Math.min(FOV_RANGE[1], fov));
+    // Wider than a view of space can stand without stretching what is near
+    // the edges (the Earth came out an oval): taken over to keep the step out
+    // seamless, then eased back over the first two seconds.
+    fovEase = FOV > FOV_REST ? { from: FOV, t0: performance.now(), ms: 2000 } : null;
+  }
   wake();
   if (![ra, dec].every(Number.isFinite)) return;
   // A key pressed on the sky goes on flying here until it is let go: here,
@@ -2811,7 +2872,8 @@ function applyLanguage() {
   $('lang').textContent = getLanguage() === 'ru' ? 'EN' : 'RU';
   $('hint').textContent = t(matchMedia('(pointer: coarse)').matches ? 'fly.hintTouch' : 'fly.hint');
   if (named.length) nameLabels();
-  if (starCount) $('source').textContent = t('fly.source', { n: fmt(starCount, 0) });
+  if (starCount) $('source').textContent = t('fly.source', { n: fmt(starCount, 0) }) + (survey ? ` · ${t('sky.fills', { n: CORE_STAR_COUNT })}` : '');
+  nameGapLabels();
   buildClock();
   if (card) {
     const { s } = card;
