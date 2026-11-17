@@ -18,6 +18,7 @@ import { t, tIn, setLanguage, getLanguage, applyTranslations, fmt, fmtDate, fmtD
 import { skySigma, stackDepth, shortfall, limitAB, PLANET_NINE_V } from './depth.js';
 import { scoreSectors, standouts, SECTOR_COUNT } from './sectors.js';
 import { Gate, loadStars } from './gate.js';
+import { createCubeCutout } from './gate-sky.js';
 import { drawStrip } from './strip.js';
 import { themeTransition } from './twilight.js';
 import { planetsNow } from './ephemeris.js';
@@ -4414,7 +4415,8 @@ async function showCard(hit, { focus = false } = {}) {
   $('gate-pin').hidden = true;
 
   const preset = hit.kind === 'field' ? state.presets.find((p) => p.key === hit.key) : null;
-  $('gate-card-name').textContent = hit.label ?? t('card.sky');
+  // A cell of the sky grid is named as one: its centre is the place on the card.
+  $('gate-card-name').textContent = hit.label ?? (hit.cell ? t('gate.gridCell', hit.cell) : t('card.sky'));
   $('gate-card-kind').textContent = preset ? (preset.why?.[getLanguage()] ?? preset.why?.en ?? '')
     : hit.kind === 'planet' ? t('card.planet')
       : hit.kind === 'star' ? (hit.what ?? t('card.star'))
@@ -4469,6 +4471,7 @@ async function showCard(hit, { focus = false } = {}) {
   frame.hidden = !thumb;
   cardLive?.abort();
   $('gate-card-live').hidden = true;
+  $('gate-card-cube').hidden = true;
   img.hidden = false;
   delete frame.dataset.live;
   $('gate-card-visits').hidden = true;
@@ -4554,17 +4557,45 @@ const CARD_PX = 280;
 /** As long as the card's own fade in the stylesheet. */
 const CARD_LEAVE_MS = 260;
 const CARD_FOV_DEG = 0.1;
+/** How long the archive has before the card shows the all-sky cube in its place, ms. */
+const CUBE_AFTER_MS = 3000;
+/** The waits before the archive is asked again, while the cube stands in, ms. */
+const LIVE_RETRY_MS = [8000, 20000];
+
+/** The card's cutout of the all-sky cube, made the first time one is wanted; false where it cannot be. */
+let cardCube = null;
+
+/**
+ * The all-sky cube at the card's place, in the square a frame would fill,
+ * named for what it is: the survey's sky, not one visit. Never an empty
+ * square: whatever the archive does, the card shows the sky there.
+ */
+function showCube(hit) {
+  cardCube ??= createCubeCutout($('gate-card-cube')) ?? false;
+  if (!cardCube) return false;
+  const frame = $('gate-card-frame');
+  $('gate-card-live').hidden = true;
+  $('gate-card-cube').hidden = false;
+  $('gate-card').dataset.band = '';
+  frame.dataset.live = 'cube';
+  frame.dataset.ready = 'true';
+  $('gate-card-tag').textContent = t('card.cube');
+  cardCube.show(hit.ra, hit.dec);
+  return true;
+}
 
 /**
  * Read one real frame for a place that has none stored: ask the archive which
  * frames cover it, take the first D2 visit that fills the picture, and paint
  * it the way the plate would. Each step is said on the card while it runs.
+ * If the archive is slow (past three seconds), has nothing, or fails, the
+ * all-sky cube stands in; a failure is asked again a little later, and a real
+ * frame that comes in then takes the cube's place.
  */
 async function previewLive(hit, where) {
   const card = $('gate-card');
   const frame = $('gate-card-frame');
   const canvas = $('gate-card-live');
-  const tag = $('gate-card-tag');
   const ctrl = new AbortController();
   cardLive = ctrl;
   const mine = () => cardHit === hit && !ctrl.signal.aborted;
@@ -4578,24 +4609,61 @@ async function previewLive(hit, where) {
   frame.dataset.ring = 'false';
   frame.dataset.ready = 'false';
   frame.dataset.live = 'asking';
-  tag.textContent = t('card.asking');
+  $('gate-card-tag').textContent = t('card.asking');
 
+  const slow = setTimeout(() => { if (mine() && frame.dataset.live !== 'shown') showCube(hit); }, CUBE_AFTER_MS);
+  const counted = { visits: false };
   try {
-    const { frames } = await searchFrames({ ra: hit.ra, dec: hit.dec }, { signal: ctrl.signal });
-    if (!mine()) return;
-    const visits = groupVisits(frames, { ra: hit.ra, dec: hit.dec, band: 'D2' });
-    if (!visits.length) { frame.dataset.live = 'none'; tag.textContent = t('card.noFrames'); return; }
-    where.before(cardFact(t('card.bandVisits', { band: 'D2' }), String(visits.length)));
+    for (let attempt = 0; ; attempt++) {
+      const outcome = await readLiveFrame(hit, where, ctrl.signal, mine, counted);
+      if (!mine() || outcome === 'shown') return;
+      if (!showCube(hit)) {
+        // No WebGL for the cube: the card says what the archive did instead.
+        frame.dataset.live = outcome;
+        $('gate-card-tag').textContent = t(outcome === 'failed' ? 'card.liveFailed' : 'card.noFrames');
+      }
+      if (outcome === 'none' || attempt >= LIVE_RETRY_MS.length) return;
+      await pause(LIVE_RETRY_MS[attempt], ctrl.signal);
+    }
+  } catch {
+    // Left: the card has gone or moved on.
+  } finally {
+    clearTimeout(slow);
+  }
+}
 
-    frame.dataset.live = 'reading';
-    tag.textContent = t('card.reading');
+/**
+ * One try at the card's real frame: 'shown', 'none' (no D2 visit covers the
+ * place) or 'failed' (the network's doing, not the sky's). While the cube
+ * stands in, the steps are not said over its caption.
+ */
+async function readLiveFrame(hit, where, signal, mine, counted) {
+  const frame = $('gate-card-frame');
+  const canvas = $('gate-card-live');
+  const tag = $('gate-card-tag');
+  const say = (state, words) => {
+    if (frame.dataset.live === 'cube') return;
+    frame.dataset.live = state;
+    tag.textContent = words;
+  };
+  try {
+    const { frames } = await searchFrames({ ra: hit.ra, dec: hit.dec }, { signal });
+    if (!mine()) return 'none';
+    const visits = groupVisits(frames, { ra: hit.ra, dec: hit.dec, band: 'D2' });
+    if (!visits.length) return 'none';
+    if (!counted.visits) {
+      counted.visits = true;
+      where.before(cardFact(t('card.bandVisits', { band: 'D2' }), String(visits.length)));
+    }
+
+    say('reading', t('card.reading'));
     const grid = new TangentGrid(hit.ra, hit.dec, CARD_FOV_DEG, CARD_PX, CARD_PX);
     const tried = visits.slice(0, 4);
     let failed = 0;
     for (const visit of tried) {
-      const stamp = await loadStamp(toS3(visit.url), grid, { signal: ctrl.signal, minCoverage: 0.9 })
+      const stamp = await loadStamp(toS3(visit.url), grid, { signal, minCoverage: 0.9 })
         .catch(() => { failed += 1; return null; });
-      if (!mine()) return;
+      if (!mine()) return 'none';
       if (!stamp) continue;
       const ctx = canvas.getContext('2d');
       const picture = ctx.createImageData(CARD_PX, CARD_PX);
@@ -4604,19 +4672,19 @@ async function previewLive(hit, where) {
         lo, hi, stretch: 'asinh', blankAlpha: 255, quality: stamp.quality,
       });
       ctx.putImageData(picture, 0, 0);
+      // The real frame takes the cube's place.
+      $('gate-card-cube').hidden = true;
+      canvas.hidden = false;
+      $('gate-card').dataset.band = 'D2';
       frame.dataset.live = 'shown';
       frame.dataset.ready = 'true';
       tag.textContent = `D2 · ${fmtDate(visit.iso).replace(/\s*г\.?$/, '')}`;
-      return;
+      return 'shown';
     }
-    // Every read failing is the network's doing, not the sky's.
-    const unread = failed === tried.length;
-    frame.dataset.live = unread ? 'failed' : 'none';
-    tag.textContent = t(unread ? 'card.liveFailed' : 'card.noFrames');
-  } catch {
-    if (!mine()) return;
-    frame.dataset.live = 'failed';
-    tag.textContent = t('card.liveFailed');
+    return failed === tried.length ? 'failed' : 'none';
+  } catch (err) {
+    if (signal.aborted) throw err;
+    return 'failed';
   }
 }
 
@@ -4841,6 +4909,31 @@ wireWorld({
   },
 });
 
+/** Where the sky grid's switch is kept between visits. */
+const GRID_KEY = 'muninn.skyGrid';
+
+/**
+ * The sky's two pills: "Explore in 3D", the way out into space from where the
+ * sky faces (the flight puts its way back on the same spot), and the sky grid,
+ * off until asked for and remembered.
+ */
+function wireSkyKeys() {
+  $('gate-3d').addEventListener('click', () => openWorld('fly', gateLook(), getLanguage()));
+  const button = $('gate-grid');
+  let on = false;
+  try { on = localStorage.getItem(GRID_KEY) === '1'; } catch { /* private window */ }
+  const set = (value) => {
+    on = value;
+    button.setAttribute('aria-pressed', String(on));
+    gate.setGrid(on);
+  };
+  set(on);
+  button.addEventListener('click', () => {
+    set(!on);
+    try { localStorage.setItem(GRID_KEY, on ? '1' : '0'); } catch { /* private window */ }
+  });
+}
+
 async function buildGate() {
   gate = new Gate($('gate-sky'), {
     onStepOut: (look) => openWorld('fly', look, getLanguage()),
@@ -4854,6 +4947,7 @@ async function buildGate() {
       setTimeout(() => preloadWorld('fly', getLanguage()), 3000);
     },
   });
+  wireSkyKeys();
   window.addEventListener('resize', () => { if (!$('gate').hidden) gate.resize(); });
   // On a phone the sky is the space between the bar and the panel under it,
   // and the panel changes height without the window doing so (the fields
@@ -6038,9 +6132,11 @@ async function boot() {
   }
   let stored = null;
   try { stored = localStorage.getItem('muninn.lang'); } catch { /* private window */ }
-  // The hash for a shared field, the query for a plain link (/?lang=en), then what this browser chose before.
+  // The hash for a shared field, the query for a plain link (/?lang=ru), then
+  // what this browser chose before; a first visit opens in English, whatever
+  // the browser's own language, since the judging and the archive are in it.
   const asked = hash.lang ?? new URLSearchParams(location.search).get('lang');
-  setLanguage(['en', 'ru'].includes(asked) ? asked : stored ?? (navigator.language?.startsWith('ru') ? 'ru' : 'en'));
+  setLanguage(['en', 'ru'].includes(asked) ? asked : ['en', 'ru'].includes(stored) ? stored : 'en');
   wireSafety();
   loadExamined();
 

@@ -37,6 +37,7 @@
 import { createBandLayer } from './gate-band.js';
 import { createSurveySky } from './gate-sky.js';
 import { starColour } from './starcolour.js';
+import { vecOfXyf, tileAt, tileCentre, radecOf } from './allsky/healpix.js';
 
 const D2R = Math.PI / 180;
 const R2D = 180 / Math.PI;
@@ -259,6 +260,54 @@ const FOV_DIVE = 1.0;
 const DIVE_DPR = 0.7;
 /** How long the model takes to give way to the surveyed band, ms. */
 const SURVEY_FADE_MS = 900;
+/**
+ * The Messier objects are marked only once the sky is narrower than this, in
+ * degrees: at the opening's width a hundred unnamed rings stood over the
+ * Milky Way, and the named fields and the planets were lost among them.
+ */
+const DEEP_FOV = 30;
+/**
+ * The sky grid: the HEALPix cells the all-sky cube is served in, order 3
+ * (about 7.3° a side, the cells of its Allsky image) on a wide sky and order
+ * 4 (3.7°) once it is narrower than this, in degrees.
+ */
+const GRID_FINE_FOV = 25;
+/** Points along each cell's side, so a curved edge is drawn as a curve. */
+const GRID_STEPS = 4;
+const GRID_ALPHA = 0.08;
+
+/**
+ * The cell edges of one HEALPix order as polylines of unit vectors, made once:
+ * on each of the twelve base faces, the lines of constant x and of constant y
+ * at every cell boundary. `starts[i]` is where line i begins in `v`, counted
+ * in points; the last entry is the total.
+ */
+function healpixLines(order) {
+  const n = 2 ** order;
+  const per = n * GRID_STEPS + 1;
+  const lines = 12 * 2 * (n + 1);
+  const v = new Float32Array(lines * per * 3);
+  const starts = new Int32Array(lines + 1);
+  let p = 0;
+  let line = 0;
+  for (let face = 0; face < 12; face++) {
+    for (let k = 0; k <= n; k++) {
+      for (const across of [false, true]) {
+        starts[line++] = p;
+        for (let s = 0; s < per; s++) {
+          const along = s / (per - 1);
+          const [x, y, z] = across ? vecOfXyf(along, k / n, face) : vecOfXyf(k / n, along, face);
+          v[p * 3] = x;
+          v[p * 3 + 1] = y;
+          v[p * 3 + 2] = z;
+          p++;
+        }
+      }
+    }
+  }
+  starts[line] = p;
+  return { v, starts };
+}
 
 export class Gate {
   /**
@@ -301,11 +350,17 @@ export class Gate {
     this.onPick = onPick;
     this.onName = onName;
     this.onSurvey = onSurvey;
-    /** Called when the sky is zoomed out past its widest: the way out into space. */
+    /**
+     * The way out into space, for the keys and for a pinch out past the
+     * widest; the front page's "Explore in 3D" is the way most take. The
+     * wheel only zooms.
+     */
     this.onStepOut = onStepOut;
     this.bindKeys();
-    // On a touch screen there are no keys: the hint says to pinch out instead.
-    if (matchMedia('(pointer: coarse)').matches) document.querySelector('.scale-hint')?.setAttribute('data-i18n', 'scale.hintTouch');
+
+    /** The sky grid (HEALPix cells), off until asked for; its lines are made once per order. */
+    this.grid = false;
+    this.gridLines = new Map();
 
     this.outward = 0;
     /** The surveyed band, once it has arrived: `{ pixels, W, H }`. */
@@ -830,6 +885,7 @@ export class Gate {
       }
       // The rings wait for the real sky, then come in over it.
       if (!f && this.surveyCube) {
+        if (this.grid) this.drawGrid(ctx);
         this.drawTargets(ctx);
         this.drawSelected(ctx);
         this.drawHit(ctx);
@@ -996,6 +1052,7 @@ export class Gate {
     // Labels have no business in a moving frame: they are not in the sky, so
     // they would slide across it rather than through it.
     if (!f) {
+      if (this.grid) this.drawGrid(ctx);
       this.drawTargets(ctx);
       this.drawSelected(ctx);
       this.drawHit(ctx);
@@ -1086,8 +1143,16 @@ export class Gate {
     }
     ctx.font = this.font;
     ctx.textBaseline = 'middle';
+    const deepShown = this.deepShown();
+    // The names put down so far, as boxes: a name that would land on one is
+    // left to its marker (the pointer names it), unless it is the one picked
+    // or under the pointer. The north ecliptic pole and R Dra are 1.5° apart.
+    const boxes = (this.labelBoxes ??= []);
+    boxes.length = 0;
+    const free = (x0, y0, w, h) => boxes.every(([bx, by, bw, bh]) => x0 >= bx + bw || bx >= x0 + w || y0 >= by + bh || by >= y0 + h);
 
     for (const tgt of this.targets) {
+      if (tgt.kind === 'deep' && !deepShown && !this.isSelected(tgt)) continue;
       if (!this.at(tgt.v[0], tgt.v[1], tgt.v[2])) continue;
       const x = this.px;
       const y = this.py;
@@ -1114,6 +1179,14 @@ export class Gate {
         // Past the reticle's ticks when this is the one picked, so the name and
         // the crosshair do not cross.
         const lx = x + (this.isSelected(tgt) ? 40 : r / dpr + 7) * dpr;
+        if (tgt.labelFont !== this.font) {
+          tgt.labelFont = this.font;
+          tgt.labelW = ctx.measureText(tgt.label).width;
+        }
+        const lh = 16 * dpr;
+        const first = near || this.isSelected(tgt);
+        if (!first && !free(lx, y - lh / 2, tgt.labelW, lh)) continue;
+        boxes.push([lx, y - lh / 2, tgt.labelW, lh]);
         ctx.strokeText(tgt.label, lx, y);
         ctx.fillStyle = near ? ink : colour;
         ctx.fillText(tgt.label, lx, y);
@@ -1121,6 +1194,16 @@ export class Gate {
         // cube is the sky: the hatched disc round it is not sky.
         if (tgt.note && this.surveyCube) {
           ctx.font = this.noteFont;
+          if (tgt.noteFont !== this.noteFont) {
+            tgt.noteFont = this.noteFont;
+            tgt.noteW = ctx.measureText(tgt.note).width;
+          }
+          const ny = y + 14 * dpr;
+          if (!first && !free(lx, ny - 7 * dpr, tgt.noteW, 14 * dpr)) {
+            ctx.font = this.font;
+            continue;
+          }
+          boxes.push([lx, ny - 7 * dpr, tgt.noteW, 14 * dpr]);
           ctx.globalAlpha = near ? 1 : 0.7;
           ctx.strokeText(tgt.note, lx, y + 14 * dpr);
           ctx.fillStyle = ink;
@@ -1129,6 +1212,48 @@ export class Gate {
         }
       }
     }
+    ctx.globalAlpha = 1;
+  }
+
+  /** Whether the sky is narrow enough for the Messier objects to be marked (and pressed). */
+  deepShown() {
+    return (this.flight ? this.flight.fov : this.cam.fov) < DEEP_FOV;
+  }
+
+  /** The grid's order at the present width of the sky. */
+  gridOrder() {
+    return this.cam.fov > GRID_FINE_FOV ? 3 : 4;
+  }
+
+  /** Show the sky grid, or take it away. */
+  setGrid(on) {
+    this.grid = Boolean(on);
+    this.requestDraw();
+  }
+
+  /**
+   * The HEALPix cells, barely there: one path, stroked once, so where two
+   * faces share an edge it is not drawn darker. A point behind the camera
+   * breaks its line; nothing is allocated once an order's lines are made.
+   */
+  drawGrid(ctx) {
+    const order = this.gridOrder();
+    if (!this.gridLines.has(order)) this.gridLines.set(order, healpixLines(order));
+    const { v, starts } = this.gridLines.get(order);
+    ctx.strokeStyle = this.paint.ink;
+    ctx.globalAlpha = GRID_ALPHA;
+    ctx.lineWidth = this.box.dpr;
+    ctx.beginPath();
+    for (let line = 0; line + 1 < starts.length; line++) {
+      let pen = false;
+      for (let p = starts[line]; p < starts[line + 1]; p++) {
+        if (!this.at(v[p * 3], v[p * 3 + 1], v[p * 3 + 2])) { pen = false; continue; }
+        if (pen) ctx.lineTo(this.px, this.py);
+        else ctx.moveTo(this.px, this.py);
+        pen = true;
+      }
+    }
+    ctx.stroke();
     ctx.globalAlpha = 1;
   }
 
@@ -1509,6 +1634,15 @@ export class Gate {
     if (this.hit) { this.onPick?.(this.hit); return; }
     if (!this.pointer || !this.box) return;
     const [ra, dec] = this.unproject(this.pointer[0], this.pointer[1]);
+    // With the grid on, a press on empty sky is a press on its cell: the
+    // cell's centre is what opens, and the card names the cell.
+    if (this.grid) {
+      const order = this.gridOrder();
+      const { npix } = tileAt(order, ra, dec);
+      const c = radecOf(tileCentre(order, npix));
+      this.onPick?.({ kind: 'sky', ra: c.ra, dec: c.dec, label: null, cell: { order, npix } });
+      return;
+    }
     this.onPick?.({ kind: 'sky', ra, dec, label: null });
   }
 
@@ -1523,8 +1657,11 @@ export class Gate {
     const [px, py] = this.pointer;
     let best = null;
     let bestD = (this.coarse ? 40 : 24) * this.box.dpr;
+    const deepShown = this.deepShown();
 
     for (const tgt of this.targets) {
+      // A ring not drawn is not there to be pressed.
+      if (tgt.kind === 'deep' && !deepShown) continue;
       if (!this.at(tgt.v[0], tgt.v[1], tgt.v[2])) continue;
       const d = Math.hypot(this.px - px, this.py - py);
       if (d < bestD) { bestD = d; best = { ...tgt, item: tgt }; }

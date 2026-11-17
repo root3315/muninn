@@ -391,7 +391,8 @@ function startLanguage() {
   const asked = new URLSearchParams(location.search).get('lang');
   let saved = null;
   try { saved = localStorage.getItem('muninn.lang'); } catch { /* private window */ }
-  const pick = asked ?? saved ?? (navigator.language?.startsWith('ru') ? 'ru' : 'en');
+  // A first visit opens in English, whatever the browser's language.
+  const pick = asked ?? saved ?? 'en';
   lang = pick === 'ru' ? 'ru' : 'en';
 }
 

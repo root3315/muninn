@@ -8,7 +8,9 @@
  */
 (function guard() {
   var WAIT_MS = 25000;
-  var lang = (new URLSearchParams(location.search).get('lang') || navigator.language || '').toLowerCase();
+  var stored = null;
+  try { stored = localStorage.getItem('muninn.lang'); } catch (e) { /* private window */ }
+  var lang = (new URLSearchParams(location.search).get('lang') || stored || 'en').toLowerCase();
   var ru = lang.indexOf('ru') === 0;
   var words = ru
     ? { text: 'Страница VR не загрузилась: не удалось получить часть её кода.', again: 'Перезапустить сцену' }

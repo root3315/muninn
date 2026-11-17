@@ -59,7 +59,7 @@ const STEP_MAX_M = 12;
 const STEP_FADE_MS = 160;
 const FLY_STOP_M = 0.6;
 
-/** The page's language: ?lang=, else the site's stored choice, else the browser's. */
+/** The page's language: ?lang=, else the site's stored choice, else English. */
 export function pageLanguage() {
   const asked = new URLSearchParams(location.search).get('lang');
   if (asked) return asked;
@@ -67,7 +67,7 @@ export function pageLanguage() {
     const stored = localStorage.getItem('muninn.lang');
     if (stored) return stored;
   } catch { /* private window */ }
-  return (navigator.language ?? '').toLowerCase().startsWith('ru') ? 'ru' : 'en';
+  return 'en';
 }
 
 /** Whether this device can run an immersive VR session, the recommended way. */

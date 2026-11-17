@@ -125,9 +125,6 @@
 .fly-label--exo .fly-label__far { margin-block-start: -6px; }
 .fly-mark--planet { color: oklch(88% 0.08 165); }
 
-.fly-back { margin-inline-start: 0; }
-.fly-back[hidden] { display: none; }
-
 /* A system from above: its orbits to scale and its habitable zone. */
 .fly-system__box { margin: 0 0 var(--space-xs); }
 .fly-system { display: block; inline-size: 100%; max-inline-size: 15rem; margin-inline: auto; }

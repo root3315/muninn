@@ -63,3 +63,30 @@ export function createSurveySky(canvas, { onFirstSky = () => {} } = {}) {
     setFrames(frames) { view.setFrames(frames); },
   };
 }
+
+/** How wide the card's cutout of the cube is, degrees: wide enough to hold a few stars on an empty patch of sky. */
+const CUTOUT_FOV = 1;
+
+/**
+ * The all-sky cube at one point, for the card on the sky while the archive
+ * is asked for a real frame, or where it cannot give one. The same renderer
+ * and the same tiles as the sky behind the card (most already in the
+ * browser's cache), on the card's own small canvas. It is the survey's
+ * averaged sky, not one visit, and the card says so. Null where WebGL 2
+ * cannot be had.
+ */
+export function createCubeCutout(canvas) {
+  const ramp = getComputedStyle(document.documentElement).getPropertyValue('--cmap-deep')
+    .split(/,(?![^(]*\))/).map((s) => s.trim()).filter(Boolean);
+  const view = createSkyView(canvas, {
+    ramp,
+    ink: { grid: [0, 0, 0, 0], ecliptic: [0, 0, 0, 0] },
+    relay: (url) => url.replace(`${HIPS_BASE}/`, 'api/hips/'),
+  });
+  if (!view) return null;
+  view.setFrames(COLOUR_FRAMES);
+  return {
+    /** Face the cube at a point. */
+    show(ra, dec) { view.set({ ra, dec, fov: CUTOUT_FOV }); },
+  };
+}

@@ -674,18 +674,20 @@ body { font-size: var(--text-base); line-height: 1.5; }
   margin: var(--poster-m);
   margin-block-end: calc(var(--poster-m) + env(safe-area-inset-bottom, 0px));
 }
-/* On a wide screen the way in stands on the same frosted ground as the
-   whole-sky page's dock: the sky shows through it, blurred, and the words
-   keep their contrast wherever the Milky Way is behind them. */
+/* On a wide screen the way in stands on the sky itself, with no panel under
+   it: a soft shade rising from the lower left corner gives the words their
+   ground wherever the Milky Way is behind them, and the name is large. */
 @media not ((max-width: 48rem) and (min-height: 30.0625rem)) {
-  .gate__poster {
-    /* Wider by its padding, so the chips keep the rows they had. */
-    inline-size: min(37rem, calc(100% - 2 * var(--poster-m)));
-    padding: var(--space-md) var(--space-lg) var(--space-lg);
-    border-radius: var(--radius-lg);
-    background: var(--gate-veil-deep);
-    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  .gate__poster { inline-size: min(36rem, calc(100% - 2 * var(--poster-m))); }
+  .gate__vignette {
+    background:
+      radial-gradient(64rem 36rem at 0% 100%, var(--gate-veil-deep) 0%, oklch(9% 0.022 285 / 0.55) 45%, transparent 78%),
+      radial-gradient(120% 90% at 60% 40%, transparent 50%, var(--gate-veil) 100%);
   }
+  .gate__poster :is(.gate__word, .gate__tag, .gate__src, .gate__jump-k) { text-shadow: var(--shade-text); }
+  .gate__poster .gate__word { font-size: clamp(3rem, 6vw, 5.75rem); letter-spacing: -0.03em; }
+  .gate__poster .gate__tag { font-size: var(--text-lg); color: var(--color-ink); }
+  .gate__poster .gate__src { font-size: var(--text-sm); color: var(--color-muted); }
 }
 .gate__word {
   font-family: var(--font-display); font-weight: 500;
@@ -1793,7 +1795,7 @@ body { font-size: var(--text-base); line-height: 1.5; }
     inset-inline-start: calc(var(--dock-pad) + env(safe-area-inset-left, 0px));
     block-size: 3.5rem; align-items: center;
   }
-  .gate__word { font-size: 1.375rem; letter-spacing: -0.01em; text-shadow: none; }
+  .gate__word, .gate__poster .gate__word { font-size: 1.375rem; letter-spacing: -0.01em; text-shadow: none; }
   .gate__acts {
     inset-block-start: env(safe-area-inset-top, 0px);
     inset-inline-end: calc(var(--space-xs) + env(safe-area-inset-right, 0px));
@@ -1814,7 +1816,7 @@ body { font-size: var(--text-base); line-height: 1.5; }
     background: var(--dock-bg); border-block-start: 1px solid var(--dock-rule);
     color: var(--color-ink);
   }
-  .gate__tag {
+  .gate__tag, .gate__poster .gate__tag {
     font-size: var(--text-sm); line-height: 1.35; padding: 0; text-shadow: none;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
@@ -2006,15 +2008,82 @@ body { font-size: var(--text-base); line-height: 1.5; }
 .scale__key[aria-pressed="true"] { color: var(--color-accent-ink); background: var(--color-accent); cursor: default; }
 @media (max-width: 640px) { .scale__key { padding-inline: var(--space-sm); font-size: var(--text-xs); } }
 
-/* The two ways out of the sky, said once and quietly. */
-.scale-hint {
-  position: absolute; z-index: 6; margin: 0;
-  inset-inline-start: 1rem; inline-size: fit-content; max-inline-size: calc(100% - 2rem);
-  inset-block-start: 0.85rem;
-  padding: var(--space-2xs) var(--space-md); border-radius: var(--radius-round);
-  background: var(--gate-veil-deep); color: var(--color-muted);
-  font-size: var(--text-xs); text-align: center; pointer-events: none;
+/*
+ * The way into space and the way back: one pill on one spot. The front page
+ * puts "Explore in 3D" here and the flight, opened over it full-screen, puts
+ * "Back to the sky" on the same spot, so the two read as one control that
+ * changes its word. Both pages read this rule, and the spot is worked out
+ * from the window alone, which the two share.
+ */
+.way-3d {
+  --way-top: calc(clamp(0.875rem, 1.5vw, 1.5rem) + env(safe-area-inset-top, 0px));
+  position: fixed; z-index: 6;
+  inset-block-start: var(--way-top); inset-inline-start: 50%; translate: -50% 0;
+  display: inline-flex; align-items: center; gap: var(--space-xs);
+  min-block-size: 2.5rem; padding-inline: var(--space-md) var(--space-lg);
+  border: 0; border-radius: var(--radius-round); cursor: pointer;
+  font: inherit; font-size: var(--text-sm); font-weight: 600; line-height: 1; white-space: nowrap;
+  color: var(--color-ink);
+  background: var(--gate-veil-deep);
+  box-shadow: inset 0 0 0 1px var(--color-accent);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-micro) var(--ease-out), opacity var(--dur-short) var(--ease-out);
 }
+.way-3d[hidden] { display: none; }
+.way-3d svg { inline-size: 1.125rem; block-size: 1.125rem; fill: none; stroke: var(--color-accent); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.way-3d:hover { background: var(--color-accent); color: var(--color-accent-ink); }
+.way-3d:hover svg { stroke: currentColor; }
+.way-3d:active { scale: 0.97; }
+.way-3d:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 3px; }
+/* Under the links on a screen too narrow for both on one row. */
+@media (max-width: 64rem) {
+  .way-3d { --way-top: calc(clamp(0.875rem, 1.5vw, 1.5rem) + env(safe-area-inset-top, 0px) + 2.75rem); }
+}
+/* On a phone, at the top of the sky, under the bar. */
 @media (max-width: 48rem) and (min-height: 30.0625rem) {
-  .scale-hint { inset-block-start: calc(var(--gate-bar, 3.5rem) + 0.25rem); inset-inline: 0; margin-inline: auto; font-size: var(--text-2xs); }
+  .way-3d { --way-top: calc(3.5rem + env(safe-area-inset-top, 0px) + var(--space-sm)); }
+}
+/* Held sideways, over the middle of the sky, beside the panel. */
+@media (max-height: 30rem) and (orientation: landscape) and (pointer: coarse) {
+  .way-3d {
+    --way-top: calc(3.25rem + env(safe-area-inset-top, 0px) + var(--space-xs));
+    inset-inline-start: calc(min(21rem, 44vw) + (100% - min(21rem, 44vw)) / 2);
+  }
+}
+.gate[data-entering="true"] :is(.way-3d, .gate__grid) { opacity: 0; pointer-events: none; }
+
+/* The grid's switch: small and quiet, in the corner the links leave free. */
+.gate__grid {
+  position: absolute; z-index: 3;
+  inset-block-start: calc(var(--gutter) + env(safe-area-inset-top, 0px));
+  inset-inline-start: calc(var(--gutter) + env(safe-area-inset-left, 0px));
+  display: inline-flex; align-items: center; gap: var(--space-2xs);
+  min-block-size: var(--hit); padding-inline: var(--space-sm);
+  border: 0; border-radius: var(--radius-round); cursor: pointer;
+  font: inherit; font-size: var(--text-xs); line-height: 1; white-space: nowrap;
+  color: var(--color-muted); background: var(--gate-veil);
+  transition: background-color var(--dur-short) var(--ease-out), color var(--dur-micro) var(--ease-out);
+}
+.gate__grid svg { inline-size: 0.875rem; block-size: 0.875rem; fill: none; stroke: currentColor; stroke-width: 1.3; }
+.gate__grid:hover { color: var(--color-ink); background: var(--gate-chip); }
+.gate__grid[aria-pressed="true"] { color: var(--color-accent); box-shadow: inset 0 0 0 1px var(--color-accent); }
+.gate__grid:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+/* On a phone the bar has the top corners: the switch sits at the foot of the sky, right. */
+@media (max-width: 48rem) and (min-height: 30.0625rem) {
+  .gate__grid {
+    inset-block-start: auto; inset-inline-start: auto;
+    inset-block-end: calc(var(--gate-dock, 12rem) + var(--space-sm));
+    inset-inline-end: calc(var(--space-sm) + env(safe-area-inset-right, 0px));
+  }
+  /* The name of what a finger is on steps under the pill at the top of the sky. */
+  .gate__pin, .gate__pin[data-flip="true"] { inset-block-start: calc(var(--gate-bar) + var(--space-sm) + 3rem); }
+}
+@media (max-height: 30rem) and (orientation: landscape) and (pointer: coarse) {
+  .gate__grid { inset-block-start: auto; inset-inline-start: auto; inset-block-end: var(--space-sm); inset-inline-end: var(--space-sm); }
+}
+
+/* The note under "How to read this" is gone from the opening sky: the ring
+   alone says the sheet has not been opened yet. */
+@media (min-width: 721px) {
+  .gate .link[data-cue]::after { display: none; }
 }
