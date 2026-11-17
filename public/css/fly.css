@@ -38,16 +38,16 @@
   /* The row goes on past the edge: it fades rather than being cut. */
   -webkit-mask-image: linear-gradient(90deg, #000 90%, transparent); mask-image: linear-gradient(90deg, #000 90%, transparent);
 }
-.fly-speed { display: inline-flex; gap: var(--space-3xs); }
-.fly-speed .as-toggle { min-inline-size: var(--hit); justify-content: center; font-size: var(--text-md); }
 .fly-dest::-webkit-scrollbar { display: none; }
 .fly-dest .as-band { white-space: nowrap; border: 0; font: inherit; font-size: var(--text-sm); font-weight: 600; }
 .fly-chip--target { color: var(--color-counter); }
 
 /* Forward and back, for a hand with no keyboard: buttons with the dock's own
-   ground and rim, so they read as controls and not as the card's scroll. */
+   ground and rim, so they read as controls and not as the card's scroll.
+   They stand on the dock's measured top (--dock-space, set by fly.js), never under it. */
 .fly-pad {
-  position: absolute; inset-inline-end: var(--edge); inset-block-end: calc(var(--edge) + 11rem);
+  position: absolute; inset-inline-end: var(--edge);
+  inset-block-end: calc(var(--dock-space, 12rem) + var(--space-sm));
   display: grid; gap: var(--space-xs);
 }
 .fly-pad .as-zoom__key {
@@ -59,12 +59,31 @@
 @media (min-width: 641px) {
   .fly-card:not([hidden]) ~ .fly-pad { inset-inline-end: calc(var(--edge) + min(22rem, calc(100% - 2 * var(--edge))) + var(--space-sm)); }
 }
-.fly-pad .as-zoom__key { touch-action: none; user-select: none; -webkit-user-select: none; }
+.fly-pad .as-zoom__key { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
 .fly-pad .as-zoom__key:active { background: var(--color-accent); color: var(--color-accent-ink); }
 
+/* The hint and the 4.6 µm note stand on the dock too. */
+#hint { inset-block-end: calc(var(--dock-space, 12rem) + var(--space-sm)); }
+.fly-note {
+  position: absolute; inset-inline: 0; inset-block-end: calc(var(--dock-space, 12rem) + var(--space-sm));
+  margin: 0 auto; inline-size: fit-content; max-inline-size: calc(100% - 2 * var(--edge) - 4rem);
+  padding: var(--space-3xs) var(--space-sm); border-radius: var(--radius-round);
+  background: var(--gate-veil-deep); color: var(--color-counter); font-size: var(--text-2xs); text-align: center;
+  pointer-events: none;
+}
+.fly-note[hidden] { display: none; }
+
 @media (max-width: 640px) {
-  .fly-pad { inset-block-end: calc(var(--edge) + 10rem); }
+  /* On a phone the pad is where the right thumb rests: low on the right, a
+     little larger, ▲ above ▼, just over the dock. */
+  .fly-pad { gap: var(--space-sm); }
+  .fly-pad .as-zoom__key { inline-size: 3rem; block-size: 3rem; font-size: var(--text-md); }
   .fly-label__far { display: none; }
+  /* The hint keeps clear of the pad. */
+  #hint {
+    inset-inline-start: var(--edge); inset-inline-end: calc(var(--edge) + 3.5rem);
+    margin-inline: 0; max-inline-size: none; font-size: var(--text-xs);
+  }
 }
 
 /* A star's card: what the catalogue knows, and where to go from it. */
@@ -101,7 +120,12 @@
 .fly-card__frames[hidden] { display: none; }
 
 @media (max-width: 640px) {
-  .fly-card { inset-block-start: auto; inset-block-end: calc(var(--edge) + 9.5rem); padding: var(--space-sm) var(--space-md); }
+  /* On a phone the card is over the dock and left of the pad. */
+  .fly-card {
+    inset-block-start: auto; inset-block-end: calc(var(--dock-space, 12rem) + var(--space-sm));
+    inset-inline-start: var(--edge); inset-inline-end: calc(var(--edge) + 3rem + var(--space-sm));
+    inline-size: auto; padding: var(--space-sm) var(--space-md);
+  }
 }
 
 /* Words for places that are not stars: the reach shells, the orbits. */
@@ -133,7 +157,10 @@
 .fly-system__orbit { fill: none; stroke: oklch(82% 0.11 165 / 0.6); stroke-width: 0.8; }
 .fly-system__planet { fill: oklch(92% 0.04 165); stroke: oklch(20% 0.02 250); stroke-width: 0.8; }
 .fly-system__note { margin: var(--space-2xs) 0 0; font-size: var(--text-2xs); color: var(--color-neutral); text-align: center; }
-.fly-card { max-block-size: calc(100% - 2 * var(--edge) - 12rem); overflow-y: auto; }
+.fly-card { max-block-size: calc(100% - 2 * var(--edge) - var(--dock-space, 12rem)); overflow-y: auto; overflow-x: hidden; }
+/* One column no wider than the card: a long list or note wraps, never scrolls sideways. */
+.fly-card { grid-template-columns: minmax(0, 1fr); }
+.fly-card > * { min-inline-size: 0; }
 
 /* A planet's way in, beside its name in its system's card. */
 .fly-planet-go {
@@ -146,14 +173,61 @@
 /* The Sun's planets' orbits drawn round a star, for scale. */
 .fly-mark--scale { color: oklch(88% 0.05 245); }
 
-/* The clock: stop and start, a pace, the way back to now, and the moment shown when it is not now. */
-.fly-time { flex-wrap: wrap; row-gap: var(--space-3xs); }
+/* The dock: two rows that keep their height whatever they say. The first,
+   where to go, scrolls sideways; the second holds what to show, the clock,
+   where you are on one line, and the sources. */
+.fly-dock { max-inline-size: 72rem; }
+.fly-dock__row { flex-wrap: nowrap; }
+.fly-dock__to { flex: none; }
+.fly-dock .as-toggle, .fly-dock .as-band { flex: none; white-space: nowrap; }
+.fly-ir__short { display: none; }
+.fly-ir[hidden] { display: none; }
+.fly-time { display: inline-flex; gap: var(--space-3xs); flex: none; }
+.fly-time[hidden], .fly-time [hidden] { display: none; }
 .fly-time__play { min-inline-size: var(--hit); justify-content: center; }
-.fly-time__rates { display: inline-flex; flex-wrap: wrap; gap: var(--space-3xs); }
-.fly-rate { font-size: var(--text-xs); }
-.fly-time [hidden] { display: none; }
-.fly-time__date { margin: 0; color: var(--color-counter); }
-.fly-time__date:empty { display: none; }
+.fly-time__rate { min-inline-size: 6.5rem; justify-content: center; }
+.fly-line {
+  flex: 1 1 0; min-inline-size: 0; margin: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.fly-line__date { color: var(--color-counter); }
+.fly-sources { margin-inline-start: auto; }
+.fly-sources__short { display: none; }
+.fly-chip--more { color: var(--color-ink); }
+
+/* The panels a chip or the sources button opens, above it. */
+.fly-pop {
+  position: absolute; z-index: 3;
+  display: flex; flex-wrap: wrap; gap: var(--space-3xs);
+  padding: var(--space-xs); border-radius: var(--radius-lg);
+  background: var(--gate-veil-deep);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+  box-shadow: inset 0 0 0 1px var(--color-rule);
+}
+.fly-pop[hidden] { display: none; }
+.fly-pop--planets { max-inline-size: min(26rem, calc(100% - 2 * var(--edge))); }
+.fly-pop--planets .as-band { border: 0; font: inherit; font-size: var(--text-sm); font-weight: 600; }
+.fly-pop--sources {
+  display: grid; gap: var(--space-xs); justify-items: start;
+  max-inline-size: min(30rem, calc(100% - 2 * var(--edge))); padding: var(--space-sm) var(--space-md);
+}
+.fly-pop__text { margin: 0; font-size: var(--text-xs); line-height: 1.5; color: var(--color-neutral); }
+
+@media (max-width: 640px) {
+  /* A phone: the destinations on one scrolling line, the controls on the
+     next, and where you are on a third, small. */
+  .fly-dock__tools { flex-wrap: wrap; row-gap: var(--space-3xs); }
+  .fly-dock__to { display: none; }
+  .fly-ir__long { display: none; }
+  .fly-ir__short { display: inline; }
+  .fly-time__rate { min-inline-size: 0; }
+  /* The sources as a round "i": the row keeps to one line with the clock's Now in it. */
+  .fly-sources__long { display: none; }
+  .fly-sources__short { display: inline; font-family: var(--font-mono); font-weight: 600; }
+  .fly-dock .fly-sources { min-inline-size: var(--hit); justify-content: center; padding-inline: 0; }
+  .fly-line { order: 2; flex: 1 1 100%; font-size: var(--text-2xs); }
+  .fly-dock .as-toggle, .fly-dock .as-band { padding-inline: var(--space-xs); font-size: var(--text-xs); }
+}
 
 /* What the picked body goes round: ringed in the colour of the orbit drawn. */
 .fly-centre {
@@ -176,3 +250,42 @@
 
 /* The habitable zone: the optimistic one paler round the conservative one. */
 .fly-system__hz-opt { fill: none; stroke: oklch(72% 0.12 150 / 0.11); }
+
+/* What the body goes round, at the top of its card: the centre as a button,
+   then what else goes round it, a list to step through. */
+.fly-round { display: grid; gap: var(--space-3xs); padding-block-end: var(--space-xs); border-block-end: 1px solid var(--color-rule); }
+.fly-round[hidden] { display: none; }
+.fly-round__h { margin: var(--space-2xs) 0 0; font-size: var(--text-xs); color: var(--color-muted); }
+.fly-round__h:first-child { margin-block-start: 0; }
+.fly-round__centre { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-3xs) var(--space-xs); }
+.fly-round__go {
+  padding: 0 var(--space-xs); min-block-size: 1.6rem; border: 0; border-radius: var(--radius-round); cursor: pointer;
+  background: oklch(80% 0.14 70); color: var(--color-accent-ink); font: inherit; font-size: var(--text-sm); font-weight: 600;
+}
+.fly-round__go:hover { filter: brightness(1.1); }
+.fly-round__words { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-ink); }
+.fly-round__note, .fly-round__more, .fly-round__keys { margin: 0; font-size: var(--text-2xs); color: var(--color-neutral); }
+.fly-round__list { margin: 0; padding: 0; list-style: none; display: grid; }
+.fly-round__item {
+  inline-size: 100%; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 0 var(--space-sm);
+  padding: 2px var(--space-xs); border: 0; border-inline-start: 2px solid transparent; border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  background: none; color: var(--color-ink); font: inherit; font-size: var(--text-sm); text-align: start; cursor: pointer;
+}
+.fly-round__item:hover { background: var(--color-paper-3); }
+.fly-round__item--under { padding-inline-start: var(--space-lg); font-size: var(--text-xs); }
+/* The figures stay on the name's line where they fit, and go under it, to the right, where they do not. */
+.fly-round__nums { margin-inline-start: auto; font-family: var(--font-mono); font-size: var(--text-2xs); color: var(--color-muted); text-align: end; min-inline-size: 0; overflow-wrap: anywhere; }
+/* A name keeps its words together where it can, and takes a line of its own before it breaks into three. */
+.fly-round__item > span:first-child { flex: 1 0 auto; max-inline-size: 100%; overflow-wrap: anywhere; }
+.fly-round .fly-card__rows { padding-block-start: var(--space-3xs); }
+/* The body the card is about: in the colour its orbit is drawn in. */
+.fly-round__item[aria-current="true"] { border-inline-start-color: oklch(80% 0.14 70); color: oklch(86% 0.13 70); font-weight: 600; }
+.fly-round__item[aria-current="true"] .fly-round__nums { color: oklch(86% 0.13 70 / 0.8); }
+#card-orbit[hidden] { display: none; }
+
+/* While an orbit is picked the names that have nothing to do with it step
+   back, so the orbit and what it goes round are read first. */
+.fly-labels[data-quiet] .fly-label:not(.fly-label--kin):not(:hover) { opacity: 0.32; }
+.fly-label { transition: opacity var(--dur-micro) var(--ease-out); }
+.fly-label--picked .fly-label__dot { border-color: oklch(80% 0.14 70); box-shadow: 0 0 0 3px oklch(80% 0.14 70 / 0.18); }
+.fly-label--picked .fly-label__name { color: oklch(86% 0.13 70); font-weight: 600; }

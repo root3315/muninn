@@ -434,27 +434,82 @@ function nameLabels() {
     // A brown dwarf gives almost no visible light: its ring marks a place the eye sees nothing.
     el.title = s.key === 'wise0855' ? t('fly.dark') : '';
   }
-  const chips = $('dest');
-  chips.replaceChildren();
-  // The trip worth taking first: the challenge's own target, then the nearest stars.
-  const p9 = document.createElement('button');
-  p9.type = 'button';
-  p9.className = 'as-band fly-chip--target';
-  p9.textContent = nameOf(P9);
-  p9.addEventListener('click', () => { flyToPlanetNine(); openCardLater(P9); });
-  chips.append(p9);
-  const order = ['earth', 'moon', 'mars', 'jupiter', 'saturn', 'wise0855', 'hip70890', 'hip87937', 'hip32349', 'hip108870', 'hip91262', 'hip27989', 'hip17702', 'hip11767', 'sun'];
-  for (const key of order) {
+  buildDestinations();
+}
+
+/*
+ * The destinations: the challenge's two targets first, then the nearest
+ * stars worth the trip (ε Indi has a brown dwarf, ε Indi B, going round it),
+ * then home, and the Moon and the planets behind one chip. The bright stars
+ * a chip once took to are still on the sky, a press away.
+ */
+const DESTINATIONS = ['wise0855', 'hip70890', 'hip87937', 'hip108870', 'earth'];
+const PLANET_CHIPS = ['moon', 'mercury', 'venus', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune'];
+
+function chip(text, className, go) {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = `as-band${className ? ` ${className}` : ''}`;
+  b.textContent = text;
+  b.addEventListener('click', go);
+  return b;
+}
+
+function buildDestinations() {
+  const go = (s) => () => { closePops(); flyTo(s); openCardLater(s); };
+  const chips = [chip(nameOf(P9), 'fly-chip--target', () => { closePops(); flyToPlanetNine(); openCardLater(P9); })];
+  for (const key of DESTINATIONS) {
     const s = named.find((x) => x.key === key);
-    if (!s) continue;
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = `as-band${s.target ? ' fly-chip--target' : ''}`;
-    b.textContent = nameOf(s);
-    b.addEventListener('click', () => { flyTo(s); openCardLater(s); });
-    chips.append(b);
+    if (s) chips.push(chip(nameOf(s), s.target ? 'fly-chip--target' : '', go(s)));
+  }
+  const planets = chip(t('fly.planets'), 'fly-chip--more', () => togglePop('planets'));
+  planets.id = 'planets';
+  planets.title = t('fly.planetsWhen');
+  planets.setAttribute('aria-haspopup', 'true');
+  planets.setAttribute('aria-expanded', 'false');
+  chips.push(planets);
+  $('dest').replaceChildren(...chips);
+  $('planets-pop').replaceChildren(...PLANET_CHIPS.map((key) => named.find((x) => x.key === key)).filter(Boolean)
+    .map((s) => {
+      const b = chip(nameOf(s), '', go(s));
+      b.setAttribute('role', 'menuitem');
+      return b;
+    }));
+}
+
+/*
+ * The two small panels over the dock: the planets, and the sources. One is
+ * open at a time, above the button that opened it; a press anywhere else or
+ * Esc puts it away.
+ */
+const POPS = { planets: ['planets', 'planets-pop'], sources: ['sources', 'sources-pop'] };
+function togglePop(name) {
+  const open = $(POPS[name][1]).hidden;
+  closePops();
+  if (!open) return;
+  const [buttonId, popId] = POPS[name];
+  const button = $(buttonId);
+  const pop = $(popId);
+  pop.hidden = false;
+  button.setAttribute('aria-expanded', 'true');
+  // Above its button, inside the sky's edges.
+  const sky = $('sky').getBoundingClientRect();
+  const at = button.getBoundingClientRect();
+  const left = Math.max(8, Math.min(at.left - sky.left, sky.width - pop.offsetWidth - 8));
+  pop.style.left = `${left}px`;
+  pop.style.bottom = `${sky.bottom - at.top + 6}px`;
+}
+function closePops() {
+  for (const [buttonId, popId] of Object.values(POPS)) {
+    if ($(popId).hidden) continue;
+    $(popId).hidden = true;
+    $(buttonId)?.setAttribute('aria-expanded', 'false');
   }
 }
+$('sources').addEventListener('click', () => togglePop('sources'));
+addEventListener('pointerdown', (e) => {
+  if (!e.target.closest?.('.fly-pop, #planets, #sources')) closePops();
+});
 
 /* ---- the autopilot ----------------------------------------------------- */
 
@@ -494,7 +549,7 @@ function flyTo(s) {
     if (s.key === 'saturn') offset = norm(add(offset, SATURN_RINGS.pole, 0.45 * stop)).map((c) => c * stop * 1.6);
     end = add(to, offset);
   }
-  if (s.key === 'wise0855') showReach();
+  setTrip(s.key);
   autopilot = {
     home: s.key === 'earth',
     offset,
@@ -551,11 +606,17 @@ function steer(dt) {
     cam.eye = add(autopilot.to, norm(span), -left);
     const want = norm(sub(autopilot.look, cam.eye));
     cam.F = norm(add(cam.F, sub(want, cam.F), Math.min(1, dt / 0.25)));
+    // An orbit is framed with its pole up the screen: the camera rolls to it on the way.
+    if (autopilot.up) {
+      const U = add(cam.U, sub(autopilot.up, cam.U), Math.min(1, dt / 0.4));
+      if (len(U) > 1e-6) cam.U = norm(U);
+    }
     orthonormal();
     if (x >= 1) {
       // Arrived facing what it came for: the easing above, a quarter second
       // behind a target still moving across the view, left it off centre.
       cam.F = norm(sub(autopilot.look, cam.eye));
+      if (autopilot.up) cam.U = autopilot.up;
       orthonormal();
       // Home: arriving at the Earth puts you back on its sky.
       if (autopilot.home && embedded) {
@@ -582,6 +643,7 @@ function steer(dt) {
   if (keys.has('KeyA') || keys.has('ArrowLeft')) side -= 1;
   if (move || side) {
     carried = null;
+    if (hold.forward || hold.back) factor = holdFactor();
     const boost = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 5 : 1;
     const R = cross(cam.F, cam.U);
     const v = currentSpeed() * boost * dt;
@@ -854,6 +916,7 @@ function setPlace(el, at, dy = 0) {
   }
 }
 
+const NEAREST_SAID_PC = 1 / LY_PER_PC;
 function readout() {
   const fromSun = len(cam.eye);
   let nearName = null;
@@ -862,10 +925,12 @@ function readout() {
     const d = len(sub(placeOf(s), cam.eye));
     if (d < nearD && d > 1e-12) { nearD = d; nearName = s; }
   }
+  // The nearest named place only while it is near: a light year out, among
+  // the stars, it is a name from across the room and says nothing of here.
   setText($('read'), [
     t('fly.fromSun', { d: distanceText(fromSun) }),
     speedText(shownSpeed),
-    nearName && t('fly.nearest', { name: nameOf(nearName), d: distanceText(nearD) }),
+    nearName && nearD < NEAREST_SAID_PC && t('fly.nearest', { name: nameOf(nearName), d: distanceText(nearD) }),
   ].filter(Boolean).join('  ·  '));
 }
 
@@ -909,6 +974,21 @@ let coversFresh = false;
 const coverObserver = new ResizeObserver(() => { coversFresh = false; });
 coverObserver.observe($('card'));
 coverObserver.observe($('dock'));
+/*
+ * The dock's top, as a distance from the sky's foot, in --dock-space: the ▲▼
+ * pad, the hint, the 4.6 µm note and, on a phone, the card stand on it, so
+ * nothing sits under the dock whatever its height in either language.
+ */
+// Written at the next frame, not inside the observer: what stands on it
+// changes size in turn, and the observers would see their own loop.
+const dockObserver = new ResizeObserver(() => requestAnimationFrame(() => {
+  const sky = $('sky').getBoundingClientRect();
+  const top = $('dock').getBoundingClientRect().top;
+  $('sky').style.setProperty('--dock-space', `${Math.round(sky.bottom - top)}px`);
+}));
+dockObserver.observe($('dock'));
+dockObserver.observe($('sky'));
+
 function coverRects() {
   if (!coversFresh) {
     covers.length = 0;
@@ -957,6 +1037,7 @@ function placeLabels() {
   const kept = [];
   shownCount = 0;
   reservePicked(b);
+  const quiet = quietLabels();
   // A planet's name only near the Sun: from the stars the planets are one point.
   const outOfSystem = len(cam.eye) > 0.01;
   for (const label of labels) {
@@ -975,11 +1056,18 @@ function placeLabels() {
     const far = s.planet && outOfSystem;
     // Behind a nearer disc: hidden by it.
     const behind = discs.some((n) => n.index !== s.index && n.d < d && n.c && Math.hypot(n.c.x - at.x, n.c.y - at.y) < n.r);
-    kept.push({ label, at, d, hidden: Boolean(big || far || behind) });
+    const kin = quiet && (s.index === kinBody || s.index === kinCentre);
+    if (label.kin !== kin) {
+      el.classList.toggle('fly-label--kin', kin);
+      el.classList.toggle('fly-label--picked', kin && s.index === kinBody);
+      label.kin = kin;
+    }
+    kept.push({ label, at, d, kin, hidden: Boolean(big || far || behind) });
   }
   // Two names on one spot are read as neither: the nearer body keeps its own.
-  // A name hidden by its disc still keeps the spot, as it always has.
-  kept.sort((p, q) => p.d - q.d);
+  // A name hidden by its disc still keeps the spot, as it always has. The
+  // picked body and what it goes round are placed first.
+  kept.sort((p, q) => (q.kin - p.kin) || (p.d - q.d));
   for (const k of kept) {
     const far = distanceText(k.d);
     labelBox(k.at, nameOf(k.label.s).length + far.length, probe);
@@ -1001,14 +1089,22 @@ function placeLabels() {
 /*
  * The planets and the Moon move as they do: their positions are worked out
  * for the moment shown, from the same orbital elements. That moment is now,
- * unless the clock below is asked for another pace: ❚❚ stops it, ▶ runs it
- * at a day, a week, a month or a year a second, and "now" brings it back.
- * The planets, the Moon, other stars' planets and the orbit picked all go by
- * it. The stars' own motions are too slow to see even at a year a second.
+ * unless the clock is asked for another pace: ❚❚ stops it, ▶ runs it again,
+ * the pace button steps through a day, a week, a month and a year a second,
+ * and "Now" brings it back. The planets, the Moon, other stars' planets and
+ * the orbit picked all go by it. The stars' own motions are too slow to see
+ * even at a year a second.
+ *
+ * JPL's elements hold from 1800 to 2050: the clock stops at either end and
+ * says why, rather than run the planets on to places they were never at.
+ * Out among the stars, with no planets near, there is nothing for it to
+ * move: it is put away and stopped, and is as it was on the way back.
  */
-const RATES = [['fly.rateReal', 1], ['fly.rateDay', 86400], ['fly.rateWeek', 7 * 86400], ['fly.rateMonth', 30.436875 * 86400], ['fly.rateYear', 365.25 * 86400]];
+const RATES = [['fly.rateDay', 86400], ['fly.rateWeek', 7 * 86400], ['fly.rateMonth', 30.436875 * 86400], ['fly.rateYear', 365.25 * 86400]];
+const CLOCK_FIRST = Date.UTC(1800, 0, 1);
+const CLOCK_LAST = Date.UTC(2050, 11, 31, 23, 59);
 /** live: the real now; otherwise `at` (ms since 1970) when the clock was last set, at `from` (page ms), running at `rate` while playing. */
-const clock = { live: true, playing: true, rate: 1, at: 0, from: 0 };
+const clock = { live: true, playing: true, rate: 1, at: 0, from: 0, clamped: false };
 /** The moment shown, milliseconds since 1970. */
 function simMs() {
   if (clock.live) return Date.now();
@@ -1022,11 +1118,20 @@ const racing = () => !clock.live && clock.playing && clock.rate > 1;
 function setClock(change) {
   clock.at = simMs();
   clock.from = performance.now();
+  clock.clamped = false;
   Object.assign(clock, change);
   if (clock.live) clock.rate = 1;
   showClock();
   if (stars && space) moveBodies();
   wake();
+}
+
+/** A racing clock past JPL's years stops at the edge of them. */
+function clampClock() {
+  if (clock.live) return;
+  const ms = simMs();
+  if (ms > CLOCK_LAST) setClock({ playing: false, at: CLOCK_LAST, clamped: true });
+  else if (ms < CLOCK_FIRST) setClock({ playing: false, at: CLOCK_FIRST, clamped: true });
 }
 
 /** The clock's buttons as they are, and the moment shown whenever it is not now. */
@@ -1035,44 +1140,55 @@ function showClock() {
   play.textContent = clock.playing ? '❚❚' : '▶';
   play.setAttribute('aria-label', t(clock.playing ? 'fly.timePause' : 'fly.timePlay'));
   play.title = play.getAttribute('aria-label');
-  // The pace it runs at is lit; a stopped clock has none.
-  for (const b of $('time-rates').children) b.setAttribute('aria-pressed', String(clock.playing && Number(b.dataset.rate) === clock.rate));
-  $('time-now').hidden = clock.live;
+  // The pace it runs at, lit while it is faster than real time.
+  const rate = $('time-rate');
+  rate.textContent = t(RATES.find(([, r]) => r === clock.rate)?.[0] ?? 'fly.rateReal');
+  rate.setAttribute('aria-pressed', String(!clock.live && clock.rate > 1));
+  setHidden($('time-now'), clock.live);
   showDate();
 }
 
 function showDate() {
   const el = $('time-date');
-  if (clock.live) {
+  if (clock.live || timeAway) {
     setText(el, '');
     return;
   }
   const d = new Date(simMs());
-  const year = d.getUTCFullYear();
-  // JPL's elements hold from 1800 to 2050; outside that the planets drift from their true places.
-  const rough = year < 1800 || year > 2050 ? ` · ${t('fly.timeRough')}` : '';
-  setText(el, `${formatDay(d, { year: true })} ${d.toISOString().slice(11, 16)} UT${rough}`);
+  const stopped = clock.clamped ? ` · ${t('fly.timeClamped', { y: d.getUTCFullYear() })}` : '';
+  setText(el, `${formatDay(d, { year: true })} ${d.toISOString().slice(11, 16)} UT${stopped}  ·  `);
+  el.title = stopped ? t('fly.timeClamped', { y: d.getUTCFullYear() }) : '';
 }
 
-function buildClock() {
-  $('time-rates').replaceChildren(...RATES.map(([key, rate]) => {
-    const b = document.createElement('button');
-    b.type = 'button';
-    b.className = 'as-toggle fly-rate';
-    b.dataset.rate = String(rate);
-    b.dataset.key = key;
-    b.textContent = t(key);
-    b.addEventListener('click', () => {
-      // Real time from where the clock stands is real time; at the real now it is the live clock again.
-      const atNow = Math.abs(simMs() - Date.now()) < 2000;
-      setClock(rate === 1 && atNow ? { live: true, playing: true } : { live: false, playing: true, rate });
-    });
-    return b;
-  }));
-  showClock();
+/** The next pace: from real time a day a second, then on to a year a second and round again. */
+function nextRate() {
+  const k = clock.live ? -1 : RATES.findIndex(([, r]) => r === clock.rate);
+  return RATES[(k + 1) % RATES.length][1];
 }
 $('time-play').addEventListener('click', () => setClock(clock.playing ? { live: false, playing: false } : { playing: true }));
+$('time-rate').addEventListener('click', () => setClock({ live: false, playing: true, rate: nextRate() }));
 $('time-now').addEventListener('click', () => setClock({ live: true, playing: true }));
+
+/*
+ * Whether there are planets near to move: within a thousand AU of the Sun,
+ * or inside another star's system. Leaving, the clock is put away and
+ * stopped; coming back, it is as it was.
+ */
+let timeAway = null;
+function clockWhereItMatters() {
+  const here = len(cam.eye) < 1000 * AU || Boolean(inSystem);
+  if (here === !timeAway) return;
+  setHidden($('time'), !here);
+  if (!here) {
+    timeAway = { live: clock.live, playing: clock.playing, rate: clock.rate };
+    if (clock.live || clock.playing) setClock({ live: false, playing: false });
+    else showDate();
+    return;
+  }
+  const was = timeAway;
+  timeAway = null;
+  setClock(was.live ? { live: true, playing: true } : { playing: was.playing, rate: was.rate });
+}
 
 /** The bodies' positions as sent to the renderer, one array kept for it. */
 let bodiesXyz = null;
@@ -1161,6 +1277,7 @@ function frame(now) {
   // at half a parsec a second, out past Neptune. From beside the Earth the
   // first step is a few hundred km/s.
   if (racing()) {
+    clampClock();
     moveBodies();
     showDate();
   }
@@ -1172,6 +1289,7 @@ function frame(now) {
   measureSpeed(before, dt);
   lastNear = nearestStar();
   const extra = drawSystem();
+  clockWhereItMatters();
   const near = view.ir ? null : [...extra, ...lastNear].slice(0, 12);
   const share = surveyShare();
   drawSurvey(share);
@@ -1277,18 +1395,12 @@ async function loadFamily() {
 }
 const familyDate = () => formatDay(new Date(`${family.counted}T00:00:00Z`), { year: true });
 
-/** A planet's "goes round" row: the Sun with the other seven, each a button; the Moon, the Earth's one. */
-function planetKin(s) {
-  if (s.key === 'moon') return cardRow(t('fly.cardHeld'), t('fly.roundMoon'));
-  const others = ['mercury', 'venus', 'earth', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune']
-    .filter((key) => key !== s.key).map((key) => named.find((x) => x.key === key)).filter(Boolean);
-  const small = family ? ` ${t('fly.roundSmall', { ast: fmt(family.counts.asteroids, 0), comet: fmt(family.counts.comet, 0), date: familyDate() })}` : '';
-  return chipsRow(t('fly.cardHeld'), t('fly.roundPlanet', { n: others.length }) + small,
-    others.map((o) => ({ name: nameOf(o), open: () => openCard(o) })));
-}
-
-/** What is known of a star, or of a named place; `entry` is a named entry or { index }. */
-function openCard(entry) {
+/**
+ * What is known of a star, or of a named place; `entry` is a named entry or
+ * { index }. With `keep` the body picked before stays picked, its orbit
+ * drawn: the card is of what that body goes round.
+ */
+function openCard(entry, { keep = false } = {}) {
   const i = entry.index ?? -1;
   const s = entry.en ? entry : named.find((x) => x.index === i) ?? entry;
   const p = i >= 0 ? posOf(i) : s.pos;
@@ -1296,8 +1408,9 @@ function openCard(entry) {
   let title = s.en ? nameOf(s) : `HIP ${stars.hip[i]}`;
   if (i === sunIndex) title = nameOf(named.find((x) => x.key === 'sun'));
   $('card-fly').hidden = false;
+  clearRound();
   const rows = [];
-  /** What it goes round and with what: rows of their own, some with buttons. */
+  /** The drift drawn for a star: a row after the rest. */
   const kin = [];
   // A planet moves with the clock, and the camera with the keys: the rows
   // with a third member are written again as they do (refreshCard).
@@ -1305,7 +1418,7 @@ function openCard(entry) {
   if (i !== sunIndex) rows.push([t('fly.cardSun'), distanceText(fromSun), () => distanceText(len(at()))]);
   rows.push([t('fly.cardHere'), distanceText(len(sub(p, cam.eye))), () => distanceText(len(sub(at(), cam.eye)))]);
   if (s.key === 'wise0855') {
-    kin.push(cardRow(t('fly.cardHeld'), t('fly.wiseRound')));
+    showRound({ centre: galCentre(p), note: `${t('fly.galHow')} ${t('fly.wiseAlone')}` });
     const seenTo = shells();
     rows.unshift([t('fly.cardVerdict'), t('fly.verdict', { n: seenTo[1].visits })]);
     rows.push([t('fly.cardW2'), t('fly.w2', { ab: fmt(WISE0855_AB, 1) })]);
@@ -1313,11 +1426,13 @@ function openCard(entry) {
     rows.push([t('fly.cardStack'), t('fly.limitStack', { n: seenTo[1].visits, ab: fmt(seenTo[1].limit, 1), d: distanceText(seenTo[1].pc) })]);
   } else if (s.key === 'p9') {
     rows.length = 0;
+    // Already looking down on the region: there is nowhere nearer to fly.
+    $('card-fly').hidden = atPlanetNine();
     rows.push([t('fly.cardP9Where'), t('fly.p9Where', { a: PLANET_NINE_AU[0], b: PLANET_NINE_AU[1], beta: PLANET_NINE_MAX_BETA })]);
     rows.push([t('fly.cardP9Bright'), t('fly.p9Bright', { lo: fmt(PLANET_NINE_V.bright, 1), hi: fmt(PLANET_NINE_V.faint, 1) })]);
     rows.push([t('fly.cardP9Gap'), t('fly.p9Gap', { x: fmt(planetNineShortfall(17.6), 0) })]);
   } else if (s.planet) {
-    kin.push(planetKin(s));
+    showRound(s.key === 'moon' ? moonRound(s) : planetRound(s));
     rows.push([t('fly.cardRadius'), t('fly.planetRadius', { km: fmt(s.km, 0), e: sig(s.km / 6371.0) })]);
     const f = FACTS[s.key];
     if (f) {
@@ -1350,8 +1465,8 @@ function openCard(entry) {
     const lum = stars.measured[i] ? stars.rad[i] ** 2 * (temperatureOf(bv) / T_SUN) ** 4 : luminosityOf(m, bv);
     rows.push([t('fly.cardLum'), t('fly.solar', { n: sig(lum) })]);
     if (i !== sunIndex) rows.push([t('fly.cardMag'), fmt(m + 5 * Math.log10(fromSun / 10), 2)]);
+    showRound({ centre: galCentre(p), note: t(i === sunIndex ? 'fly.galHowSun' : 'fly.galHow') });
     if (i !== sunIndex) {
-      kin.push(cardRow(t('fly.cardHeld'), t('fly.starRound')));
       if (motion && i < motion.length / 2) {
         const mu = Math.hypot(motion[i * 2], motion[i * 2 + 1]) / 1000;
         kin.push(cardRow(t('fly.driftH'), t('fly.drift', { mu: fmt(mu, mu < 0.1 ? 3 : 2), y: fmt(DRIFT_YEARS, 0) })));
@@ -1376,7 +1491,7 @@ function openCard(entry) {
   };
   const drawRows = () => {
     live.length = 0;
-    $('card-rows').replaceChildren(...(s.planet ? kin : []), ...rows.map(liveRow), ...(s.planet ? [] : kin));
+    $('card-rows').replaceChildren(...rows.map(liveRow), ...kin);
   };
   drawRows();
   // SPHEREx looks from beside the Earth: a star's place on its sky is its
@@ -1393,11 +1508,11 @@ function openCard(entry) {
   const host = i >= 0 ? exo.find((x) => x.index === i) : null;
   // A star with planets is shown as the system it is.
   if (host && !entry.starOnly) {
-    openSystemCard(host);
+    openSystemCard(host, { keep });
     return;
   }
   if (i === sunIndex && !entry.starOnly) {
-    openSolarCard();
+    openSolarCard({ keep });
     return;
   }
   const ev = $('card-exo');
@@ -1407,11 +1522,15 @@ function openCard(entry) {
     drawRows();
     ev.href = systemUrl([host.ra, host.dec, host.planets.length, host.host], host.host, getLanguage());
   }
-  // What it goes round, drawn: a planet's orbit, the Moon's, a star's drift.
-  if (s.planet) pick({ kind: s.key === 'moon' ? 'moon' : 'planet', key: s.key, index: i });
-  else if (i >= 0 && i < stars.firstBody && i !== sunIndex && i !== stars.dark) pick({ kind: 'star', index: i });
-  else pick(null);
-  card = { s: { ...s, index: i }, live };
+  // What it goes round, drawn: a planet's orbit, the Moon's, a star's drift;
+  // with `keep`, the orbit picked before stays instead.
+  if (!keep) {
+    if (s.planet) pick({ kind: s.key === 'moon' ? 'moon' : 'planet', key: s.key, index: i });
+    else if (i >= 0 && i < stars.firstBody && i !== sunIndex && i !== stars.dark) pick({ kind: 'star', index: i });
+    else pick(null);
+  }
+  card = { s: { ...s, index: i }, live, keep };
+  showOrbitButton();
   $('card').hidden = false;
 }
 
@@ -1429,14 +1548,22 @@ function refreshCard(now) {
 
 /** The card for a place that is not a star, shown once the autopilot has arrived. */
 function openCardLater(entry) {
-  const wait = () => (autopilot ? requestAnimationFrame(wait) : openCard(entry));
+  // Drawn once more when it opens: the words over the sky make way for it.
+  const wait = () => {
+    if (autopilot) return requestAnimationFrame(wait);
+    openCard(entry);
+    wake();
+  };
   requestAnimationFrame(wait);
 }
 
 /** Put the card away, keeping what was picked drawn: a flight to it hides the card until it arrives. */
 function hideCard() {
   card = null;
+  clearRound();
+  facingCentre = false;
   $('card-fly').hidden = false;
+  $('card-orbit').hidden = true;
   $('card-exo').hidden = true;
   $('card').hidden = true;
 }
@@ -1453,9 +1580,11 @@ $('card-fly').addEventListener('click', () => {
   if (s.sb) flyToSmallBody(s.sb);
   else if (s.pl) flyToExoPlanet(s.sys, s.pl);
   else if (s.sys) flyToSystem(s.sys);
+  else if (s.key === 'p9') flyToPlanetNine();
   else flyTo(s);
 });
 $('card-close').addEventListener('click', closeCard);
+$('card-orbit').addEventListener('click', () => framePicked());
 
 /* ---- input ------------------------------------------------------------- */
 
@@ -1464,8 +1593,17 @@ canvas.addEventListener('pointerdown', (e) => {
   canvas.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, moved: 0, ox: e.offsetX, oy: e.offsetY });
   autopilot = null;
-  $('hint').dataset.gone = 'true';
+  // On a touch screen the hint has often faded before the screen is touched:
+  // the first touch brings it back for a few seconds, when it can be read.
+  if (e.pointerType === 'touch' && !hintRetold) {
+    hintRetold = true;
+    $('hint').dataset.gone = 'false';
+    setTimeout(() => { $('hint').dataset.gone = 'true'; }, 5000);
+  } else {
+    $('hint').dataset.gone = 'true';
+  }
 });
+let hintRetold = false;
 canvas.addEventListener('pointermove', (e) => {
   const p = pointers.get(e.pointerId);
   if (!p) return;
@@ -1495,7 +1633,7 @@ canvas.addEventListener('pointerup', (e) => {
 });
 canvas.addEventListener('pointercancel', (e) => pointers.delete(e.pointerId));
 
-// The wheel zooms, as everywhere on the site; speed is − and +, or Shift.
+// The wheel zooms, as everywhere on the site; speed is Shift, + and − on the keys, or ▲ held.
 canvas.addEventListener('wheel', (e) => {
   e.preventDefault();
   FOV = Math.max(FOV_RANGE[0], Math.min(FOV_RANGE[1], FOV * Math.exp(e.deltaY / 600)));
@@ -1517,7 +1655,13 @@ function setSpeed(v) {
 
 addEventListener('keydown', (e) => {
   if (e.target.closest?.('input')) return;
-  if (e.code === 'Escape') closeCard();
+  if (e.code === 'Escape') { closePops(); closeCard(); }
+  // With a card's list open, ← and → step through it rather than fly sideways (A and D still do).
+  if ((e.code === 'ArrowLeft' || e.code === 'ArrowRight') && card && roundList.length > 1) {
+    e.preventDefault();
+    if (!e.repeat) stepRound(e.code === 'ArrowRight' ? 1 : -1);
+    return;
+  }
   keys.add(e.code);
   if (heldFromSky === e.code) heldFromSky = null;
   if (e.code === 'Equal' || e.code === 'NumpadAdd') setFactor(factor * 2);
@@ -1532,14 +1676,36 @@ addEventListener('keyup', (e) => {
 });
 addEventListener('blur', () => keys.clear());
 
+/*
+ * ▲ and ▼ fly while held. Held longer than a moment, they go faster: the
+ * pace triples each second after the first half, up to the keys' fastest,
+ * and is back where it was when let go. This is the touch screen's −/+.
+ */
 for (const [id, k] of [['go-forward', 'forward'], ['go-back', 'back']]) {
   const b = $(id);
-  const on = (v) => (e) => { e.preventDefault(); hold[k] = v; if (v) { autopilot = null; wake(); } };
+  const on = (v) => (e) => {
+    e.preventDefault();
+    if (v === hold[k]) return;
+    hold[k] = v;
+    if (v) {
+      hold.since = performance.now();
+      hold.base = factor;
+      autopilot = null;
+      wake();
+    } else if (!hold.forward && !hold.back) {
+      setFactor(hold.base ?? factor);
+    }
+  };
   b.addEventListener('pointerdown', on(true));
   for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) b.addEventListener(ev, on(false));
+  b.addEventListener('contextmenu', (e) => e.preventDefault());
 }
-$('faster').addEventListener('click', () => { setFactor(factor * 3); wake(); });
-$('slower').addEventListener('click', () => { setFactor(factor / 3); wake(); });
+
+/** While ▲ or ▼ is held: the pace for how long it has been. */
+function holdFactor() {
+  const held = (performance.now() - hold.since) / 1000;
+  return Math.min(FACTOR_MAX, hold.base * 3 ** Math.max(0, held - 0.5));
+}
 
 /* ---- what SPHEREx can reach, and where Planet Nine would be --------- */
 
@@ -1586,8 +1752,9 @@ function buildReach() {
     ]), ink: [1, 0.72, 0.4, 0.55], key: 'reach' },
   ]);
   marks = [
-    { at: () => onSphere(one.pc), text: () => t('fly.shellOne', { d: distanceText(one.pc) }) },
-    { at: () => onSphere(stack.pc), text: () => t('fly.shellStack', { n: stack.visits, d: distanceText(stack.pc) }) },
+    // The two shells' words at two heights: on the same line of sight they fell on one spot.
+    { at: () => onSphere(one.pc, 0.42), text: () => t('fly.shellOne', { d: distanceText(one.pc) }) },
+    { at: () => onSphere(stack.pc, 0.2), text: () => t('fly.shellStack', { n: stack.visits, d: distanceText(stack.pc) }) },
     { at: () => onRing(30 * AU), text: () => t('fly.neptune') },
     { at: () => onRing(PLANET_NINE_AU[1] * AU), text: () => t('fly.p9Ring') },
   ];
@@ -1603,8 +1770,8 @@ function buildReach() {
  * Where a word for a sphere round the Sun goes: the point of it a little
  * above the middle of the view, so the eye finds it whichever way it looks.
  */
-function onSphere(r) {
-  const d = norm(add(cam.F, cam.U, 0.35));
+function onSphere(r, lift = 0.35) {
+  const d = norm(add(cam.F, cam.U, lift));
   // |eye + d t| = r, the far crossing.
   const bq = dot(cam.eye, d);
   const disc = bq * bq - (dot(cam.eye, cam.eye) - r * r);
@@ -1629,11 +1796,16 @@ function placeMarks() {
   const placedMarks = [];
   for (const m of marks) {
     const pos = view.reach ? m.at() : null;
-    const at = pos ? screenOf(pos, b, proj) : null;
+    let at = pos ? screenOf(pos, b, proj) : null;
     // A mark on top of a label would be read as neither; nor one on a disc,
     // on another mark, under the card or cut by the edge.
     const text = at ? m.text() : '';
     if (at) labelBox(at, text.length * 0.9, probe);
+    // Running into the card or the edge, it ends at its point instead of starting there.
+    if (at && offLimits(probe)) {
+      at.x -= probe.x1 - probe.x0 - 18;
+      labelBox(at, text.length * 0.9, probe);
+    }
     const onDisc = at && discs.some((n) => n.c && Math.hypot(n.c.x - at.x, n.c.y - at.y) < n.r + 12);
     const stacked = at && placedMarks.some((o) => Math.abs(o.x - at.x) < 220 && Math.abs(o.y - at.y) < 18);
     const hidden = Boolean(!at || crowded(probe) || offLimits(probe) || onDisc || stacked);
@@ -1647,31 +1819,59 @@ function placeMarks() {
 
 /** Planet Nine's region as a destination: above the Sun's plane, looking down on it. */
 const P9 = { key: 'p9', index: -1, pos: eclipticPoint(1, 0, 0).map(() => 0), en: 'Planet Nine (region)', ru: 'Планета Девять (зона)' };
-function showReach() {
-  view.reach = true;
-  $('reach').setAttribute('aria-pressed', 'true');
-}
+/** The point Planet Nine's region is looked at from, and how near it counts as there. */
+const P9_VIEW = eclipticPoint(2400 * AU, 200, 55);
+const P9_THERE = 300 * AU;
+const atPlanetNine = () => len(sub(cam.eye, P9_VIEW)) < P9_THERE;
 
 function flyToPlanetNine() {
   closeCard();
-  const above = eclipticPoint(2400 * AU, 200, 55);
-  autopilot = { from: cam.eye, to: above, look: [0, 0, 0], stop: 300 * AU, t0: performance.now(), ms: reduceMotion ? 1 : 3600 };
-  view.reach = true;
-  $('reach').setAttribute('aria-pressed', 'true');
+  setTrip('p9');
+  // Not carried along with the planet the camera was beside: it would be taken back to it.
+  carried = null;
+  autopilot = { from: cam.eye, to: P9_VIEW, look: [0, 0, 0], stop: 300 * AU, t0: performance.now(), ms: reduceMotion ? 1 : 3600 };
   wake();
 }
 
-$('reach').addEventListener('click', () => {
-  view.reach = !view.reach;
-  $('reach').setAttribute('aria-pressed', String(view.reach));
+/*
+ * The trip: the destination last chosen. A trip to either of the challenge's
+ * targets turns SPHEREx's reach on, where it says what it is for; the next
+ * trip elsewhere turns it off again, unless it was turned on by hand. The
+ * 4.6 µm view is offered only on the way to WISE 0855 and there, the one
+ * place it shows something the eye cannot: a body that gives no visible light.
+ */
+let trip = null;
+function setTrip(key) {
+  trip = key;
+  const target = key === 'p9' || key === 'wise0855';
+  if (target && !view.reach) {
+    setReach(true);
+    view.reachAuto = true;
+  } else if (!target && view.reachAuto) {
+    setReach(false);
+  }
+  const offered = key === 'wise0855';
+  setHidden($('ir'), !offered);
+  if (!offered && view.ir) setIr(false);
+}
+
+function setReach(on) {
+  view.reach = on;
+  view.reachAuto = false;
+  $('reach').setAttribute('aria-pressed', String(on));
   wake();
-});
-$('ir').addEventListener('click', () => {
-  view.ir = !view.ir;
-  $('ir').setAttribute('aria-pressed', String(view.ir));
-  $('read-note').textContent = view.ir ? t('fly.irNote') : '';
+}
+
+function setIr(on) {
+  view.ir = on;
+  $('ir').setAttribute('aria-pressed', String(on));
+  setText($('read-note'), on ? t('fly.irNote') : '');
+  setHidden($('read-note'), !on);
   wake();
-});
+}
+
+$('reach').addEventListener('click', () => setReach(!view.reach));
+$('ir').addEventListener('click', () => setIr(!view.ir));
 
 // Inside the front page: out from the Earth, facing where its sky faced.
 /** A key pressed on the front page's sky, held into the flight. */
@@ -1870,8 +2070,8 @@ function drawSolarOrbits() {
   }
 }
 
-/** The Sun's card as a system: its planets from above, and a way to each. */
-function openSolarCard() {
+/** The Sun's card as a system: its planets from above, and a way to each; `keep` as for openCard. */
+function openSolarCard({ keep = false } = {}) {
   const planets = ['mercury', 'venus', 'earth', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune'].map((key) => {
     const s = named.find((x) => x.key === key);
     const p = posOf(s.index);
@@ -1883,13 +2083,18 @@ function openSolarCard() {
     host: nameOf(named.find((x) => x.key === 'sun')), starR: 1, teff: 5772, solar: true,
     planets: planets.map(({ s, f, angle }) => ({ name: nameOf(s), a: f.a, r: s.km / 6371, angle })),
   };
-  closeCard();
+  hideCard();
+  if (!keep) pick(null);
   $('card-title').textContent = sys.host;
   $('card-note').textContent = t('fly.solarNote');
+  const pickedKey = picked?.kind === 'planet' || picked?.kind === 'moon' ? picked.key : null;
+  showRound({
+    centre: galCentre(ORIGIN), note: t('fly.galHowSun'),
+    also: { title: t('fly.roundSunIt'), items: planetItems(pickedKey) },
+  });
   const rows = [
     [t('fly.cardTemp'), t('fly.kelvin', { n: fmt(5772, 0) })],
     [t('fly.cardRadius'), t('fly.radiusMeasured', { n: fmt(1, 2) })],
-    [t('fly.cardHeld'), t('fly.sunRound')],
   ];
   if (family) {
     const c = family.counts;
@@ -1897,21 +2102,11 @@ function openSolarCard() {
       neo: fmt(c.neo, 0), main: fmt(c.main, 0), trojan: fmt(c.trojan, 0), centaur: fmt(c.centaur, 0), tno: fmt(c.tno, 0), comet: fmt(c.comet, 0), date: familyDate(),
     })]);
   }
-  const planetRow = ({ s, f }) => {
-    const text = t('fly.planetLine', { a: fmt(f.a, f.a < 1 ? 3 : 2), y: fmt(f.year, f.year < 1000 ? 1 : 0), m: f.moons });
-    const row = cardRow(nameOf(s), text);
-    const go = document.createElement('button');
-    go.type = 'button';
-    go.className = 'fly-planet-go';
-    go.textContent = t('exo.goPlanet');
-    go.addEventListener('click', () => { flyTo(s); openCardLater(s); });
-    row.querySelector('dt').append(' ', go);
-    return row;
-  };
-  $('card-rows').replaceChildren(systemDiagram(sys), ...rows.map(([k, v]) => cardRow(k, v)), ...planets.map(planetRow));
+  $('card-rows').replaceChildren(systemDiagram(sys), ...rows.map(([k, v]) => cardRow(k, v)));
   $('card-frames').hidden = true;
   $('card-exo').hidden = true;
-  card = { s: { key: 'sun', index: sunIndex } };
+  card = { s: { key: 'sun', index: sunIndex }, keep };
+  showOrbitButton();
   $('card').hidden = false;
 }
 
@@ -2113,16 +2308,33 @@ function buildExoLabels() {
   });
 }
 
+/*
+ * Which hosts are named: those within twenty light years of the camera, the
+ * neighbourhood a trip is through; all of them out to sixty parsecs with
+ * "Planets around stars" on. The system picked, or the one the camera is
+ * in, is named wherever it is.
+ */
+const EXO_NEAR_PC2 = (20 / LY_PER_PC) ** 2;
+const EXO_ALL_PC2 = 60 ** 2;
+let exoAll = false;
+$('exo-all').addEventListener('click', () => {
+  exoAll = !exoAll;
+  $('exo-all').setAttribute('aria-pressed', String(exoAll));
+  wake();
+});
+
 function placeExoLabels() {
   if (!exo.length) return;
   const b = basis();
   const near = [];
   const [ex, ey, ez] = cam.eye;
+  const reach2 = exoAll ? EXO_ALL_PC2 : EXO_NEAR_PC2;
+  const own = picked?.sys ?? card?.s?.sys ?? inSystem?.sys ?? null;
   for (const sys of exo) {
     // Five thousand systems a frame: their distances without an array for each.
     const c = sys.center;
     const d2 = (c[0] - ex) ** 2 + (c[1] - ey) ** 2 + (c[2] - ez) ** 2;
-    if (d2 > 3600) continue;
+    if (d2 > reach2 && sys !== own) continue;
     const d = Math.sqrt(d2);
     const at = screenOf(c, b, proj);
     if (!at) continue;
@@ -2143,6 +2355,11 @@ function placeExoLabels() {
     takeBox(probe);
     const el = exoLabels[k++];
     el.sys = n.sys;
+    const kin = labelsQuiet && picked?.sys === n.sys;
+    if (el.kin !== kin) {
+      el.classList.toggle('fly-label--kin', kin);
+      el.kin = kin;
+    }
     setHidden(el, false);
     setText(el.nameEl, name);
     setText(el.farEl, far);
@@ -2432,37 +2649,24 @@ function methodText(pl) {
   return words === key ? pl.method : words;
 }
 
-/** A system's card: its planets, and the way to ExoVision for the rest. */
-function openSystemCard(sys) {
+/**
+ * A system's card: what its star goes round, its planets as a list to pick
+ * from, and the way to ExoVision for the rest; `keep` as for openCard.
+ */
+function openSystemCard(sys, { keep = false } = {}) {
   hideCard();
-  pick(null);
+  if (!keep) pick(null);
   $('card-title').textContent = hostName(sys);
   $('card-note').textContent = t('fly.exoNote');
+  const current = picked?.kind === 'exo' && picked.sys === sys ? picked.pl : null;
+  showRound({
+    centre: galCentre(sys.center), note: t('fly.galHow'), beside: companionsRow(sys),
+    also: { title: t('fly.roundIt', { host: hostName(sys) }), items: exoItems(sys, current) },
+  });
   const rows = [[t('fly.cardSun'), distanceText(sys.pc)]];
   if (sys.teff) rows.push([t('fly.cardTemp'), t('fly.kelvin', { n: fmt(sys.teff, 0) })]);
   if (sys.starR) rows.push([t('fly.cardRadius'), t('fly.starArchive', { n: sig(sys.starR), ref: sys.starRef ?? t('fly.starComposite') })]);
-  const planetRows = [];
-  for (const pl of sys.planets) {
-    const bits = [];
-    if (pl.r) bits.push(exoRadius(pl, false));
-    if (pl.a) bits.push(t('exo.orbit', { a: fmt(pl.a, pl.a < 1 ? 3 : 2) }));
-    if (pl.p) bits.push(t('exo.period', { p: fmt(pl.p, pl.p < 10 ? 2 : 0) }));
-    if (pl.t) bits.push(t('exo.teq', { t: fmt(pl.t, 0) }));
-    bits.push(t('exo.found', { method: methodText(pl), year: pl.year ?? '—' }));
-    planetRows.push([pl, bits.join(' · ')]);
-  }
-  const planetRow = ([pl, text]) => {
-    const row = cardRow(planetName(sys, pl), text);
-    const go = document.createElement('button');
-    go.type = 'button';
-    go.className = 'fly-planet-go';
-    go.textContent = t('exo.goPlanet');
-    go.addEventListener('click', () => flyToExoPlanet(sys, pl));
-    row.querySelector('dt').append(' ', go);
-    return row;
-  };
-  $('card-rows').replaceChildren(systemDiagram(sys), ...rows.map(([k, v]) => cardRow(k, v)),
-    ...[companionsRow(sys)].filter(Boolean), ...planetRows.map(planetRow));
+  $('card-rows').replaceChildren(systemDiagram(sys), ...rows.map(([k, v]) => cardRow(k, v)));
   const frames = $('card-frames');
   frames.hidden = false;
   const url = new URL('./', location.href);
@@ -2471,7 +2675,8 @@ function openSystemCard(sys) {
   const ev = $('card-exo');
   ev.hidden = false;
   ev.href = systemUrl([sys.ra, sys.dec, sys.planets.length, sys.host], sys.host, getLanguage());
-  card = { s: { key: `sys:${sys.host}`, sys, index: sys.index } };
+  card = { s: { key: `sys:${sys.host}`, sys, index: sys.index }, keep };
+  showOrbitButton();
   $('card').hidden = false;
 }
 
@@ -2481,6 +2686,7 @@ function openSystemCard(sys) {
  * star and every planet are seen together.
  */
 function flyToSystem(sys) {
+  setTrip(null);
   hideCard();
   carried = null;
   const widest = Math.max(...sys.planets.map((pl) => (pl.a || 0) * (1 + (pl.e > 0 ? Math.min(pl.e, 0.97) : 0))), 0.02) * AU;
@@ -2524,6 +2730,7 @@ const EXO_ARRIVE_TILT = 30 * Math.PI / 180;
  * on it. W flies on in.
  */
 function flyToExoPlanet(sys, pl) {
+  setTrip(null);
   const at = exoPlace(sys, pl);
   if (!at || !(pl.r > 0)) {
     flyToSystem(sys);
@@ -2572,11 +2779,14 @@ function openPlanetCard(sys, pl) {
   const timed = Number.isFinite(pl.tc) && pl.p > 0;
   $('card-note').textContent = t(!timed ? 'fly.exoNoteNoTime' : transit ? 'fly.exoNoteTransit' : 'fly.exoNoteConj', { host: hostName(sys), method: methodText(pl) });
   const rows = [];
-  const others = sys.planets.filter((x) => x !== pl);
-  const kin = chipsRow(t('fly.cardHeld'), others.length
-    ? t('fly.roundWith', { host: hostName(sys), n: others.length })
-    : t('fly.roundAlone', { host: hostName(sys) }),
-  others.map((x) => ({ name: x.letter ?? x.name, open: () => openPlanetCard(sys, x) })));
+  showRound({
+    centre: {
+      name: t('fly.centreHost', { host: hostName(sys) }), title: t('fly.centreGo'),
+      words: pl.a ? orbitLine(pl.a, pl.p) : t('fly.exoNoOrbit'),
+      go: () => { framePicked({ onCentre: true }); openSystemCard(sys, { keep: true }); },
+    },
+    also: { title: t('fly.alsoHost', { host: hostName(sys) }), items: exoItems(sys, pl) },
+  });
   if (pl.r) rows.push([t('fly.cardRadius'), exoRadius(pl, true)]);
   if (pl.a) rows.push([t('exo.orbitH'), t('exo.orbitLong', { a: fmt(pl.a, 3) })]);
   if (pl.a) rows.push([t('fly.shapeH'), orbitWords(pl)]);
@@ -2586,12 +2796,13 @@ function openPlanetCard(sys, pl) {
   const zone = zoneOf(habitableZone(sys.starR, sys.teff), pl.a);
   if (zone) rows.push([t('exo.hzH'), t({ hot: 'exo.hzIn', cold: 'exo.hzOut', in: 'fly.hzIn', opt: 'fly.hzOpt' }[zone])]);
   rows.push([t('exo.foundH'), t('exo.found', { method: methodText(pl), year: pl.year ?? '—' })]);
-  $('card-rows').replaceChildren(kin, ...rows.map(([k, v]) => cardRow(k, v)), ...[companionsRow(sys)].filter(Boolean));
+  $('card-rows').replaceChildren(...rows.map(([k, v]) => cardRow(k, v)), ...[companionsRow(sys)].filter(Boolean));
   $('card-frames').hidden = true;
   const ev = $('card-exo');
   ev.hidden = false;
   ev.href = systemUrl([sys.ra, sys.dec, sys.planets.length, sys.host], sys.host, getLanguage());
   card = { s: { key: `sys:${sys.host}`, sys, pl, index: sys.index } };
+  showOrbitButton();
   $('card').hidden = false;
 }
 
@@ -2620,6 +2831,7 @@ const DRIFT_INK = [1, 0.66, 0.38, 0.8];
 function pick(next) {
   picked = next;
   pickedDrawnFor = null;
+  wasPick = null;
   if (!next) return;
   if (next.kind === 'exo') {
     const o = systemNow(next.sys).find((x) => x.pl === next.pl);
@@ -2681,21 +2893,54 @@ function pickedLabels() {
   pickedEls = {
     centre: make('fly-centre'), from: make('fly-mark fly-mark--drift'), to: make('fly-mark fly-mark--drift'),
     point: make('fly-centre fly-centre--point'), name: make('fly-mark fly-mark--picked'),
+    gc: make('fly-centre'), gcName: make('fly-mark fly-mark--picked'),
   };
   return pickedEls;
 }
 
-function drawPicked() {
-  const p = picked;
-  const els = pickedLabels();
+/**
+ * The picked thing's orbit as segment ends from its base, or null: a planet's
+ * and the Moon's are taken from the orbits traced for the moment shown, and
+ * again whenever those are traced again.
+ */
+function pickedEnds(p) {
   if (p && (p.kind === 'planet' || p.kind === 'moon')) {
     tracePaths();
     if (p.traced !== pathsTraced) {
       p.ends = segmentEnds([solarPaths[p.kind === 'moon' ? 'moon' : p.key]]);
       p.fromEye = new Float32Array(p.ends.length);
       p.traced = pathsTraced;
-      pickedDrawnFor = null;
+      if (p === picked) pickedDrawnFor = null;
     }
+  }
+  return p?.ends ?? null;
+}
+
+function drawPicked() {
+  const p = picked;
+  const els = pickedLabels();
+  pickedEnds(p);
+  if (wasPick?.ends) {
+    const base = wasPick.base();
+    const next = sameView(wasDrawnFor, ...base);
+    if (next) {
+      wasDrawnFor = next;
+      space.setLiveLines(fromEye(wasPick.ends, base, wasPick.fromEye), WAS_INK, 'was');
+      wasShown = true;
+    }
+  } else if (wasShown) {
+    space.setLiveLines(null, null, 'was');
+    wasShown = false;
+    wasDrawnFor = null;
+  }
+  // The Galactic Centre, once the camera has turned to it from a star's card.
+  const gc = facingCentre ? screenOf(galacticAhead(), basis(), proj) : null;
+  setHidden(els.gc, !gc);
+  setHidden(els.gcName, !gc);
+  if (gc) {
+    setPlace(els.gc, gc);
+    setText(els.gcName, t('fly.galMark'));
+    setPlace(els.gcName, gc, 22);
   }
   if (p?.ends) {
     const base = p.base();
@@ -2775,53 +3020,64 @@ function smallBodyAt(sb) {
   return sb.pos;
 }
 
-/** How far above a small body's orbit, seen from the Sun, the camera comes to it. */
-const SMALL_ARRIVE_TILT = 35 * Math.PI / 180;
-
 /**
- * To a small body: out to 1.6 times its distance from the Sun, 35° above
- * its orbit's plane, looking at it with the Sun in view, so its orbit is an
- * ellipse round the Sun. Its size is not drawn: from anywhere it is a point.
+ * To a small body: out to where its whole orbit and the Sun are in view,
+ * from above the orbit's plane (framePicked). Its size is not drawn: from
+ * anywhere it is a point, ringed.
  */
 function flyToSmallBody(sb) {
-  const at = smallBodyAt(sb);
-  if (!at) return;
+  setTrip(null);
+  if (picked?.sb !== sb) pick({ kind: 'small', sb });
   hideCard();
   carried = null;
-  // The pole of its orbit, from its inclination and node (J2000 ecliptic), on ICRS axes.
-  const i = sb.k.i * Math.PI / 180;
-  const om = sb.k.om * Math.PI / 180;
-  const pole = eclipticPc({ x: Math.sin(i) * Math.sin(om), y: -Math.sin(i) * Math.cos(om), z: Math.cos(i) }).map((c) => c / AU_PC);
-  const r = len(at);
-  const outward = norm(at);
-  const eye = add(outward.map((c) => c * 1.6 * r * Math.cos(SMALL_ARRIVE_TILT)), pole, 1.6 * r * Math.sin(SMALL_ARRIVE_TILT));
-  const stop = len(sub(eye, at));
-  autopilot = {
-    from: cam.eye, to: eye, look: [...at], stop, t0: performance.now(), body: -1,
-    ms: reduceMotion ? 1 : 3400 + 400 * Math.log10(1 + len(sub(at, cam.eye)) / stop),
-    follow: () => smallBodyAt(sb),
-    // Looking a little towards the Sun from the body, so both are in view.
-    aim: (p) => p.map((c) => c * 0.6),
-  };
-  wake();
+  framePicked();
   const wait = () => (autopilot ? requestAnimationFrame(wait) : openSmallCard(sb));
   requestAnimationFrame(wait);
 }
 
-/** A small body's card: what JPL's elements say, and that its size is not drawn. */
+/**
+ * A small body's card: what JPL's elements say, and that its size is not
+ * drawn. An orbit-neighbour from the field's card has elements but no
+ * moment they hold for: its orbit is drawn, its place is not.
+ */
 function openSmallCard(sb) {
   hideCard();
   if (picked?.sb !== sb) pick({ kind: 'small', sb });
   const { k } = sb;
+  const placed = Boolean(smallBodyAt(sb));
   $('card-title').textContent = sb.name;
-  $('card-note').textContent = t('fly.smallNote');
+  $('card-note').textContent = sb.of
+    ? t('fly.nearNote', { name: sb.of.name, d: fmt(sb.d, 3) })
+    : t('fly.smallNote');
+  const main = sb.of ?? sb;
+  const group = [main, ...main.near];
+  showRound({
+    centre: {
+      name: t('fly.centreSun'), title: t('fly.centreGo'), words: orbitLine(k.a, k.years * 365.25),
+      go: () => { framePicked({ onCentre: true }); openSolarCard({ keep: true }); },
+    },
+    also: {
+      title: t('fly.alsoNear'),
+      items: group.map((x) => ({
+        name: x.name,
+        nums: x.of
+          ? t('fly.nearNums', { a: fmt(x.k.a, 2), e: fmt(x.k.e, 2), d: fmt(x.d, 3) })
+          : t('fly.smallNums', { a: fmt(x.k.a, 2), e: fmt(x.k.e, 2) }),
+        current: x === sb,
+        go: () => selectAnd(() => openSmallCard(x)),
+      })),
+      more: group.length > 1 ? '' : t('fly.nearNoneSent'),
+    },
+  });
   const earth = named.find((x) => x.key === 'earth');
   const where = () => smallBodyAt(sb) ?? ORIGIN;
   const live = [];
   const rows = [
-    [t('fly.cardSun'), () => t('fly.au', { n: num(len(where()) / AU_PC, 2) })],
-    [t('fly.cardFromEarth'), () => t('fly.au', { n: num(len(sub(where(), posOf(earth.index))) / AU_PC, 2) })],
-    [t('fly.cardHere'), () => distanceText(len(sub(where(), cam.eye)))],
+    ...(placed ? [
+      [t('fly.cardSun'), () => t('fly.au', { n: num(len(where()) / AU_PC, 2) })],
+      [t('fly.cardFromEarth'), () => t('fly.au', { n: num(len(sub(where(), posOf(earth.index))) / AU_PC, 2) })],
+      [t('fly.cardHere'), () => distanceText(len(sub(where(), cam.eye)))],
+    ] : []),
     [t('exo.orbitH'), () => t('fly.smallOrbit', { a: fmt(k.a, 2), e: fmt(k.e, 3), i: fmt(k.i, 1) })],
     [t('exo.periodH'), () => t('fly.smallYear', { y: fmt(k.years, k.years < 10 ? 2 : 1) })],
   ];
@@ -2830,9 +3086,12 @@ function openSmallCard(sb) {
     live.push({ dd: row.querySelector('dd'), again });
     return row;
   }));
+  // A neighbour has no place to fly to: its whole orbit is what can be shown.
+  $('card-fly').hidden = !placed;
   $('card-frames').hidden = true;
   $('card-exo').hidden = true;
   card = { s: { key: 'small', sb }, live };
+  showOrbitButton();
   $('card').hidden = false;
 }
 
@@ -2854,8 +3113,8 @@ function showMark(ra, dec, mark) {
   const k = mark.body;
   if (k && drawable(k) && positionAt(k, JD())) {
     lookFromEarth(ra, dec, { pullOut: false });
-    const sb = { k, name: mark.name || k.name, atMs: 0, pos: null };
-    pick({ kind: 'small', sb });
+    const sb = { k, name: mark.name || k.name, atMs: 0, pos: null, near: [] };
+    sb.near = neighboursOf(mark.near, sb);
     flyToSmallBody(sb);
     return;
   }
@@ -2865,24 +3124,431 @@ function showMark(ra, dec, mark) {
   openDirectionCard({ ...mark, ra, dec, name });
 }
 
+/* ---- what it goes round, in the card --------------------------------- */
+
+/*
+ * At the top of every card: what the body goes round, as a button, and what
+ * else goes round the same centre, as a list. The centre's button takes the
+ * camera out to where the body's whole orbit and the centre are seen, the
+ * orbit still drawn, and opens the centre's card; each name in the list
+ * picks that body, draws its orbit (the one picked before stays, faint) and
+ * frames it the same way. ← and → step through the list; Esc puts the card
+ * and the pick away.
+ */
+
+/** The list in the card that ← and → step through: [{ go, current }]. */
+let roundList = [];
+
+function clearRound() {
+  roundList = [];
+  const box = $('card-round');
+  box.hidden = true;
+  if (box.childElementCount) box.replaceChildren();
+}
+
+function roundPara(className, text) {
+  const p = document.createElement('p');
+  p.className = className;
+  p.textContent = text;
+  return p;
+}
+
+/**
+ * Fill the card's "goes round" section. `centre`: { name, words, title, go };
+ * `note`: how its words were come by; `beside`: a row under the centre (a
+ * star's companions); `also`: { title, items: [{ name, nums, current, under,
+ * go }], more }.
+ */
+function showRound({ centre, note = '', beside = null, also = null }) {
+  const nodes = [roundPara('fly-round__h', t('fly.roundH'))];
+  const row = document.createElement('div');
+  row.className = 'fly-round__centre';
+  const go = document.createElement('button');
+  go.type = 'button';
+  go.className = 'fly-round__go';
+  go.textContent = centre.name;
+  if (centre.title) go.title = centre.title;
+  go.addEventListener('click', centre.go);
+  row.append(go);
+  if (centre.words) {
+    const words = document.createElement('span');
+    words.className = 'fly-round__words';
+    words.textContent = centre.words;
+    row.append(words);
+  }
+  nodes.push(row);
+  if (note) nodes.push(roundPara('fly-round__note', note));
+  if (beside) {
+    const rows = document.createElement('dl');
+    rows.className = 'fly-card__rows';
+    rows.append(beside);
+    nodes.push(rows);
+  }
+  roundList = [];
+  if (also) {
+    nodes.push(roundPara('fly-round__h', also.title));
+    if (also.items.length) {
+      const list = document.createElement('ol');
+      list.className = 'fly-round__list';
+      for (const item of also.items) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = `fly-round__item${item.under ? ' fly-round__item--under' : ''}`;
+        if (item.current) b.setAttribute('aria-current', 'true');
+        const name = document.createElement('span');
+        name.textContent = item.name;
+        const nums = document.createElement('span');
+        nums.className = 'fly-round__nums';
+        nums.textContent = item.nums;
+        b.append(name, nums);
+        b.addEventListener('click', item.go);
+        const li = document.createElement('li');
+        li.append(b);
+        list.append(li);
+        roundList.push(item);
+      }
+      nodes.push(list);
+    }
+    if (also.more) nodes.push(roundPara('fly-round__more', also.more));
+    if (roundList.length > 1 && !coarsePointer.matches) nodes.push(roundPara('fly-round__keys', t('fly.roundKeys')));
+  }
+  const box = $('card-round');
+  box.replaceChildren(...nodes);
+  box.hidden = false;
+}
+
+/** The next or the one before in the card's list, round from the end to the start. */
+function stepRound(dir) {
+  const n = roundList.length;
+  const at = roundList.findIndex((x) => x.current);
+  const next = at < 0 ? (dir > 0 ? 0 : n - 1) : (at + dir + n) % n;
+  roundList[next].go();
+}
+
+/** A period in the unit it reads best in: days up to a thousand, years past that. */
+function periodText(days) {
+  if (!(days > 0)) return '—';
+  if (days < 1000) return t('fly.days', { n: fmt(days, days < 10 ? 2 : days < 100 ? 1 : 0) });
+  const years = days / 365.25;
+  return t('fly.years', { n: fmt(years, years < 10 ? 2 : years < 100 ? 1 : 0) });
+}
+
+/** How far out an orbit is and how long a turn of it takes. */
+const orbitLine = (a, days) => t('fly.roundOrbit', { a: fmt(a, a < 1 ? 3 : 2), p: periodText(days) });
+
+/** The small bodies counted round the Sun, in words; empty until family.json has come. */
+const smallCount = () => (family
+  ? t('fly.smallMore', { ast: fmt(family.counts.asteroids, 0), comet: fmt(family.counts.comet, 0), date: familyDate() })
+  : '');
+
+const PLANET_KEYS = ['mercury', 'venus', 'earth', 'mars', 'jupiter', 'saturn', 'uranus', 'neptune'];
+
+/** The Sun's planets as a list, the Moon under the Earth, `current` (a key) marked. */
+function planetItems(current) {
+  const items = [];
+  for (const key of PLANET_KEYS) {
+    const s = named.find((x) => x.key === key);
+    const f = FACTS[key];
+    if (!s || !f) continue;
+    items.push({
+      name: nameOf(s), nums: `${t('fly.au', { n: fmt(f.a, f.a < 1 ? 3 : 2) })} · ${periodText(f.year)}`,
+      current: key === current, go: () => selectAnd(() => openCard(s)),
+    });
+    const moon = key === 'earth' ? named.find((x) => x.key === 'moon') : null;
+    if (moon) {
+      items.push({
+        name: nameOf(moon), nums: t('fly.underEarth', { p: periodText(FACTS.moon.year) }), under: true,
+        current: current === 'moon', go: () => selectAnd(() => openCard(moon)),
+      });
+    }
+  }
+  return items;
+}
+
+/**
+ * The body a card is about, picked if it is not: a card opened for a centre
+ * keeps the body picked before, and its own centre's button is about itself.
+ */
+function pickBody(s) {
+  if (picked?.key !== s.key) pick({ kind: s.key === 'moon' ? 'moon' : 'planet', key: s.key, index: s.index });
+}
+
+/** A planet's section: the Sun, and the other planets. */
+function planetRound(s) {
+  const f = FACTS[s.key];
+  return {
+    centre: {
+      name: t('fly.centreSun'), title: t('fly.centreGo'), words: f ? orbitLine(f.a, f.year) : '',
+      go: () => { pickBody(s); framePicked({ onCentre: true }); openSolarCard({ keep: true }); },
+    },
+    also: { title: t('fly.alsoSun'), items: planetItems(s.key), more: smallCount() },
+  };
+}
+
+/** The Moon's section: the Earth, and nothing else natural round it. */
+function moonRound(s) {
+  const earth = named.find((x) => x.key === 'earth');
+  return {
+    centre: {
+      name: t('fly.centreEarth'), title: t('fly.centreGo'),
+      words: t('fly.roundMoonOrbit', { km: fmt(384400, 0), p: periodText(FACTS.moon.year) }),
+      go: () => { pickBody(s); framePicked({ onCentre: true }); openCard(earth, { keep: true }); },
+    },
+    also: { title: t('fly.alsoEarth'), items: [], more: t('fly.moonOnly') },
+  };
+}
+
+/** A system's planets as a list: radius, orbit and year where the Archive has them; `current` marked. */
+function exoItems(sys, current) {
+  return sys.planets.map((pl) => ({
+    name: planetName(sys, pl),
+    nums: [
+      pl.r ? exoRadius(pl, false) : '',
+      pl.a ? t('exo.orbit', { a: fmt(pl.a, pl.a < 1 ? 3 : 2) }) : t('fly.exoNoOrbit'),
+      pl.p ? periodText(pl.p) : '',
+    ].filter(Boolean).join(' · '),
+    current: pl === current,
+    go: () => selectAnd(() => openPlanetCard(sys, pl)),
+  }));
+}
+
+/**
+ * An orbit-neighbour sent with a mark from the field's card (bodycard.js:
+ * JPL's closest orbits by D_SH), as a small body of its own. Its elements
+ * have no moment they hold for, so it has an orbit and no place.
+ */
+function neighboursOf(list, of) {
+  if (!Array.isArray(list)) return [];
+  return list.slice(0, 5).map((r) => {
+    const k = {
+      des: String(r?.des ?? ''), a: Number(r?.a), e: Number(r?.e), q: Number(r?.q),
+      i: Number(r?.i), om: Number(r?.om), w: Number(r?.w),
+    };
+    k.years = k.a ** 1.5;
+    const name = String(r?.name ?? '').trim().replace(/^\((.+)\)$/, '$1') || k.des;
+    return { k, name, d: Number(r?.d), of, atMs: 0, pos: null, near: [] };
+  }).filter((x) => x.name && drawable(x.k));
+}
+
+/* The Milky Way's centre: Sgr A*, and the Galaxy's north pole (IAU 1958). */
+const GC_DIR = direction(266.405, -28.936);
+const GAL_POLE = direction(192.8595, 27.1283);
+/** The Sun's distance from the centre, pc, and a flat rotation curve's speed, km/s. */
+const R0_PC = 8200;
+const V_CIRC = 230;
+const S_PER_MYR = 3.15576e13;
+
+/**
+ * How far from the Milky Way's centre a place is, across the Galaxy's plane,
+ * and how long one turn would take on a circular orbit at that distance on a
+ * flat rotation curve: a statement about where it is, not a measured orbit.
+ */
+function galacticTurn(p) {
+  const g = sub(GC_DIR.map((c) => c * R0_PC), p);
+  const R = len(sub(g, GAL_POLE.map((c) => c * dot(g, GAL_POLE))));
+  return { kpc: R / 1000, myr: (2 * Math.PI * R * KM_PER_PC) / V_CIRC / S_PER_MYR };
+}
+
+/** A star's centre: the Milky Way's, which the camera turns to face. */
+function galCentre(p) {
+  const { kpc, myr } = galacticTurn(p);
+  return {
+    name: t('fly.centreGal'), title: t('fly.centreGalGo'),
+    words: t('fly.galWords', { kpc: fmt(kpc, 2), myr: fmt(Math.round(myr), 0) }),
+    go: faceGalacticCentre,
+  };
+}
+
+/** Whether the camera was turned to the Galactic Centre from the card shown: it is ringed and named. */
+let facingCentre = false;
+const gcAhead = [0, 0, 0];
+/** A point far off towards the Galactic Centre from the eye, written into one array. */
+function galacticAhead() {
+  for (let j = 0; j < 3; j++) gcAhead[j] = cam.eye[j] + GC_DIR[j] * 1e6;
+  return gcAhead;
+}
+
+/** Turn where the camera stands to face the Milky Way's centre, eight kiloparsecs off: too far to fly to. */
+function faceGalacticCentre() {
+  carried = null;
+  autopilot = {
+    from: cam.eye, to: cam.eye, look: add(cam.eye, GC_DIR, 1e6), stop: 1, t0: performance.now(), body: -1,
+    ms: reduceMotion ? 1 : 1400,
+  };
+  facingCentre = true;
+  wake();
+}
+
+/* The orbit picked before the one picked from a list, drawn faint until the next pick. */
+let wasPick = null;
+let wasDrawnFor = null;
+let wasShown = false;
+const WAS_INK = [1, 0.74, 0.3, 0.45];
+
+const samePick = (a, b) => Boolean(a && b) && a.kind === b.kind && a.key === b.key && a.pl === b.pl && a.sb === b.sb;
+
+/** Open a body's card from a list, which picks it; keep the orbit picked before, faint; and frame the new one. */
+function selectAnd(open) {
+  const before = picked?.ends && picked.kind !== 'star' && picked.kind !== 'dir' ? picked : null;
+  open();
+  if (before && !samePick(before, picked)) {
+    wasPick = before;
+    wasDrawnFor = null;
+  }
+  framePicked();
+}
+
+/** Whether the picked thing has an orbit to frame: the card's "whole orbit" is shown for it. */
+function showOrbitButton() {
+  $('card-orbit').hidden = !(picked && picked.kind !== 'star' && picked.kind !== 'dir' && pickedEnds(picked));
+}
+
+/** How far above an orbit's plane, seen from its middle, the camera comes to see it whole. */
+const ORBIT_VIEW_TILT = 32 * Math.PI / 180;
+
+/**
+ * The part of the canvas the card and the dock leave free, px from the
+ * canvas's middle: { cx, cy } its middle, { hw, hh } its half-size. On a wide
+ * screen the card stands at the right; on a phone it is over the dock.
+ */
+function freeView() {
+  const c = canvas.getBoundingClientRect();
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  const wide = c.width > 640;
+  const right = wide ? c.width - Math.min(22 * rem, c.width) - 2 * rem : c.width;
+  const dockTop = $('dock').getBoundingClientRect().top - c.top;
+  const bottom = Math.max(c.height * 0.3, Math.min(dockTop, wide ? c.height : c.height * 0.45));
+  return { cx: right / 2 - c.width / 2, cy: bottom / 2 - c.height / 2, hw: right / 2, hh: bottom / 2 };
+}
+
+/**
+ * Frame the picked thing's orbit: out to where all of it, and what it goes
+ * round, fit the part of the view the card leaves free with a margin, 32°
+ * above its plane on the side the camera is (from beside the body, its orbit
+ * is a line through it), with the orbit's pole up the screen. The body is
+ * seen at the side of the ellipse away from the card, not at its near edge
+ * against the dock; with `onCentre` the view is centred on what it goes
+ * round, otherwise on the orbit's middle.
+ */
+function framePicked({ onCentre = false } = {}) {
+  const p = picked;
+  const ends = pickedEnds(p);
+  if (!ends || !p.centre) return;
+  const body = p.kind === 'exo' ? exoPlace(p.sys, p.pl)
+    : p.kind === 'small' ? smallBodyAt(p.sb)
+      : p.index >= 0 ? posOf(p.index) : null;
+  const base = p.base();
+  const centre = p.centre();
+  const n = ends.length / 3;
+  const mid = [0, 0, 0];
+  for (let o = 0; o < ends.length; o += 3) for (let j = 0; j < 3; j++) mid[j] += ends[o + j];
+  for (let j = 0; j < 3; j++) mid[j] = mid[j] / n + base[j];
+  const target = onCentre ? [...centre] : mid;
+  let reach = len(sub(centre, target));
+  let pole = [0, 0, 0];
+  for (let o = 0; o + 5 < ends.length; o += 6) {
+    const a = [ends[o] + base[0] - mid[0], ends[o + 1] + base[1] - mid[1], ends[o + 2] + base[2] - mid[2]];
+    const b = [ends[o + 3] + base[0] - mid[0], ends[o + 4] + base[1] - mid[1], ends[o + 5] + base[2] - mid[2]];
+    pole = add(pole, cross(a, b));
+    reach = Math.max(reach, len(sub(add(mid, a), target)));
+  }
+  pole = norm(pole);
+  if (dot(pole, sub(cam.eye, target)) < 0) pole = pole.map((c) => -c);
+  // The side seen from: a quarter turn round the pole from the body, so it
+  // stands at the ellipse's left or right; with no body, the camera's side.
+  const toward = sub(body ?? cam.eye, mid);
+  let across = sub(toward, pole.map((c) => c * dot(toward, pole)));
+  if (len(across) < 1e-9 * reach) across = cross(pole, Math.abs(pole[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]);
+  across = norm(across);
+  if (body) across = norm(cross(pole, across));
+  const view = (side) => {
+    const back = add(side.map((c) => c * Math.cos(ORBIT_VIEW_TILT)), pole, Math.sin(ORBIT_VIEW_TILT));
+    const F = back.map((c) => -c);
+    const up = norm(sub(pole, F.map((c) => c * dot(pole, F))));
+    return { back, F, up, right: cross(F, up) };
+  };
+  let { back, F, up, right } = view(across);
+  if (body && dot(sub(body, target), right) > 0) ({ back, F, up, right } = view(across.map((c) => -c)));
+  // Near enough that the orbit and its centre just fit the free part, with a
+  // tenth to spare: each point seen from `dist` back along F stands x / (dist + z)
+  // across the view, which may not pass the free part's edge.
+  const free = freeView();
+  const focalPx = (canvas.clientHeight / 2) / Math.tan((FOV * Math.PI) / 360);
+  const tanX = free.hw / focalPx;
+  // A little short of the dock: the body's ring and name stand below it.
+  const tanY = Math.max(free.hh - 18, free.hh * 0.7) / focalPx;
+  let dist = 0;
+  const fit = (x, y, z) => {
+    const v = [x - target[0], y - target[1], z - target[2]];
+    const along = dot(v, F);
+    dist = Math.max(dist, Math.abs(dot(v, right)) / tanX - along, Math.abs(dot(v, up)) / tanY - along);
+  };
+  fit(...centre);
+  for (let o = 0; o < ends.length; o += 3) fit(ends[o] + base[0], ends[o + 1] + base[1], ends[o + 2] + base[2]);
+  dist = Math.max(dist * 1.12, reach);
+  const eye = add(target, back, dist);
+  // Looking a little to the side of the target, so it stands in the middle of the free part.
+  const look = add(add(target, right, (-free.cx / focalPx) * dist), up, (free.cy / focalPx) * dist);
+  // The Moon's orbit goes with the Earth: the camera follows it; the rest stand still.
+  const follow = p.kind === 'moon' ? p.centre : () => target;
+  const anchor = follow();
+  const lookOff = sub(look, anchor);
+  carried = null;
+  autopilot = {
+    from: cam.eye, to: eye, look, stop: len(sub(eye, anchor)), anchor: [...anchor], up, t0: performance.now(), body: -1,
+    ms: reduceMotion ? 1 : 2600 + 400 * Math.log10(1 + len(sub(eye, cam.eye)) / dist),
+    follow,
+    aim: (q) => add(q, lookOff),
+  };
+  $('hint').dataset.gone = 'true';
+  wake();
+}
+
+/*
+ * While an orbit is picked, the names of what has nothing to do with it are
+ * quieter: the picked body's and its centre's stay as they are, and are
+ * placed first.
+ */
+let labelsQuiet = false;
+let kinBody = -2;
+let kinCentre = -2;
+let earthIndex = -2;
+function quietLabels() {
+  const p = picked;
+  const quiet = Boolean(p?.ends) && p.kind !== 'star' && p.kind !== 'dir';
+  if (earthIndex === -2) earthIndex = named.find((x) => x.key === 'earth')?.index ?? -3;
+  kinBody = quiet && (p.kind === 'planet' || p.kind === 'moon') ? p.index : -2;
+  kinCentre = !quiet ? -2
+    : p.kind === 'moon' ? earthIndex
+      : p.kind === 'exo' ? (p.sys.index >= 0 ? p.sys.index : -2)
+        : sunIndex;
+  if (quiet !== labelsQuiet) {
+    labelsQuiet = quiet;
+    $('labels').toggleAttribute('data-quiet', quiet);
+  }
+  return quiet;
+}
+
 /* ---- language and start ----------------------------------------------- */
 
 function applyLanguage() {
   applyTranslations();
   document.title = t('fly.doc');
   $('lang').textContent = getLanguage() === 'ru' ? 'EN' : 'RU';
-  $('hint').textContent = t(matchMedia('(pointer: coarse)').matches ? 'fly.hintTouch' : 'fly.hint');
+  $('hint').textContent = t(matchMedia('(pointer: coarse)').matches ? 'fly.hintHold' : 'fly.hint');
   if (named.length) nameLabels();
   if (starCount) $('source').textContent = t('fly.source', { n: fmt(starCount, 0) }) + (survey ? ` · ${t('sky.fills', { n: CORE_STAR_COUNT })}` : '');
   nameGapLabels();
-  buildClock();
+  showClock();
+  closePops();
+  if (view.ir) setText($('read-note'), t('fly.irNote'));
   if (card) {
     const { s } = card;
     if (s.sb) openSmallCard(s.sb);
     else if (s.mark) openDirectionCard(s.mark);
     else if (s.pl) openPlanetCard(s.sys, s.pl);
-    else if (s.sys) openSystemCard(s.sys);
-    else openCard(s);
+    else if (s.sys) openSystemCard(s.sys, { keep: card.keep });
+    else openCard(s, { keep: card.keep });
   }
   wake();
 }

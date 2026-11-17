@@ -68,46 +68,59 @@
   <aside class="fly-card" id="card" hidden aria-live="polite">
     <button type="button" class="fly-card__close" id="card-close" data-i18n-label="fly.close" data-i18n-title="fly.close">×</button>
     <h2 class="fly-card__title" id="card-title"></h2>
+    <!-- What it goes round, and what else goes round the same centre: filled for each card. -->
+    <section class="fly-round" id="card-round" hidden></section>
     <p class="fly-card__note" id="card-note"></p>
     <dl class="fly-card__rows" id="card-rows"></dl>
     <div class="fly-card__acts">
       <button type="button" class="as-open" id="card-fly" data-i18n="fly.flyHere"></button>
+      <button type="button" class="as-toggle" id="card-orbit" hidden data-i18n="fly.seeOrbit"></button>
       <a class="as-toggle fly-card__frames" id="card-frames" data-i18n="fly.frames"></a>
       <a class="as-toggle fly-card__frames" id="card-exo" hidden target="_blank" rel="noopener" data-i18n="exo.open"></a>
     </div>
   </aside>
 
+  <!-- Forward and back for a hand with no keyboard; held, ▲ goes faster the
+       longer it is held. Placed just above the dock, wherever its top is. -->
   <div class="fly-pad">
     <button type="button" class="as-zoom__key" id="go-forward" data-i18n-label="fly.forward" data-i18n-title="fly.forward">▲</button>
     <button type="button" class="as-zoom__key" id="go-back" data-i18n-label="fly.back" data-i18n-title="fly.back">▼</button>
   </div>
 
-  <section class="as-dock" id="dock">
-    <div class="as-dock__row">
-      <span class="as-wave__name" data-i18n="fly.to"></span>
+  <!-- What the 4.6 µm view is, while it is on: an estimate, said where it is seen. -->
+  <p class="fly-note" id="read-note" hidden></p>
+
+  <!-- Two rows: where to go; then what to show, the clock and where you are. -->
+  <section class="as-dock fly-dock" id="dock">
+    <div class="as-dock__row fly-dock__row">
+      <span class="as-wave__name fly-dock__to" data-i18n="fly.to"></span>
       <div class="as-bands fly-dest" id="dest"></div>
     </div>
-    <div class="as-dock__row">
+    <div class="as-dock__row fly-dock__row fly-dock__tools">
       <button type="button" class="as-toggle" id="reach" aria-pressed="false" data-i18n="fly.reach" data-i18n-title="fly.reachWhen"></button>
-      <button type="button" class="as-toggle" id="ir" aria-pressed="false" data-i18n="fly.ir" data-i18n-title="fly.irWhen"></button>
-      <span class="fly-speed">
-        <button type="button" class="as-toggle" id="slower" data-i18n-label="fly.slower" data-i18n-title="fly.slower">−</button>
-        <button type="button" class="as-toggle" id="faster" data-i18n-label="fly.faster" data-i18n-title="fly.faster">+</button>
+      <button type="button" class="as-toggle fly-ir" id="ir" hidden aria-pressed="false" data-i18n-title="fly.irWhen">
+        <span class="fly-ir__long" data-i18n="fly.irTrip"></span><span class="fly-ir__short" data-i18n="fly.ir"></span>
+      </button>
+      <span class="fly-time" id="time" role="group" data-i18n-label="fly.timeH">
+        <button type="button" class="as-toggle fly-time__play" id="time-play"></button>
+        <button type="button" class="as-toggle fly-time__rate" id="time-rate" data-i18n-title="fly.rateWhen"></button>
+        <button type="button" class="as-toggle" id="time-now" hidden data-i18n="fly.timeNow"></button>
       </span>
-      <p class="as-read num" id="read" aria-live="off"></p>
-    </div>
-    <div class="as-dock__row fly-time" role="group" data-i18n-label="fly.timeH">
-      <span class="as-wave__name" data-i18n="fly.timeH"></span>
-      <button type="button" class="as-toggle fly-time__play" id="time-play"></button>
-      <span class="fly-time__rates" id="time-rates"></span>
-      <button type="button" class="as-toggle" id="time-now" hidden data-i18n="fly.timeNow"></button>
-      <p class="as-read num fly-time__date" id="time-date" aria-live="polite"></p>
-    </div>
-    <div class="as-dock__row as-dock__row--read">
-      <p class="as-read" id="read-note"></p>
-      <p class="as-read as-read--credit" id="source"></p>
+      <p class="as-read num fly-line"><span class="fly-line__date" id="time-date" aria-live="polite"></span><span id="read" aria-live="off"></span></p>
+      <button type="button" class="as-toggle fly-sources" id="sources" aria-expanded="false" aria-controls="sources-pop" data-i18n-label="fly.sources" data-i18n-title="fly.sourcesWhen">
+        <span class="fly-sources__long" data-i18n="fly.sources" aria-hidden="true"></span><span class="fly-sources__short" aria-hidden="true">i</span>
+      </button>
     </div>
   </section>
+
+  <!-- The Moon and the planets, one chip's worth of the dock. -->
+  <div class="fly-pop fly-pop--planets" id="planets-pop" hidden role="menu"></div>
+
+  <!-- Where it all comes from, and the one thing to show or not that is not a destination. -->
+  <div class="fly-pop fly-pop--sources" id="sources-pop" hidden>
+    <p class="fly-pop__text" id="source"></p>
+    <button type="button" class="as-toggle" id="exo-all" aria-pressed="false" data-i18n="fly.exoAll" data-i18n-title="fly.exoAllWhen"></button>
+  </div>
 </main>
 
 <script type="module" src="js/fly.js"></script>
