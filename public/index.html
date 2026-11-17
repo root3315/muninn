@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Muninn — SPHEREx time-domain viewer</title>
-<meta name="description" content="Muninn stacks NASA SPHEREx all-sky visits on one patch of sky and shows what moved between them.">
+<meta name="description" content="Muninn aligns every NASA SPHEREx visit to one field of sky and shows what moved between them.">
 <meta name="color-scheme" content="dark light">
 <meta name="theme-color" content="#171721">
 <!-- The link preview (Telegram, Slack, X). Real frames: (152) Atala on one
@@ -108,8 +108,21 @@
   <!-- The opening view as one picture (the real survey, 70 KB): on screen before any script has run. -->
   <div class="gate__sky gate__band gate__intro" aria-hidden="true"></div>
   <canvas class="gate__sky" id="gate-sky" aria-hidden="true"></canvas>
-  <p class="scale-hint" data-i18n="scale.hint"></p>
   <div class="gate__vignette" aria-hidden="true"></div>
+
+  <!-- The way out into space, from where the sky faces. The flight puts its
+       way back on the same spot, so the two read as one control. The keys
+       (W A S D, the arrows) and a pinch out past the widest still do it. -->
+  <button type="button" class="way-3d" id="gate-3d" data-i18n-title="gate.explore3dWhen">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2.6"/><ellipse cx="12" cy="12" rx="9.5" ry="4.2" transform="rotate(-24 12 12)"/></svg>
+    <span data-i18n="gate.explore3d"></span>
+  </button>
+  <!-- The sky's HEALPix cells, the tiles the all-sky cube is served in:
+       faint lines that never take a press from a star or a target. -->
+  <button type="button" class="gate__grid" id="gate-grid" aria-pressed="false" data-i18n-title="gate.gridWhen">
+    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 2.5h11v11h-11zM8 2.5v11M2.5 8h11"/></svg>
+    <span data-i18n="gate.grid"></span>
+  </button>
 
   <!-- The type sits in one corner and everything else is sky. Anything put
        over a picture is a thing standing in front of it, so there is as little
@@ -175,6 +188,8 @@
       <img id="gate-card-img" alt="" width="280" height="280" decoding="async">
       <!-- Where no frame is stored, one is read from the archive on the spot. -->
       <canvas id="gate-card-live" width="280" height="280" hidden></canvas>
+      <!-- Until the archive answers, or where it cannot: the all-sky cube at that point. -->
+      <canvas id="gate-card-cube" hidden></canvas>
       <figcaption class="gate-card__tag num" id="gate-card-tag"></figcaption>
     </figure>
     <div class="gate-card__body">
