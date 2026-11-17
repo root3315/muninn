@@ -314,6 +314,37 @@ export function platePoint(corners, u, v) {
 }
 
 /**
+ * The plate's four corners in the corridor (bottom-left, bottom-right,
+ * top-right, top-left as seen from its front), `nearM` from the eye: the
+ * grid's own edges sent through the same widened mapping as everything else
+ * (`fieldDirection`, east on the left). The grid must be centred on the field
+ * the frame looks along, as the page's grid is.
+ */
+export function plateCornersFor(grid, frame, spread, nearM) {
+  const hw = grid.fovDeg / 2;
+  const hh = grid.fovHeightDeg / 2;
+  const corner = (e, n) => {
+    const d = fieldDirection(e, n, frame, spread);
+    const l = Math.hypot(d[0], d[1], d[2]);
+    return [(d[0] / l) * nearM, (d[1] / l) * nearM, (d[2] / l) * nearM];
+  };
+  return [corner(hw, -hh), corner(-hw, -hh), corner(-hw, hh), corner(hw, hh)];
+}
+
+/**
+ * Where a thing's ray leaves the plate: its own pixel in the picture (by the
+ * grid the plate was built from), or null when it is off the picture. The
+ * catalogues are asked over a circle round the whole field, so a good part
+ * of what is placed lies above, below or beside the picture; such a thing has
+ * no pixel, and a ray started from empty space beside the plate reads as one
+ * that missed its star.
+ */
+export function rayStart(grid, corners, ra, dec) {
+  const uv = corners ? plateUV(grid, ra, dec) : null;
+  return uv ? platePoint(corners, uv.u, uv.v) : null;
+}
+
+/**
  * The rays worth drawing when there are more than `max`: by `score`, highest
  * first (the field's own object, what SPHEREx sees in the visit, the
  * brighter), ties in the order given. Returns `{ drawn, total }`.

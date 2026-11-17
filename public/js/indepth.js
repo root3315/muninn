@@ -39,7 +39,7 @@ import { resolveColor } from './render.js';
 import {
   placeByDistance, depthMetres, unknownShell, starDistance, galaxyDistance, matchTarget,
   AU_PER_PC, DEPTH_SCALE, DEPTH_TICKS, PLANET_X_AU, PLANET_X_MAX_BETA, eclipticLatitude,
-  decadeRings, viewFrame, fieldDirection, plateUV, platePoint, capRays,
+  decadeRings, viewFrame, fieldDirection, plateCornersFor, rayStart, capRays,
 } from './vr/depth3d.js';
 import { geometricDistances, galaxiesWithRedshift, bakedAnswers } from './vr/distances.js';
 import { tv } from './vr/strings.js';
@@ -341,6 +341,8 @@ export function mountInDepth(plate, { sky, field }) {
   let plateTex = null;
   /** The plate's corners in the corridor: bottom-left, bottom-right, top-right, top-left as seen from its front. */
   let plateCorners = null;
+  /** The grid the plate was built from: a pixel is found by it, never by a grid the page has since moved on to. */
+  let plateGrid = null;
   /** What a tap or a hover can land on: `{ key, pos, start, kind, color, known, card() }`. */
   let pickables = [];
 
@@ -384,14 +386,11 @@ export function mountInDepth(plate, { sky, field }) {
     spread = D.coneDeg / Math.max(0.02, radiusDeg);
     const f = field();
     dirOf = (ra, dec) => fieldDirection(deltaRA(ra, f.ra) * Math.cos(f.dec * D2R), dec - f.dec, FRAME, spread);
-    const unit = (d) => { const l = Math.hypot(...d); return [d[0] / l, d[1] / l, d[2] / l]; };
 
     // The plate: the visit at the corridor's mouth, east on the left and north up, as on the page.
-    const hw = grid.fovDeg / 2;
-    const hh = grid.fovHeightDeg / 2;
-    const corner = (e, n) => unit(fieldDirection(e, n, FRAME, spread)).map((x) => x * D.nearM);
-    const pts = [corner(hw, -hh), corner(-hw, -hh), corner(-hw, hh), corner(hw, hh)];
+    const pts = plateCornersFor(grid, FRAME, spread, D.nearM);
     plateCorners = pts;
+    plateGrid = grid;
     const plateGeo = new THREE.BufferGeometry();
     plateGeo.setAttribute('position', new THREE.Float32BufferAttribute(pts.flat(), 3));
     plateGeo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
@@ -531,13 +530,12 @@ export function mountInDepth(plate, { sky, field }) {
     return p;
   }
 
-  /** Where a thing's ray leaves the plate: its own pixel in the picture, else (off the picture) its direction at the plate's distance. */
-  function startOf(ra, dec, dir) {
-    const uv = plateCorners ? plateUV(sky.grid, ra, dec) : null;
-    if (uv) return platePoint(plateCorners, uv.u, uv.v);
-    const l = Math.hypot(...dir);
-    return [(dir[0] / l) * D.nearM, (dir[1] / l) * D.nearM, (dir[2] / l) * D.nearM];
-  }
+  /**
+   * Where a thing's ray leaves the plate: its own pixel in the picture, or
+   * null off the picture. A thing off the picture keeps its point in the
+   * corridor but has no ray: there is no pixel for it to leave from.
+   */
+  const startOf = (ra, dec) => rayStart(plateGrid, plateCorners, ra, dec);
 
   /** Drawn only once the rays have grown out to them (paths, ±1σ): the intro sends out the rays alone. */
   function late(obj) {
@@ -552,8 +550,11 @@ export function mountInDepth(plate, { sky, field }) {
   /**
    * Rays `{ start, pos, color, strength, tail }`, additive and thin: bright
    * where they leave the photo, down to `tail` of that at the far end. Drawn
-   * twice: in full where nothing stands in front, and faintly where the
-   * plate does, so a ray is followed back through the picture to its pixel.
+   * twice: in full where nothing stands in front, and at a little over half
+   * where the plate does, so a ray is followed back through the picture to
+   * its pixel. Seen from the side the photo hides the first stretch of every
+   * ray; at a third that stretch was lost in the picture and the rays seemed
+   * to start at the plate's far edge.
    */
   function rayLines(list) {
     const n = list.length;
@@ -595,7 +596,7 @@ export function mountInDepth(plate, { sky, field }) {
       return obj;
     };
     // The second pass shares the geometry; disposing it twice is harmless.
-    return [pass(1, THREE.LessEqualDepth), pass(0.3, THREE.GreaterDepth)];
+    return [pass(1, THREE.LessEqualDepth), pass(0.55, THREE.GreaterDepth)];
   }
 
   /** A soft glint on the photo at each ray's pixel. */
@@ -665,7 +666,7 @@ export function mountInDepth(plate, { sky, field }) {
     placed.forEach((p, i) => {
       const s = stars[i];
       const seenHere = detected(current, s.at.ra, s.at.dec);
-      const start = startOf(s.at.ra, s.at.dec, s.dir);
+      const start = startOf(s.at.ra, s.at.dec);
       const it = {
         pos: p.pos, solid: seenHere,
         // Brighter is larger; one without a distance is a dim speck on the far shell.
@@ -676,15 +677,15 @@ export function mountInDepth(plate, { sky, field }) {
       const strength = starStrength(s.r.mag, seenHere);
       // Seen by SPHEREx first, then the brighter.
       const score = (seenHere ? 1000 : 0) + 30 - (s.r.mag ?? 25);
-      if (p.known) {
-        counts[s.d.src] += 1;
+      if (p.known) counts[s.d.src] += 1;
+      if (p.known && start) {
         let bar = null;
         if (s.d.lo && s.d.hi) {
           const a = placeByDistance([{ dir: s.dir, au: s.d.lo * AU_PER_PC }, { dir: s.dir, au: s.d.hi * AU_PER_PC }]);
           bar = [...a[0].pos, ...a[1].pos];
         }
         rays.push({ kind: 'stars', start, pos: p.pos, color: look.ink, strength, tail: tailAt(p.pos), score, bar });
-      } else {
+      } else if (start) {
         // No distance: a short stub along its line of sight, no further than anything can be said.
         const l = Math.hypot(...start);
         const end = start.map((x) => x * (1 + STUB_M / l));
@@ -712,8 +713,8 @@ export function mountInDepth(plate, { sky, field }) {
         : lit ? tv('vr.distLit', { pc: pcText(lit), ref: target.ref ?? '' }) : tv('vr.notMeasured');
       const it = { pos: p.pos, size: 12, color: look.accent, solid: detected(current, at.ra, at.dec) };
       layer.stars.add(points([it]));
-      const start = startOf(at.ra, at.dec, dir);
-      if (p.known) rays.push({ kind: 'stars', start, pos: p.pos, color: look.accent, strength: 1, tail: Math.max(0.35, tailAt(p.pos)), score: 1e6 });
+      const start = startOf(at.ra, at.dec);
+      if (p.known && start) rays.push({ kind: 'stars', start, pos: p.pos, color: look.accent, strength: 1, tail: Math.max(0.35, tailAt(p.pos)), score: 1e6 });
       // On the corridor only how far, in light-years; the card says by what.
       const short = pc ? lyText(pc) : tv('vr.notMeasured');
       // The field's own object is named first of all, before the plate itself.
@@ -728,7 +729,7 @@ export function mountInDepth(plate, { sky, field }) {
     if (bodies.list.length) {
       const items = bodies.list.map((b) => {
         const dir = dirOf(b.ra, b.dec);
-        return { pos: placeByDistance([{ dir, au: b.dGeo }])[0].pos, start: startOf(b.ra, b.dec, dir), size: 10, color: look.counter, solid: b.seen };
+        return { pos: placeByDistance([{ dir, au: b.dGeo }])[0].pos, start: startOf(b.ra, b.dec), size: 10, color: look.counter, solid: b.seen };
       });
       layer.bodies.add(points(items));
       const path = [];
@@ -744,7 +745,7 @@ export function mountInDepth(plate, { sky, field }) {
         const own = ownBody(b, f);
         const name = b.num ? `(${b.num}) ${b.name}` : b.name;
         const sub = current && b.mjd === current.frame.mjd ? tv('vr.bodyAt', { au: fmt(b.dGeo, 2) }) : tv('vr.bodyAtDate', { au: fmt(b.dGeo, 2), date: day(b.mjd) });
-        rays.push({
+        if (items[i].start) rays.push({
           kind: 'bodies', start: items[i].start, pos: items[i].pos, color: look.counter,
           strength: own ? 1 : b.seen ? 0.85 : 0.6, tail: Math.max(0.4, tailAt(items[i].pos)), score: own ? 1e6 : 1e5 + (b.seen ? 1e3 : 0) - b.dGeo,
         });
@@ -775,12 +776,12 @@ export function mountInDepth(plate, { sky, field }) {
       const items = gal.map((o) => {
         const dir = dirOf(o.g.ra, o.g.dec);
         const [p] = placeByDistance([{ dir, au: o.au }]);
-        return { pos: p.pos, start: startOf(o.g.ra, o.g.dec, dir), size: 8, color: o.au ? look.accent : look.ruleStrong, solid: false, known: p.known };
+        return { pos: p.pos, start: startOf(o.g.ra, o.g.dec), size: 8, color: o.au ? look.accent : look.ruleStrong, solid: false, known: p.known };
       });
       layer.galaxies.add(points(items));
       gal.forEach((o, i) => {
         const it = items[i];
-        if (it.known) rays.push({ kind: 'galaxies', start: it.start, pos: it.pos, color: look.accent, strength: 0.45, tail: tailAt(it.pos), score: 15 });
+        if (it.known && it.start) rays.push({ kind: 'galaxies', start: it.start, pos: it.pos, color: look.accent, strength: 0.45, tail: tailAt(it.pos), score: 15 });
         const sub = o.au ? tv('vr.galaxyAt', { z: fmt(o.g.z, 4), mpc: fmt(o.mpc, 0) }) : `z ${fmt(o.g.z, 4)} · ${tv('vr.unknown')}`;
         if (o.au && objTags.filter((x) => x.kind === 'galaxies').length < 2) {
           objTags.push({ pos: it.pos, kind: 'galaxies', priority: 7, tone: 'accent', title: o.g.name, sub });
@@ -1127,6 +1128,7 @@ export function mountInDepth(plate, { sky, field }) {
     for (const p of pickables) {
       if (!shown[p.kind]) continue;
       for (const at of [p.pos, p.start]) {
+        if (!at) continue;
         tmp.set(...at).project(camera);
         if (tmp.z >= 1) continue;
         const d = Math.hypot((tmp.x * 0.5 + 0.5) * W - x, (-tmp.y * 0.5 + 0.5) * H - y);
@@ -1163,35 +1165,42 @@ export function mountInDepth(plate, { sky, field }) {
   function refocus() {
     disposeGroup(focus);
     const p = byKey(hot) ?? byKey(picked);
-    if (p && shown[p.kind] && plateCorners) {
-      // A thing with no distance has only a direction: its line is dashed, to the far shell.
-      const ray = lines([...p.start, ...p.pos], p.color, p.known ? 0.95 : 0.6, { dashed: !p.known });
-      ray.material.depthTest = false;
-      ray.renderOrder = 9;
-      // The ring lies on the plate, a little wider than a bright star's image there.
-      const [bl, br, , tl] = plateCorners;
-      const ex = new THREE.Vector3(...br).sub(new THREE.Vector3(...bl));
-      const ey = new THREE.Vector3(...tl).sub(new THREE.Vector3(...bl));
-      const radius = 0.035 * Math.max(ex.length(), ey.length());
-      ex.normalize();
-      ey.normalize();
-      const ring = [];
-      const N = 40;
-      for (let k = 0; k < N; k++) {
-        for (const kk of [k, k + 1]) {
-          const a = (kk / N) * Math.PI * 2;
-          ring.push(...[0, 1, 2].map((i) => p.start[i] + radius * (Math.cos(a) * ex.getComponent(i) + Math.sin(a) * ey.getComponent(i))));
-        }
-      }
-      const onPhoto = lines(ring, p.color, 1);
-      onPhoto.material.depthTest = false;
-      onPhoto.renderOrder = 10;
+    if (p && shown[p.kind]) {
       const there = points([{ pos: p.pos, size: 22, color: p.color, solid: false }]);
       there.material.depthTest = false;
       there.renderOrder = 10;
-      focus.add(ray, onPhoto, there);
+      focus.add(there);
+      // Off the picture there is no pixel: only where it stands is ringed.
+      if (p.start && plateCorners) focus.add(...onPlate(p));
     }
     invalidate();
+  }
+
+  /** A thing's whole ray, drawn over everything, and a ring on the plate round its pixel. */
+  function onPlate(p) {
+    // A thing with no distance has only a direction: its line is dashed, to the far shell.
+    const ray = lines([...p.start, ...p.pos], p.color, p.known ? 0.95 : 0.6, { dashed: !p.known });
+    ray.material.depthTest = false;
+    ray.renderOrder = 9;
+    // The ring lies on the plate, a little wider than a bright star's image there.
+    const [bl, br, , tl] = plateCorners;
+    const ex = new THREE.Vector3(...br).sub(new THREE.Vector3(...bl));
+    const ey = new THREE.Vector3(...tl).sub(new THREE.Vector3(...bl));
+    const radius = 0.035 * Math.max(ex.length(), ey.length());
+    ex.normalize();
+    ey.normalize();
+    const ring = [];
+    const N = 40;
+    for (let k = 0; k < N; k++) {
+      for (const kk of [k, k + 1]) {
+        const a = (kk / N) * Math.PI * 2;
+        ring.push(...[0, 1, 2].map((i) => p.start[i] + radius * (Math.cos(a) * ex.getComponent(i) + Math.sin(a) * ey.getComponent(i))));
+      }
+    }
+    const onPhoto = lines(ring, p.color, 1);
+    onPhoto.material.depthTest = false;
+    onPhoto.renderOrder = 10;
+    return [ray, onPhoto];
   }
 
   /** The mouse over the canvas: what it is near lights up, with its card. */
@@ -1231,6 +1240,11 @@ export function mountInDepth(plate, { sky, field }) {
     if (!grid || f.ra == null) return;
     const radiusDeg = searchRadius(grid.fovDeg, grid.fovHeightDeg);
     const key = `${f.ra.toFixed(5)},${f.dec.toFixed(5)},${radiusDeg.toFixed(4)}`;
+    // A new grid for the same field (the room reshaped) is a new plate too: its pixels are elsewhere.
+    if (key === fieldKey && grid !== plateGrid) {
+      buildStatics(grid, radiusDeg, built.beta);
+      visitKey = '';
+    }
     if (key !== fieldKey) {
       fieldKey = key;
       ctrl.abort();
