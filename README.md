@@ -147,7 +147,7 @@ et al. 2021). Barnard's Star and ε Indi B are carried from Gaia DR3.
 | --- | --- | --- | --- |
 | Barnard's Star | fastest proper motion in the sky, 10.4″/yr | blink; mark the star and read the verdict | 17 D2 visits over 397 days |
 | ε Indi B | a pair of brown dwarfs beside their star, ε Indi A | blink in D2, then D6 | 29 D2 visits over 526 days |
-| WISE 0855−0714 | the coldest known brown dwarf, 8.1″/yr | opens in D6, the only band it is bright in. At W2 ≈ 13.9 (about 17.2 AB) it is below the one-visit D6 limit (16.7 AB): a test of the Stack, not of a single frame | 17 D6 visits over 370 days |
+| WISE 0855−0714 | the coldest known brown dwarf, 8.1″/yr | opens in D6, the only band it is bright in. At W2 ≈ 13.9 (about 17.2 AB) it is below the one-visit D6 limit on this field (16.6 AB): a test of the Stack, not of a single frame | 17 D6 visits over 370 days |
 | RW Aurigae | a young, irregular variable star | shared scaling, then blink | 16 D2 visits over 372 days |
 | R Draconis | a Mira variable near the north ecliptic pole | shared scaling; step season to season | 55 D3 visits over 414 days (index capped) |
 
